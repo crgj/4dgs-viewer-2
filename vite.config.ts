@@ -4,6 +4,9 @@ export default defineConfig({
     // TODO: 如果发布到 GitHub Pages 的子目录，请将 '/' 替换为 '/仓库名称/'
     // 例如: base: '/4dgs-viewer/',
     base: './',
+    build: {
+        outDir: 'docs',
+    },
     server: {
         // 允许通过 IP 访问，方便手机端测试
         host: '0.0.0.0',
