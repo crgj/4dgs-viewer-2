@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DongDong Viewer</title>
+    <link rel="icon" href="/logo.ico" />
+    <link rel="stylesheet" href="/src/style.css">
+    <style>
+        .sidebar-hidden {
+            transform: translateX(120%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .bottom-bar-hidden {
+            transform: translate(-50%, 150%);
+            opacity: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body class="bg-black text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
+    <!-- Main Fullscreen Canvas (100% W/H) -->
+    <div id="canvas-container" class="fixed inset-0 z-0 overflow-hidden">
+        <canvas id="application-canvas" class="w-full h-full block touch-none"></canvas>
+
+        <!-- Subtle Active Signal -->
+        <div id="drop-zone"
+            class="absolute inset-0 pointer-events-none flex items-center justify-center transition-all duration-700">
+            <div id="drop-msg"
+                class="text-[10px] opacity-10 font-bold tracking-[1.2rem] uppercase border border-white/5 px-20 py-32 rounded-full transition-all">
+                Surface Active
+            </div>
+        </div>
+    </div>
+
+    <!-- UI Overlay: Top Left Brand -->
+    <header class="fixed top-6 left-6 z-10 pointer-events-none">
+        <div class="pointer-events-auto glass-blue px-6 py-3 rounded-2xl flex items-center gap-4">
+            <h1 class="text-xs font-bold tracking-[0.2em] uppercase ui-text-primary">4DGS Viewer <span
+                    class="ui-text-dim font-thin italic">2</span></h1>
+            <div class="h-4 w-[1px] bg-white/10"></div>
+            <p id="stats-info" class="text-[9px] ui-text-secondary uppercase tracking-widest font-mono">Ready</p>
+        </div>
+    </header>
+
+    <!-- UI Overlay: Control Panel (Light Blue Theme) -->
+    <div class="fixed top-6 right-6 flex flex-col items-end gap-3 z-20 pointer-events-none">
+        <div class="flex gap-2 pointer-events-auto">
+            <button id="toggle-sidebar"
+                class="glass-blue p-2.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all ui-text-secondary">
+                <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
+                    <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
+                </svg>
+            </button>
+            <button id="reset-cam"
+                class="glass-blue px-5 py-2.5 rounded-xl text-[9px] uppercase font-bold tracking-widest ui-text-primary transition-all hover:bg-white/10">Reset</button>
+            <button id="open-file"
+                class="glass-blue px-5 py-2.5 rounded-xl text-[9px] uppercase font-bold tracking-widest ui-text-primary transition-all hover:bg-white/10">Open</button>
+            <input type="file" id="file-input" class="hidden" accept=".ply,.splat" />
+        </div>
+
+        <aside id="sidebar"
+            class="w-[18vw] min-w-[200px] max-w-[300px] glass-blue rounded-2xl p-4 flex flex-col gap-5 pointer-events-auto transition-all duration-500">
+            <div class="space-y-5">
+                <!-- Object Position -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Position</span>
+                    <div class="grid grid-cols-1 gap-1.5 font-mono">
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">X</span>
+                            <input type="number" id="pos-x" step="0.1" value="0.0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Y</span>
+                            <input type="number" id="pos-y" step="0.1" value="0.0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Z</span>
+                            <input type="number" id="pos-z" step="0.1" value="0.0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Object Rotation -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Rotation</span>
+                    <div class="grid grid-cols-1 gap-1.5 font-mono">
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">P</span>
+                            <input type="number" id="rot-x" step="1" value="0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Y</span>
+                            <input type="number" id="rot-y" step="1" value="0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
+                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">R</span>
+                            <input type="number" id="rot-z" step="1" value="0"
+                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="h-px bg-white/10"></div>
+
+                <!-- View Options -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold font-bold">Presets</span>
+                    <div class="grid grid-cols-3 gap-1">
+                        <button id="view-top"
+                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Top</button>
+                        <button id="view-front"
+                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Frnt</button>
+                        <button id="view-side"
+                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Side</button>
+                    </div>
+                </div>
+
+                <!-- Overlays -->
+                <div class="space-y-2">
+                    <div class="grid grid-cols-2 gap-1.5">
+                        <button id="toggle-grid"
+                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[8px] uppercase font-bold tracking-widest ui-text-dim hover:ui-text-highlight transition-all">Grid</button>
+                        <button id="toggle-axes"
+                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[8px] uppercase font-bold tracking-widest ui-text-dim hover:ui-text-highlight transition-all">Axes</button>
+                    </div>
+                </div>
+
+                <!-- Theme -->
+                <div class="flex gap-2 justify-center pt-1">
+                    <button data-bg="0,0,0" data-theme="dark"
+                        class="bg-picker w-4 h-4 rounded-full bg-black border border-white/20 transition-all ring-offset-1 ring-offset-transparent"></button>
+                    <!-- Updated to Deep Indigo -->
+                    <button data-bg="0.04,0.04,0.12" data-theme="dark"
+                        class="bg-picker w-4 h-4 rounded-full bg-[#0a0a20] border border-white/20 transition-all ring-offset-1 ring-offset-transparent active-theme"></button>
+                    <!-- Updated to Indigo/Violet Tint -->
+                    <button data-bg="0.95,0.96,1.0" data-theme="light"
+                        class="bg-picker w-4 h-4 rounded-full bg-[#eef2ff] border border-black/10 transition-all ring-offset-1 ring-offset-transparent"></button>
+                </div>
+            </div>
+
+            <div class="pt-2 flex flex-col gap-2 border-t border-white/10">
+                <div
+                    class="flex items-center justify-between text-[8px] opacity-40 uppercase tracking-widest font-bold ui-text-secondary">
+                    <span>FPS</span>
+                    <span id="fps-display" class="font-mono ui-text-highlight tabular-nums">--</span>
+                </div>
+                <div class="text-[7px] opacity-20 uppercase tracking-widest text-center">
+                    Drag Inputs to Scrub Values
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- UI Overlay: Bottom Playback Hub -->
+    <div id="playbar-container"
+        class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] md:w-[60%] px-0 pointer-events-none z-10 transition-all duration-500">
+        <div id="time-controls"
+            class="glass-blue px-6 py-3 rounded-[2rem] flex items-center gap-6 pointer-events-auto shadow-2xl">
+            <button id="play-pause"
+                class="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all ui-text-highlight shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M8 5v14l11-7z" />
+                </svg>
+            </button>
+            <div class="flex-grow space-y-1">
+                <div class="flex justify-between items-center px-1">
+                    <!-- Removed 4D Control Label -->
+                    <div class="flex-grow"></div>
+                    <div class="flex items-center gap-4">
+                        <select id="fps-select"
+                            class="bg-transparent text-[8px] ui-text-primary outline-none border border-white/10 rounded-lg px-2 py-0.5 font-mono uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-all appearance-none text-right">
+                            <option value="10" class="bg-black text-white">10 fps</option>
+                            <option value="30" selected class="bg-black text-white">30 fps</option>
+                            <option value="60" class="bg-black text-white">60 fps</option>
+                        </select>
+                        <span id="time-label" class="font-mono text-[10px] ui-text-secondary tabular-nums">Frame 0 /
+                            0</span>
+                    </div>
+                </div>
+                <input type="range" id="time-slider" min="0" max="1" step="1" value="0" class="w-full h-2" />
+                <!-- Timeline Ticks Container -->
+                <div id="timeline-ticks" class="flex justify-between px-1 mt-0.5"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Minimalist Loading Overlay -->
+    <div id="loading-overlay" class="hidden fixed inset-0 flex items-center justify-center bg-black/95 z-[100]">
+        <div class="flex flex-col items-center gap-6 animate-pulse">
+            <div class="w-px h-16 bg-white/20"></div>
+            <div id="loading-status" class="text-[9px] font-black tracking-[1em] uppercase opacity-40">Surface Streaming
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

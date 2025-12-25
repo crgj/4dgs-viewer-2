@@ -1,0 +1,2 @@
+declare const _default: "\nvoid addLightMap(\n    vec3 lightmap, \n    vec3 dir, \n    vec3 worldNormal, \n    vec3 viewDir, \n    vec3 reflectionDir, \n    float gloss, \n    vec3 specularity, \n    vec3 vertexNormal, \n    mat3 tbn\n#if defined(LIT_IRIDESCENCE)\n    vec3 iridescenceFresnel, \n    float iridescenceIntensity\n#endif\n) {\n    dDiffuseLight += lightmap;\n}\n";
+export default _default;

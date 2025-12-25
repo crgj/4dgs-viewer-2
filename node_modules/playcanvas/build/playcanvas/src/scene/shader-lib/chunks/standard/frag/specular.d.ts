@@ -1,0 +1,2 @@
+declare const _default: "\n\n#ifdef MAPCOLOR\nuniform vec3 material_specular;\n#endif\n\nvoid getSpecularity() {\n    vec3 specularColor = vec3(1,1,1);\n\n    #ifdef MAPCOLOR\n    specularColor *= material_specular;\n    #endif\n\n    #ifdef MAPTEXTURE\n    specularColor *= $DECODE(texture2DBias($SAMPLER, $UV, textureBias)).$CH;\n    #endif\n\n    #ifdef MAPVERTEX\n    specularColor *= saturate(vVertexColor.$VC);\n    #endif\n\n    dSpecularity = specularColor;\n}\n";
+export default _default;

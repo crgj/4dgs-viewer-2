@@ -1,0 +1,2 @@
+declare const _default: "\n#ifdef MAPFLOAT\nuniform float material_clearCoatGloss;\n#endif\n\nvoid getClearCoatGlossiness() {\n    ccGlossiness = 1.0;\n\n    #ifdef MAPFLOAT\n    ccGlossiness *= material_clearCoatGloss;\n    #endif\n\n    #ifdef MAPTEXTURE\n    ccGlossiness *= texture2DBias($SAMPLER, $UV, textureBias).$CH;\n    #endif\n\n    #ifdef MAPVERTEX\n    ccGlossiness *= saturate(vVertexColor.$VC);\n    #endif\n\n    #ifdef MAPINVERT\n    ccGlossiness = 1.0 - ccGlossiness;\n    #endif\n\n    ccGlossiness += 0.0000001;\n}\n";
+export default _default;

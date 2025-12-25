@@ -1,0 +1,2 @@
+declare const _default: "\n#ifdef MAPFLOAT\nuniform float material_clearCoat;\n#endif\n\nvoid getClearCoat() {\n    ccSpecularity = 1.0;\n\n    #ifdef MAPFLOAT\n    ccSpecularity *= material_clearCoat;\n    #endif\n\n    #ifdef MAPTEXTURE\n    ccSpecularity *= texture2DBias($SAMPLER, $UV, textureBias).$CH;\n    #endif\n\n    #ifdef MAPVERTEX\n    ccSpecularity *= saturate(vVertexColor.$VC);\n    #endif\n}\n";
+export default _default;

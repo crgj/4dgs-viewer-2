@@ -1,0 +1,30 @@
+export class ArrowShape extends Shape {
+    constructor(device: any, options?: {});
+    _gap: number;
+    _lineThickness: number;
+    _lineLength: number;
+    _arrowThickness: number;
+    _arrowLength: number;
+    _tolerance: number;
+    _head: any;
+    _line: any;
+    _flipped: boolean;
+    set gap(value: number);
+    get gap(): number;
+    set lineThickness(value: number);
+    get lineThickness(): number;
+    set lineLength(value: number);
+    get lineLength(): number;
+    set arrowThickness(value: number);
+    get arrowThickness(): number;
+    set arrowLength(value: number);
+    get arrowLength(): number;
+    set tolerance(value: number);
+    get tolerance(): number;
+    set flipped(value: boolean);
+    get flipped(): boolean;
+    _createArrow(): void;
+    _updateHead(): void;
+    _updateLine(): void;
+}
+import { Shape } from './shape.js';
