@@ -17,7 +17,7 @@ body {
 }
 
 #drop-zone.active {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.1);
     border: 2px dashed rgba(255, 255, 255, 0.2);
 }
 
@@ -36,58 +36,58 @@ input[type=range] {
 
 
 :root {
-    /* Dark Theme (Default) - Ultra High Contrast */
-    --glass-bg: rgba(5, 5, 10, 0.9);
-    /* Very opaque */
-    --glass-border: rgba(99, 102, 241, 0.5);
-    --glass-shadow: rgba(0, 0, 0, 0.8);
+    /* Dark Theme (Updated - Matte Charcoal & Teal - Lighter) */
+    --glass-bg: #232326;
+    /* Slightly lighter charcoal than #18181b */
+    --glass-border: rgba(255, 255, 255, 0.06);
+    --glass-shadow: rgba(0, 0, 0, 0.5);
 
-    --text-primary: #ffffff;
-    --text-secondary: #e0e7ff;
-    /* indigo-100 */
-    --text-dim: #bac5fd;
-    /* indigo-200 */
-    --text-highlight: #6366f1;
-    /* indigo-500 */
+    --text-primary: #f4f4f5;
+    /* Zinc-100 */
+    --text-secondary: #a1a1aa;
+    /* Zinc-400 */
+    --text-dim: #52525b;
+    /* Zinc-600 */
+    --text-highlight: #2dd4bf;
+    /* Teal-400 */
 
-    --input-bg: rgba(255, 255, 255, 0.15);
-    --input-border: rgba(255, 255, 255, 0.3);
+    --input-bg: rgba(255, 255, 255, 0.03);
+    --input-border: rgba(255, 255, 255, 0.05);
 
-    --icon-fill: #ffffff;
+    --icon-fill: #f4f4f5;
 }
 
 body.theme-light {
-    /* Light Theme (Ultra High Contrast) */
+    /* Light Theme - Clean & Bright */
     --glass-bg: rgba(255, 255, 255, 0.95);
-    /* Solid White */
-    --glass-border: rgba(0, 0, 0, 0.3);
-    --glass-shadow: rgba(0, 0, 0, 0.2);
+    --glass-border: rgba(0, 0, 0, 0.1);
+    --glass-shadow: rgba(0, 0, 0, 0.05);
 
-    --text-primary: #000000;
-    --text-secondary: #111827;
-    /* Gray 900 */
-    --text-dim: #374151;
-    /* Gray 700 */
-    --text-highlight: #2563eb;
-    /* Blue 600 */
+    --text-primary: #1e293b;
+    /* Slate 800 */
+    --text-secondary: #475569;
+    /* Slate 600 */
+    --text-dim: #94a3b8;
+    /* Slate 400 */
+    --text-highlight: #4f46e5;
+    /* Indigo 600 */
 
-    --input-bg: rgba(0, 0, 0, 0.1);
-    --input-border: rgba(0, 0, 0, 0.4);
+    --input-bg: rgba(0, 0, 0, 0.05);
+    --input-border: rgba(0, 0, 0, 0.1);
 
-    --icon-fill: #000000;
+    --icon-fill: #1e293b;
 }
 
 .glass-blue {
     background: var(--glass-bg);
     backdrop-filter: blur(24px);
     border: 1px solid var(--glass-border);
-    box-shadow: 0 8px 32px 0 var(--glass-shadow);
+    box-shadow: 0 4px 20px 0 var(--glass-shadow);
     color: var(--text-primary);
 }
 
 .active-theme {
-    border-color: #facc15 !important;
-    /* Yellow-400 */
+    border-color: var(--text-highlight) !important;
     border-width: 2px !important;
     transform: scale(1.1);
 }
@@ -128,4 +128,53 @@ input[type=range]::-webkit-slider-thumb {
     background: var(--text-primary);
     border-radius: 50%;
     cursor: pointer;
+}
+
+/* Custom Tooltip - Refined */
+.has-tooltip {
+    position: relative;
+}
+
+.has-tooltip::before {
+    content: attr(aria-label);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(2px) scale(0.95);
+    background: var(--glass-bg);
+    /* Use theme bg */
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    /* Softer text color */
+    padding: 3px 6px;
+    /* Tighter padding */
+    border-radius: 4px;
+    /* Slightly squarer, clean look */
+    font-size: 8px;
+    /* Tiny, precise text */
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    /* Tracking for readability */
+    font-weight: 600;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    /* Smooth easing */
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    /* Stronger shadow for depth */
+    backdrop-filter: blur(8px);
+    /* Ensure glass effect works */
+}
+
+/* Optional Arrow */
+/* .has-tooltip::after { ... } - Keeping it clean without arrow for now */
+
+.has-tooltip:hover::before {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-2px) scale(1);
+    border-color: var(--text-highlight);
+    /* Subtle highlight on activation */
+    color: var(--text-primary);
 }

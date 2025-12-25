@@ -192,6 +192,9 @@ export const splatMainVS = `
 
     // Custom Lifetime Uniforms
     uniform sampler2D lifetimeTexture;
+    uniform sampler2D selectionTexture;
+    uniform float isSelectionMode; // 1.0 if selecting, 0.0 otherwise
+
     uniform float uTime;
     
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
@@ -245,14 +248,36 @@ export const splatMainVS = `
         vec3 covA, covB;
         getCovariance(covA, covB);
         vec4 v1v2 = calcV1V2(splat_cam.xyz, covA, covB, transpose(mat3(model_view)));
-        
+
         // Base Color Fetch
         color = texelFetch(splatColor, splatUV, 0);
 
-        // --- Lifetime Calculation (Enabled but Result Not Applied) ---
+        // --- Lifetime Calculation ---
         float alphaMult = getLifetimeOpacityTexture(splatUV, uTime);
-        color.a *= alphaMult; // Temporarily disabled multiplication
-        // -----------------------------------------------------------
+        color.a *= alphaMult; 
+        
+        // --- Selection Highlight ---
+        float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;
+        
+        if (isSelectionMode > 0.5) {
+             // In selection mode:
+             // Ensure minimal visibility for all points so they can be selected
+             // even if their lifetime opacity is near 0.
+             color.a = max(color.a, 0.2); 
+        }
+
+        if (selectionVal > 0.0) {
+            color = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
+            color.a = 1.0; // Force selected to be fully opaque
+        }
+
+        // --- Deletion check ---
+        float deletedVal = texelFetch(selectionTexture, splatUV, 0).g;
+        if (deletedVal > 0.0) {
+            gl_Position = discardVec;
+            return;
+        }
+        // ----------------------
 
         float scale = min(1.0, sqrt(-log(1.0 / 255.0 / color.a)) / 2.0);
         v1v2 *= scale;

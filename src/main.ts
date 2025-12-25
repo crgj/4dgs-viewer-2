@@ -1,5 +1,6 @@
 import * as pc from 'playcanvas';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
+import { SelectionTool } from './ui/selection-tool';
 
 // --- Configuration & State ---
 class Viewer {
@@ -12,6 +13,10 @@ class Viewer {
     duration = 1.0;
     fps = 30; // Default playback fps
     currentFileName: string | null = null;
+
+    // Cache for Selection Tool
+    cachedPositions: Float32Array | null = null;
+    selectionTool: SelectionTool;
 
     private pitch = 0;
     private yaw = 0;
@@ -42,9 +47,23 @@ class Viewer {
 
         this.setupScene();
         this.setupEventListeners();
+
+        // Init Selection Tool
+        this.selectionTool = new SelectionTool(this.app, this);
+
         this.app.start();
 
         this.app.on('update', (dt: number) => this.onUpdate(dt));
+    }
+
+    updateToggleButton(btn: HTMLElement, active: boolean) {
+        if (active) {
+            btn.classList.add('bg-white/20', 'ui-text-highlight');
+            btn.classList.remove('ui-text-dim');
+        } else {
+            btn.classList.remove('bg-white/20', 'ui-text-highlight');
+            btn.classList.add('ui-text-dim');
+        }
     }
 
     private setupScene() {
@@ -52,7 +71,7 @@ class Viewer {
 
         const camera = new pc.Entity('Camera');
         camera.addComponent('camera', {
-            clearColor: new pc.Color(0.05, 0.07, 0.1, 1), // Default to middle theme background
+            clearColor: new pc.Color(0.043, 0.063, 0.106, 1), // Default to Dark Theme Background
             farClip: 1000,
             nearClip: 0.1,
             fov: 60
@@ -137,7 +156,130 @@ class Viewer {
         this.axesEntity = entity;
     }
 
+    private async exportPly() {
+        if (!this.splatEntity || !this.splatEntity.gsplat) return;
+
+        const component = this.splatEntity.gsplat as any;
+        let asset = component.asset;
+        // Resolve asset if it is an ID
+        if (typeof asset === 'number' || typeof asset === 'string') {
+            asset = this.app.assets.get(asset);
+        }
+
+        if (!asset || !asset.resource) {
+            console.error("Export failed: GSplat Asset not found or not loaded.");
+            return;
+        }
+
+        const resource = asset.resource as pc.GSplatResource;
+        const splatData = resource.splatData;
+
+        if (!splatData) {
+            console.error("Export failed: No SplatData in resource.");
+            return;
+        }
+
+        // 1. Identify valid indices (not deleted)
+        const validIndices: number[] = [];
+        const selectionData = this.selectionTool.selectionData;
+        const count = splatData.numSplats;
+
+        if (selectionData) {
+            for (let i = 0; i < count; i++) {
+                // If G channel (index * 4 + 1) is > 0, it's deleted
+                if (selectionData[i * 4 + 1] === 0) {
+                    validIndices.push(i);
+                }
+            }
+        } else {
+            // No selection tool initialized? Save all.
+            for (let i = 0; i < count; i++) validIndices.push(i);
+        }
+
+        const newCount = validIndices.length;
+        if (newCount === 0) {
+            alert("No points to export!");
+            return;
+        }
+
+        console.log(`Exporting ${newCount} / ${count} splats...`);
+
+        // 2. Define Properties to Export
+        // We iterate all known potential properties.
+        const propNames = [
+            'x', 'y', 'z',
+            'f_dc_0', 'f_dc_1', 'f_dc_2',
+            'opacity',
+            'scale_0', 'scale_1', 'scale_2',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3',
+            'lifetime_mu', 'lifetime_w', 'lifetime_k'
+        ];
+
+        // Add all 45 f_rest SH coeffs
+        for (let k = 0; k < 45; k++) propNames.push(`f_rest_${k}`);
+
+        // Filter to those that actually exist in splatData
+        const activeProps = propNames.filter(name => splatData.getProp(name) !== null);
+
+        // 3. Construct PLY Header
+        let header = "ply\n";
+        header += "format binary_little_endian 1.0\n";
+        header += `element vertex ${newCount}\n`;
+
+        activeProps.forEach(name => {
+            // Check type. Usually float.
+            // splatData stores as Float32Array usually.
+            header += `property float ${name}\n`;
+        });
+
+        // Add "dataFrames" comment if we tracked it (restore from duration/loaded data)
+        // We stored `dataFrames` in parsePly return, but maybe didn't store on instance.
+        // We can just dump `Math.ceil(this.duration)` as frames.
+        header += `comment frames ${Math.ceil(this.duration)}\n`;
+
+        header += "end_header\n";
+
+        const headerBlob = new TextEncoder().encode(header);
+
+        // 4. Construct Binary Data
+        // Each vertex has all activeProps floats.
+        // Size = newCount * activeProps.length * 4 bytes
+        const rowFloats = activeProps.length;
+        const bufferSize = newCount * rowFloats * 4;
+        const dataBuffer = new ArrayBuffer(bufferSize);
+        const dataView = new DataView(dataBuffer);
+
+        // Pre-fetch source arrays to avoid getProp lookups in loop
+        const sourceArrays = activeProps.map(name => splatData.getProp(name)!);
+
+        let offset = 0;
+        for (let i = 0; i < newCount; i++) {
+            const originalIdx = validIndices[i];
+
+            for (let p = 0; p < rowFloats; p++) {
+                const val = sourceArrays[p][originalIdx];
+                dataView.setFloat32(offset, val, true); // Little Endian
+                offset += 4;
+            }
+        }
+
+        // 5. Trigger Download
+        const blob = new Blob([headerBlob, dataBuffer], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `exported_scene_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, "")}.ply`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
     private setupEventListeners() {
+        // 0. Export Button
+        const exportBtn = document.getElementById('export-file');
+        exportBtn?.addEventListener('click', () => this.exportPly());
+
         // 1. Disable Right-Click Context Menu
         window.addEventListener('contextmenu', e => e.preventDefault());
 
@@ -152,27 +294,31 @@ class Viewer {
         // --- Sidebar Visibility Toggle ---
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
+        const selectionToolbar = document.getElementById('selection-toolbar');
         const toggleSidebar = document.getElementById('toggle-sidebar');
         toggleSidebar?.addEventListener('click', () => {
             sidebar?.classList.toggle('sidebar-hidden');
             playbar?.classList.toggle('bottom-bar-hidden');
+            selectionToolbar?.classList.toggle('tools-hidden');
         });
 
-        const toggleGrid = document.getElementById('toggle-grid');
-        toggleGrid?.addEventListener('click', () => {
+        // Listen to Grid/Axes toggles in main index.html
+        const btnGrid = document.getElementById('toggle-grid');
+        const btnAxes = document.getElementById('toggle-axes');
+
+        btnGrid?.addEventListener('click', () => {
             if (this.gridEntity) this.gridEntity.enabled = !this.gridEntity.enabled;
-            toggleGrid.classList.toggle('bg-sky-400/10', this.gridEntity?.enabled);
-            toggleGrid.classList.toggle('text-sky-300', this.gridEntity?.enabled);
+            this.updateToggleButton(btnGrid, this.gridEntity?.enabled ?? false);
         });
 
-        const toggleAxes = document.getElementById('toggle-axes');
-        toggleAxes?.addEventListener('click', () => {
+        btnAxes?.addEventListener('click', () => {
             if (this.axesEntity) this.axesEntity.enabled = !this.axesEntity.enabled;
-            // Update UI
-            toggleAxes.classList.toggle('ui-text-dim', !this.axesEntity?.enabled);
-            toggleAxes.classList.toggle('ui-text-highlight', this.axesEntity?.enabled);
-            toggleAxes.classList.toggle('bg-white/10', this.axesEntity?.enabled);
+            this.updateToggleButton(btnAxes, this.axesEntity?.enabled ?? false);
         });
+
+        // Init Button States
+        if (btnGrid) this.updateToggleButton(btnGrid, this.gridEntity?.enabled ?? false);
+        if (btnAxes) this.updateToggleButton(btnAxes, this.axesEntity?.enabled ?? false);
 
         const dropZone = document.getElementById('drop-zone');
         const dropMsg = document.getElementById('drop-msg');
@@ -382,18 +528,23 @@ class Viewer {
                 e.preventDefault();
                 togglePlay();
             }
+            if (e.code === 'Escape') {
+                if (this.selectionTool && this.selectionTool.currentTool !== 'none') {
+                    this.selectionTool.setTool('none');
+                }
+            }
         });
         window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
         this.app.mouse.on(pc.EVENT_MOUSEDOWN, (e: pc.MouseEvent) => {
-            if (isUIInteracting) return;
+            if (isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
             if (e.button === pc.MOUSEBUTTON_LEFT) isLMB = true;
             if (e.button === pc.MOUSEBUTTON_RIGHT) isRMB = true;
             lastMousePos.set(e.x, e.y);
         });
 
         this.app.mouse.on(pc.EVENT_MOUSEMOVE, (e: pc.MouseEvent) => {
-            if (!this.camera || isUIInteracting) return;
+            if (!this.camera || isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
             const dx = e.x - lastMousePos.x;
             const dy = e.y - lastMousePos.y;
 
@@ -409,7 +560,8 @@ class Viewer {
         });
 
         this.app.mouse.on(pc.EVENT_MOUSEWHEEL, (e: any) => {
-            if (this.camera && !isUIInteracting) this.camera.translateLocal(0, 0, -e.wheel * 0.5);
+            if (this.camera && !isUIInteracting && (!this.selectionTool || this.selectionTool.currentTool === 'none'))
+                this.camera.translateLocal(0, 0, -e.wheel * 0.5);
         });
 
         this.app.on('update', (dt: number) => {
@@ -502,6 +654,24 @@ class Viewer {
                     const splatData = new pc.GSplatData(parsed.plyData.elements);
                     const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
 
+                    // --- Cache Positions for Selection (Must use reordered data from GSplatData) ---
+                    const x = splatData.getProp('x');
+                    const y = splatData.getProp('y');
+                    const z = splatData.getProp('z');
+
+                    if (x && y && z) {
+                        // Safely determine count
+                        const num = Math.min(splatData.numSplats, x.length, y.length, z.length);
+
+                        this.cachedPositions = new Float32Array(num * 3);
+                        for (let i = 0; i < num; i++) {
+                            this.cachedPositions[i * 3 + 0] = x[i];
+                            this.cachedPositions[i * 3 + 1] = y[i];
+                            this.cachedPositions[i * 3 + 2] = z[i];
+                        }
+                    }
+                    // -----------------------------------------------------------------------------
+
                     const asset = new pc.Asset('pointcloud', 'gsplat', {
                         url: ''
                     });
@@ -513,6 +683,14 @@ class Viewer {
                     this.splatEntity = new pc.Entity('GSplat');
                     this.splatEntity.addComponent('gsplat', { asset: asset });
                     this.app.root.addChild(this.splatEntity);
+
+                    // --- Init Selection Tool NOW ---
+                    if (this.cachedPositions) {
+                        const num = this.cachedPositions.length / 3;
+                        this.selectionTool.init(num);
+                        this.selectionTool.setTool('none');
+                    }
+                    // -------------------------------
 
                     // Update Stats window to show "Creating Textures..."
                     if (status) status.innerText = "Creating Lifetime Texture";
@@ -680,6 +858,27 @@ class Viewer {
             console.error('Failed to load splat:', err);
             alert('Error loading splat file: ' + err);
             if (overlay) overlay.classList.add('hidden');
+        }
+    }
+
+    // Expose for SelectionTool
+    updateSelectionUniform(tex: pc.Texture) {
+        if (this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            if (instance && instance.material) {
+                instance.material.setParameter('selectionTexture', tex);
+                instance.material.update();
+            }
+        }
+    }
+
+    updateSelectionModeParams(isSelecting: boolean) {
+        if (this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            if (instance && instance.material) {
+                instance.material.setParameter('isSelectionMode', isSelecting ? 1.0 : 0.0);
+                instance.material.update();
+            }
         }
     }
 
@@ -1063,33 +1262,7 @@ class Viewer {
     }
 
     private updateStats(asset: pc.Asset) {
-        const statsInfo = document.getElementById('stats-info');
-        if (statsInfo) {
-            let pointCount = 0;
-            const gsplat = this.splatEntity?.gsplat as any;
-            const resource = asset.resource as any;
-
-            // Try multiple common property paths for point count in different PC versions
-            if (resource?.numGaussians) {
-                pointCount = resource.numGaussians;
-            } else if (gsplat?.instance?.gsplat?.numGaussians) {
-                pointCount = gsplat.instance.gsplat.numGaussians;
-            } else if (resource?.gsplat?.numGaussians) {
-                pointCount = resource.gsplat.numGaussians;
-            } else if (gsplat?.instance?.sorter?.numGaussians) {
-                pointCount = gsplat.instance.sorter.numGaussians;
-            } else if (resource?.pointCount) {
-                pointCount = resource.pointCount;
-            }
-
-            if (pointCount > 0) {
-                statsInfo.innerText = `${(pointCount / 1000000).toFixed(2)}M Points`;
-            } else {
-                statsInfo.innerText = "Processing Assets";
-                // Debug log to console if still 0
-                console.log('Stats Check:', { resource, gsplat });
-            }
-        }
+        // Stats display removed per user request
     }
 
     private onUpdate(dt: number) {
@@ -1158,7 +1331,7 @@ class Viewer {
             rz: rot.z.toFixed(1)
         };
 
-        console.log(`Saving transform usage for ${fileName}:`, data);
+        //console.log(`Saving transform usage for ${fileName}:`, data);
 
         const cachedKey = `transform_cache_${fileName}`;
         localStorage.setItem(cachedKey, JSON.stringify(data));

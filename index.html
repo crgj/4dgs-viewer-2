@@ -19,6 +19,12 @@
             opacity: 0;
             pointer-events: none;
         }
+
+        .tools-hidden {
+            transform: translateY(-50%) translateX(-200%);
+            opacity: 0;
+            pointer-events: none;
+        }
     </style>
 </head>
 
@@ -40,74 +46,93 @@
     <!-- UI Overlay: Top Left Brand -->
     <header class="fixed top-6 left-6 z-10 pointer-events-none">
         <div class="pointer-events-auto glass-blue px-6 py-3 rounded-2xl flex items-center gap-4">
-            <h1 class="text-xs font-bold tracking-[0.2em] uppercase ui-text-primary">4DGS Viewer <span
-                    class="ui-text-dim font-thin italic">2</span></h1>
-            <div class="h-4 w-[1px] bg-white/10"></div>
-            <p id="stats-info" class="text-[9px] ui-text-secondary uppercase tracking-widest font-mono">Ready</p>
+            <h1 class="text-xs font-bold tracking-[0.2em] uppercase ui-text-primary">4DGS Viewer
+                <span class="font-bold italic text-green-500">2</span>
+            </h1>
         </div>
     </header>
 
     <!-- UI Overlay: Control Panel (Light Blue Theme) -->
-    <div class="fixed top-6 right-6 flex flex-col items-end gap-3 z-20 pointer-events-none">
-        <div class="flex gap-2 pointer-events-auto">
+    <div class="fixed top-6 right-6 flex flex-col items-stretch gap-2 z-20 pointer-events-none">
+        <div class="flex justify-between gap-1 pointer-events-auto">
             <button id="toggle-sidebar"
-                class="glass-blue p-2.5 rounded-xl hover:bg-white/10 active:scale-95 transition-all ui-text-secondary">
-                <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
+                class="glass-blue p-1.5 rounded-lg hover:bg-white/10 active:scale-95 transition-all ui-text-secondary flex-1 flex justify-center has-tooltip"
+                aria-label="Toggle Sidebar">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                     <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
                 </svg>
             </button>
             <button id="reset-cam"
-                class="glass-blue px-5 py-2.5 rounded-xl text-[9px] uppercase font-bold tracking-widest ui-text-primary transition-all hover:bg-white/10">Reset</button>
+                class="glass-blue p-1.5 rounded-lg hover:bg-white/10 active:scale-95 transition-all ui-text-secondary flex-1 flex justify-center has-tooltip"
+                aria-label="Reset Camera">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path
+                        d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+                </svg>
+            </button>
             <button id="open-file"
-                class="glass-blue px-5 py-2.5 rounded-xl text-[9px] uppercase font-bold tracking-widest ui-text-primary transition-all hover:bg-white/10">Open</button>
+                class="glass-blue p-1.5 rounded-lg hover:bg-white/10 active:scale-95 transition-all ui-text-secondary flex-1 flex justify-center has-tooltip"
+                aria-label="Open File">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path
+                        d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
+                </svg>
+            </button>
+            <button id="export-file"
+                class="glass-blue p-1.5 rounded-lg hover:bg-white/10 active:scale-95 transition-all ui-text-secondary flex-1 flex justify-center has-tooltip"
+                aria-label="Export File">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                </svg>
+            </button>
             <input type="file" id="file-input" class="hidden" accept=".ply,.splat" />
         </div>
 
         <aside id="sidebar"
-            class="w-[18vw] min-w-[200px] max-w-[300px] glass-blue rounded-2xl p-4 flex flex-col gap-5 pointer-events-auto transition-all duration-500">
-            <div class="space-y-5">
+            class="w-auto min-w-[120px] max-w-[150px] glass-blue rounded-xl p-2 flex flex-col gap-3 pointer-events-auto transition-all duration-500 text-[10px]">
+            <div class="space-y-3">
                 <!-- Object Position -->
-                <div class="space-y-2">
+                <div class="space-y-1">
                     <span
-                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Position</span>
-                    <div class="grid grid-cols-1 gap-1.5 font-mono">
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">X</span>
+                        class="text-[7px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Position</span>
+                    <div class="grid grid-cols-1 gap-1 font-mono">
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">X</span>
                             <input type="number" id="pos-x" step="0.1" value="0.0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Y</span>
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
                             <input type="number" id="pos-y" step="0.1" value="0.0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Z</span>
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Z</span>
                             <input type="number" id="pos-z" step="0.1" value="0.0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
                 </div>
 
                 <!-- Object Rotation -->
-                <div class="space-y-2">
+                <div class="space-y-1">
                     <span
-                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Rotation</span>
-                    <div class="grid grid-cols-1 gap-1.5 font-mono">
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">P</span>
+                        class="text-[7px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Rotation</span>
+                    <div class="grid grid-cols-1 gap-1 font-mono">
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">P</span>
                             <input type="number" id="rot-x" step="1" value="0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">Y</span>
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
                             <input type="number" id="rot-y" step="1" value="0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-2 bg-white/5 border border-white/5 rounded-md px-2 py-1">
-                            <span class="text-[8px] opacity-50 w-2 ui-text-highlight">R</span>
+                        <div class="flex items-center gap-1 bg-white/5 border border-white/5 rounded-md px-1.5 py-1">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">R</span>
                             <input type="number" id="rot-z" step="1" value="0"
-                                class="scrub-input w-full bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
                 </div>
@@ -115,40 +140,95 @@
 
                 <div class="h-px bg-white/10"></div>
 
+                <!-- View Controls (Merged) -->
                 <!-- View Options -->
                 <div class="space-y-2">
                     <span
-                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold font-bold">Presets</span>
-                    <div class="grid grid-cols-3 gap-1">
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Presets</span>
+                    <div class="flex gap-2">
+                        <!-- Top View -->
                         <button id="view-top"
-                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Top</button>
+                            class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-all ui-text-primary has-tooltip"
+                            aria-label="Top View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" opacity="1" />
+                                <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" fill="none"
+                                    opacity="0.5" />
+                                <path d="M12 22V12" stroke="currentColor" opacity="0.3" />
+                            </svg>
+                        </button>
+                        <!-- Front View -->
                         <button id="view-front"
-                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Frnt</button>
+                            class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-all ui-text-primary has-tooltip"
+                            aria-label="Front View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M2 7v10l10 5V12L2 7z" opacity="1" />
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
+                                <path d="M22 7l-10 5v10l10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                            </svg>
+                        </button>
+                        <!-- Side View -->
                         <button id="view-side"
-                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[7px] uppercase tracking-wider hover:bg-white/10 transition-all ui-text-primary">Side</button>
+                            class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-all ui-text-primary has-tooltip"
+                            aria-label="Side View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M22 7v10l-10 5V12l10-5z" opacity="1" />
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
+                                <path d="M2 7l10 5v10l-10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
 
-                <!-- Overlays -->
+                <!-- Scene Options -->
                 <div class="space-y-2">
-                    <div class="grid grid-cols-2 gap-1.5">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Scene</span>
+                    <div class="flex gap-2">
+                        <!-- Grid -->
                         <button id="toggle-grid"
-                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[8px] uppercase font-bold tracking-widest ui-text-dim hover:ui-text-highlight transition-all">Grid</button>
+                            class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/5 transition-all ui-text-dim hover:ui-text-highlight has-tooltip"
+                            aria-label="Toggle Grid">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="3" y1="9" x2="21" y2="9"></line>
+                                <line x1="3" y1="15" x2="21" y2="15"></line>
+                                <line x1="9" y1="3" x2="9" y2="21"></line>
+                                <line x1="15" y1="3" x2="15" y2="21"></line>
+                            </svg>
+                        </button>
+                        <!-- Axes -->
                         <button id="toggle-axes"
-                            class="py-1.5 rounded-lg bg-white/5 border border-white/5 text-[8px] uppercase font-bold tracking-widest ui-text-dim hover:ui-text-highlight transition-all">Axes</button>
+                            class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/5 transition-all ui-text-dim hover:ui-text-highlight has-tooltip"
+                            aria-label="Toggle Axes">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 12L3 17M12 12L21 17M12 12V3" />
+                                <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
+
+
+
+
 
                 <!-- Theme -->
-                <div class="flex gap-2 justify-center pt-1">
-                    <button data-bg="0,0,0" data-theme="dark"
-                        class="bg-picker w-4 h-4 rounded-full bg-black border border-white/20 transition-all ring-offset-1 ring-offset-transparent"></button>
-                    <!-- Updated to Deep Indigo -->
-                    <button data-bg="0.04,0.04,0.12" data-theme="dark"
-                        class="bg-picker w-4 h-4 rounded-full bg-[#0a0a20] border border-white/20 transition-all ring-offset-1 ring-offset-transparent active-theme"></button>
-                    <!-- Updated to Indigo/Violet Tint -->
-                    <button data-bg="0.95,0.96,1.0" data-theme="light"
-                        class="bg-picker w-4 h-4 rounded-full bg-[#eef2ff] border border-black/10 transition-all ring-offset-1 ring-offset-transparent"></button>
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Theme</span>
+                    <div class="flex gap-2">
+                        <!-- Dark Theme (Reference Image Style: Matte Charcoal) -->
+                        <button data-bg="0.05,0.05,0.06" data-theme="dark"
+                            class="bg-picker w-5 h-5 rounded-full bg-[#232326] border border-white/20 transition-all ring-offset-1 ring-offset-transparent active-theme has-tooltip"
+                            aria-label="Dark Theme"></button>
+                        <!-- Light Theme -->
+                        <button data-bg="0.95,0.96,0.98" data-theme="light"
+                            class="bg-picker w-5 h-5 rounded-full bg-[#f8fafc] border border-black/10 transition-all ring-offset-1 ring-offset-transparent has-tooltip"
+                            aria-label="Light Theme"></button>
+                    </div>
                 </div>
             </div>
 
@@ -157,9 +237,6 @@
                     class="flex items-center justify-between text-[8px] opacity-40 uppercase tracking-widest font-bold ui-text-secondary">
                     <span>FPS</span>
                     <span id="fps-display" class="font-mono ui-text-highlight tabular-nums">--</span>
-                </div>
-                <div class="text-[7px] opacity-20 uppercase tracking-widest text-center">
-                    Drag Inputs to Scrub Values
                 </div>
             </div>
         </aside>
@@ -171,7 +248,8 @@
         <div id="time-controls"
             class="glass-blue px-6 py-3 rounded-[2rem] flex items-center gap-6 pointer-events-auto shadow-2xl">
             <button id="play-pause"
-                class="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all ui-text-highlight shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                class="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 active:scale-95 transition-all ui-text-highlight shadow-[0_0_15px_rgba(99,102,241,0.3)] has-tooltip"
+                aria-label="Play/Pause">
                 <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                     <path d="M8 5v14l11-7z" />
                 </svg>
