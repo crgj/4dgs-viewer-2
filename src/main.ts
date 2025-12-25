@@ -162,8 +162,10 @@ class Viewer {
         const component = this.splatEntity.gsplat as any;
         let asset = component.asset;
         // Resolve asset if it is an ID
-        if (typeof asset === 'number' || typeof asset === 'string') {
+        if (typeof asset === 'number') {
             asset = this.app.assets.get(asset);
+        } else if (typeof asset === 'string') {
+            asset = this.app.assets.find(asset);
         }
 
         if (!asset || !asset.resource) {
