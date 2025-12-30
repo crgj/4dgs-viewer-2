@@ -24,10 +24,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true # 关键：确保拉取真正的 LFS 大文件
+          lfs: true
+          fetch-depth: 0 # Ensure full history for LFS resolution
 
-      - name: Checkout LFS objects
-        run: git lfs checkout
+      - name: Install and Pull LFS objects
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: Verify LFS files
+        run: |
+          echo "Checking file sizes in public/gszip to ensure LFS pulled real data:"
+          ls -lh public/gszip/
 
       - name: Set up Node
         uses: actions/setup-node@v4
