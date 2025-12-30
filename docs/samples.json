@@ -1,0 +1,14 @@
+[
+  {
+    "name": "000.gszip",
+    "url": "./gszip/000.gszip"
+  },
+  {
+    "name": "001.gszip",
+    "url": "./gszip/001.gszip"
+  },
+  {
+    "name": "001.ply",
+    "url": "./gszip/001.ply"
+  }
+]

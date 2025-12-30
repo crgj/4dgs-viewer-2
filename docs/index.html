@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DongDong Viewer</title>
+    <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
+    <style>
+        .sidebar-hidden {
+            transform: translateX(120%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .bottom-bar-hidden {
+            transform: translate(-50%, 150%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .tools-hidden {
+            transform: translateY(-50%) translateX(-200%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .header-hidden {
+            transform: translateY(-150%);
+            opacity: 0;
+            pointer-events: none;
+        }
+    </style>
+  <script type="module" crossorigin src="./assets/index-DODUjvMa.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-Dh4TXrYb.css">
+</head>
+
+<body class="bg-black text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
+    <!-- Main Fullscreen Canvas (100% W/H) -->
+    <div id="canvas-container" class="fixed inset-0 z-0 overflow-hidden">
+        <canvas id="application-canvas" class="w-full h-full block touch-none"></canvas>
+
+        <!-- Subtle Active Signal -->
+        <div id="drop-zone"
+            class="absolute inset-0 pointer-events-none flex items-center justify-center transition-all duration-700">
+            <div id="drop-msg"
+                class="text-[10px] opacity-10 font-bold tracking-[1.2rem] uppercase ui-border px-20 py-32 rounded-full transition-all">
+                Surface Active
+            </div>
+        </div>
+    </div>
+
+    <!-- UI Overlay: Top Left Brand -->
+    <header class="fixed top-6 left-6 z-50 pointer-events-none">
+        <div id="header-brand" class="relative flex flex-col items-end gap-2 pointer-events-auto">
+            <div class="glass-blue px-6 py-3 rounded-lg flex items-center gap-4">
+                <h1 class="text-xs font-bold tracking-[0.2em] uppercase ui-text-primary">4DGS Viewer
+                    <span class="font-bold italic text-green-500">2</span>
+                </h1>
+                <div class="h-4 w-px ui-border"></div>
+                <button id="toggle-samples" class="flex items-center gap-1.5 group">
+                    <span
+                        class="text-[9px] font-bold tracking-widest uppercase ui-text-secondary opacity-60 group-hover:opacity-100 transition-opacity">Samples</span>
+                    <svg viewBox="0 0 24 24"
+                        class="w-3 h-3 fill-current ui-text-secondary opacity-40 group-hover:opacity-100 transition-all group-[.open]:rotate-180">
+                        <path d="M7 10l5 5 5-5z" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Samples Dropdown -->
+            <div id="samples-dropdown"
+                class="hidden pointer-events-auto glass-blue rounded-lg p-1.5 w-40 flex flex-col gap-1 shadow-2xl animate-in fade-in slide-in-from-top-2 duration-200">
+            </div>
+        </div>
+    </header>
+
+    <!-- UI Overlay: Control Panel (Light Blue Theme) -->
+    <div class="fixed top-6 right-6 flex flex-col items-stretch gap-2 z-20 pointer-events-none">
+        <div class="flex justify-between gap-1 pointer-events-auto">
+            <button id="toggle-sidebar" class="ui-btn p-1.5 rounded-lg flex-1 flex justify-center has-tooltip"
+                aria-label="Toggle Sidebar">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
+                </svg>
+            </button>
+            <button id="reset-cam" class="ui-btn p-1.5 rounded-lg flex-1 flex justify-center has-tooltip"
+                aria-label="Reset Camera">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path
+                        d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+                </svg>
+            </button>
+            <button id="open-file" class="ui-btn p-1.5 rounded-lg flex-1 flex justify-center has-tooltip"
+                aria-label="Open File">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path
+                        d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
+                </svg>
+            </button>
+            <button id="export-file" class="ui-btn p-1.5 rounded-lg flex-1 flex justify-center has-tooltip"
+                aria-label="Export File">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                </svg>
+            </button>
+            <input type="file" id="file-input" class="hidden" accept=".ply,.splat,.zip,.gszip" />
+        </div>
+
+        <aside id="sidebar"
+            class="w-auto min-w-[120px] max-w-[150px] glass-blue rounded-lg p-2 flex flex-col gap-3 pointer-events-auto transition-all duration-500 text-[10px]">
+            <div class="space-y-3">
+                <!-- Object Position -->
+                <div class="space-y-1">
+                    <span
+                        class="text-[7px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Position</span>
+                    <div class="grid grid-cols-1 gap-1 font-mono">
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">X</span>
+                            <input type="number" id="pos-x" step="0.1" value="0.0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
+                            <input type="number" id="pos-y" step="0.1" value="0.0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Z</span>
+                            <input type="number" id="pos-z" step="0.1" value="0.0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Object Rotation -->
+                <div class="space-y-1">
+                    <span
+                        class="text-[7px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Rotation</span>
+                    <div class="grid grid-cols-1 gap-1 font-mono">
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">P</span>
+                            <input type="number" id="rot-x" step="1" value="0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
+                            <input type="number" id="rot-y" step="1" value="0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input">
+                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">R</span>
+                            <input type="number" id="rot-z" step="1" value="0"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="h-px ui-border"></div>
+
+                <!-- View Controls (Merged) -->
+                <!-- View Options -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Presets</span>
+                    <div class="flex gap-2">
+                        <!-- Top View -->
+                        <button id="view-top"
+                            class="w-8 h-8 flex items-center justify-center ui-btn rounded-lg has-tooltip"
+                            aria-label="Top View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" opacity="1" />
+                                <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" fill="none"
+                                    opacity="0.5" />
+                                <path d="M12 22V12" stroke="currentColor" opacity="0.3" />
+                            </svg>
+                        </button>
+                        <!-- Front View -->
+                        <button id="view-front"
+                            class="w-8 h-8 flex items-center justify-center ui-btn rounded-lg has-tooltip"
+                            aria-label="Front View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M2 7v10l10 5V12L2 7z" opacity="1" />
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
+                                <path d="M22 7l-10 5v10l10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                            </svg>
+                        </button>
+                        <!-- Side View -->
+                        <button id="view-side"
+                            class="w-8 h-8 flex items-center justify-center ui-btn rounded-lg has-tooltip"
+                            aria-label="Side View">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path d="M22 7v10l-10 5V12l10-5z" opacity="1" />
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
+                                <path d="M2 7l10 5v10l-10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Scene Options -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Scene</span>
+                    <div class="flex gap-2">
+                        <!-- Grid -->
+                        <button id="toggle-grid"
+                            class="w-8 h-8 flex items-center justify-center rounded-lg ui-btn has-tooltip"
+                            aria-label="Toggle Grid">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="3" y1="9" x2="21" y2="9"></line>
+                                <line x1="3" y1="15" x2="21" y2="15"></line>
+                                <line x1="9" y1="3" x2="9" y2="21"></line>
+                                <line x1="15" y1="3" x2="15" y2="21"></line>
+                            </svg>
+                        </button>
+                        <!-- Axes -->
+                        <button id="toggle-axes"
+                            class="w-8 h-8 flex items-center justify-center rounded-lg ui-btn has-tooltip"
+                            aria-label="Toggle Axes">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 12L3 17M12 12L21 17M12 12V3" />
+                                <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+
+
+
+
+                <!-- Theme -->
+                <div class="space-y-2">
+                    <span
+                        class="text-[8px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Theme</span>
+                    <div class="flex gap-2">
+                        <!-- Dark Theme (Reference Image Style: Matte Charcoal) -->
+                        <button data-bg="0.05,0.05,0.06" data-theme="dark"
+                            class="bg-picker w-5 h-5 rounded-full bg-[#232326] ui-border transition-all ring-offset-1 ring-offset-transparent active-theme has-tooltip"
+                            aria-label="Dark Theme"></button>
+                        <!-- Light Theme -->
+                        <button data-bg="0.95,0.96,0.98" data-theme="light"
+                            class="bg-picker w-5 h-5 rounded-full bg-[#f8fafc] border border-black/10 transition-all ring-offset-1 ring-offset-transparent has-tooltip"
+                            aria-label="Light Theme"></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pt-2 flex flex-col gap-2 border-t ui-border">
+                <div
+                    class="flex items-center justify-between text-[8px] opacity-40 uppercase tracking-widest font-bold ui-text-secondary">
+                    <span>FPS</span>
+                    <span id="fps-display" class="font-mono ui-text-highlight tabular-nums">--</span>
+                </div>
+                <div
+                    class="flex items-center justify-between text-[8px] opacity-40 uppercase tracking-widest font-bold ui-text-secondary">
+                    <span>Splats</span>
+                    <span id="splat-count" class="font-mono ui-text-highlight tabular-nums">--</span>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- UI Overlay: Bottom Playback Hub -->
+    <div id="playbar-container"
+        class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] md:w-[60%] px-0 pointer-events-none z-10 transition-all duration-500">
+
+        <!-- Dashboard Layer: Unified Telemetry -->
+        <div class="flex items-center justify-end  mb-3 pointer-events-none ">
+            <div class="ui-playbar flex items-center p-0.5 rounded-lg pointer-events-auto overflow-hidden">
+                <!-- Frame Monitor -->
+                <div class="flex items-center px-4 py-1.5 gap-4 border-r ui-border">
+                    <span
+                        class="text-[7px] uppercase font-bold ui-text-secondary opacity-30 tracking-[0.2em] leading-none">FRAME</span>
+                    <span id="time-label"
+                        class="font-mono text-[10px] ui-text-primary tabular-nums text-right min-w-[60px] leading-none">0
+                        / 0</span>
+                </div>
+                <!-- FPS Segmented Control -->
+                <div class="flex items-center px-1   ">
+                    <div class="flex gap-1 p-0.5">
+                        <button data-value="10"
+                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">10</button>
+                        <button data-value="30"
+                            class="fps-item  px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary  hover:opacity-100 leading-none active">30</button>
+                        <button data-value="60"
+                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary  hover:opacity-100 leading-none">60</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Hub Layer -->
+        <div id="time-controls"
+            class="glass-blue px-6 py-2.5 rounded-lg flex items-center gap-5 pointer-events-auto shadow-2xl">
+            <!-- Premium Play Button -->
+            <button id="play-pause" class="w-9 h-9 flex items-center justify-center rounded-lg ui-btn ui-text-highlight"
+                aria-label="Play/Pause">
+                <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
+                    <path d="M8 5v14l11-7z" />
+                </svg>
+            </button>
+
+            <!-- Scrubbing Layer -->
+            <div class="flex-grow flex flex-col gap-1">
+                <input type="range" id="time-slider" min="0" max="1" step="0.01" value="0"
+                    class="w-full h-1 accent-emerald-500 cursor-pointer appearance-none rounded-full" />
+                <div id="timeline-ticks" class="flex justify-between px-1"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Minimalist Loading Overlay -->
+    <div id="loading-overlay"
+        class="hidden fixed inset-0 flex items-center justify-center bg-black/90 z-[100] backdrop-blur-sm">
+        <div class="flex flex-col items-center gap-8 w-64">
+            <!-- Step Indicator -->
+            <div id="loading-steps" class="w-full h-8 flex justify-between items-center relative">
+                <!-- Lines Container (centered with squares) -->
+                <div class="absolute left-[6px] right-[6px] top-1/2 -translate-y-1/2 h-[2px] pointer-events-none">
+                    <!-- Progress line that strictly connects active squares -->
+                    <div id="loading-step-progress"
+                        class="absolute top-0 left-0 h-full bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.6)] rounded-full"
+                        style="width: 0%">
+                    </div>
+                </div>
+
+                <!-- Step Squares -->
+                <div class="step-square z-10 w-3 h-3 rounded-sm reached" data-step="0"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="1"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="2"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="3"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="4"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="5"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="6"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="7"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="8"></div>
+                <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="9"></div>
+            </div>
+
+            <div class="flex flex-col items-center gap-2">
+                <div id="loading-status" class="text-[10px] font-black tracking-[0.8rem] uppercase ui-text-primary">
+                    initializing</div>
+                <div id="loading-detail"
+                    class="text-[8px] font-mono uppercase ui-text-secondary tracking-tight opacity-40">System
+                    Ready</div>
+            </div>
+
+        </div>
+    </div>
+
+    <style>
+        @keyframes loading-bar {
+
+            0%,
+            100% {
+                height: 4px;
+                opacity: 0.3;
+            }
+
+            50% {
+                height: 12px;
+                opacity: 1;
+            }
+        }
+    </style>
+
+    <script src="./libde265.js"></script>
+</body>
+
+</html>
