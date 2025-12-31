@@ -804,6 +804,18 @@ class Viewer {
             }
         });
 
+        this.app.touch.on(pc.EVENT_TOUCHEND, (e: pc.TouchEvent) => {
+            if (e.touches.length === 1) {
+                lastMousePos.set(e.touches[0].x, e.touches[0].y);
+            }
+        });
+
+        this.app.touch.on(pc.EVENT_TOUCHCANCEL, (e: pc.TouchEvent) => {
+            if (e.touches.length === 1) {
+                lastMousePos.set(e.touches[0].x, e.touches[0].y);
+            }
+        });
+
         this.app.on('update', (dt: number) => {
             // Smooth Camera Animation
             if (this.isCameraAnimating && this.camera) {
