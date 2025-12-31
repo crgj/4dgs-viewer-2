@@ -757,9 +757,12 @@ class Viewer {
         // --- Touch Support ---
         let lastTouchDistance = 0;
         let lastTouchPos = new pc.Vec2();
+        let prevTouchCount = 0;
 
         this.app.touch.on(pc.EVENT_TOUCHSTART, (e: pc.TouchEvent) => {
             if (isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
+
+            prevTouchCount = e.touches.length;
 
             if (e.touches.length === 1) {
                 lastMousePos.set(e.touches[0].x, e.touches[0].y);
@@ -774,6 +777,20 @@ class Viewer {
         this.app.touch.on(pc.EVENT_TOUCHMOVE, (e: pc.TouchEvent) => {
             if (!this.camera || isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
             // e.event.preventDefault(); // Managed by PlayCanvas TouchDevice usually, but good for safety
+
+            // Detect touch count change (switch between single/multi touch) and reset anchors
+            if (e.touches.length !== prevTouchCount) {
+                prevTouchCount = e.touches.length;
+                if (e.touches.length === 1) {
+                    lastMousePos.set(e.touches[0].x, e.touches[0].y);
+                } else if (e.touches.length === 2) {
+                    const t0 = e.touches[0];
+                    const t1 = e.touches[1];
+                    lastTouchDistance = Math.hypot(t0.x - t1.x, t0.y - t1.y);
+                    lastTouchPos.set((t0.x + t1.x) / 2, (t0.y + t1.y) / 2);
+                }
+                return; // Skip movement this frame to avoid jumps
+            }
 
             if (e.touches.length === 1) {
                 const t = e.touches[0];
@@ -805,14 +822,14 @@ class Viewer {
         });
 
         this.app.touch.on(pc.EVENT_TOUCHEND, (e: pc.TouchEvent) => {
-            if (e.touches.length === 1) {
-                lastMousePos.set(e.touches[0].x, e.touches[0].y);
-            }
-        });
-
-        this.app.touch.on(pc.EVENT_TOUCHCANCEL, (e: pc.TouchEvent) => {
-            if (e.touches.length === 1) {
-                lastMousePos.set(e.touches[0].x, e.touches[0].y);
+            // Update count, but rely on TOUCHMOVE to reset anchors if needed
+            // If we reset here, TOUCHMOVE sees "same count" and might jump if coordinates shifted
+            // If we don't reset here, TOUCHMOVE sees "diff count" and triggers the guard.
+            // However, updating the count is good practice for state tracking.
+            // Let's NOT update prevTouchCount here, to force TOUCHMOVE to detect the mismatch.
+            // But if we stop touching completely (count 0), we should probably know.
+            if (e.touches.length === 0) {
+                prevTouchCount = 0;
             }
         });
 
