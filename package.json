@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@playcanvas/pcui": "^5.4.1",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "clsx": "^2.1.1",
     "hs265": "^1.0.0",
     "jszip": "^3.10.1",

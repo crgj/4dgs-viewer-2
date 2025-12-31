@@ -2,6 +2,7 @@ import * as pc from 'playcanvas';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { UnzipPipeline } from './utils/unzip-pipeline';
 import { SelectionTool } from './ui/selection-tool';
+import { ZipPly } from './utils/zip_ply';
 
 // --- Configuration & State ---
 class Viewer {
@@ -15,6 +16,9 @@ class Viewer {
     fps = 30; // Default playback fps
     currentFileName: string | null = null;
     originalFrames: number | null = null;
+    private isPlaying = false;
+    private currentTime = 0;
+    private currentPresetIndex = -1;
 
     // Cache for Selection Tool
     cachedPositions: Float32Array | null = null;
@@ -24,6 +28,17 @@ class Viewer {
     private yaw = 0;
     private gridEntity: pc.Entity | null = null;
     private axesEntity: pc.Entity | null = null;
+
+    // Camera Presets State
+    private cameraPresets: { name: string, pos: pc.Vec3, pitch: number, yaw: number }[] = [];
+    private isCameraAnimating = false;
+    private animTargetPos = new pc.Vec3();
+    private animTargetPitch = 0;
+    private animTargetYaw = 0;
+    private animStartPos = new pc.Vec3();
+    private animStartPitch = 0;
+    private animStartYaw = 0;
+    private animProgress = 0;
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
@@ -72,7 +87,7 @@ class Viewer {
 
         const camera = new pc.Entity('Camera');
         camera.addComponent('camera', {
-            clearColor: new pc.Color(0.043, 0.063, 0.106, 1), // Default to Dark Theme Background
+            clearColor: new pc.Color(0.1, 0.1, 0.1, 1), // Updated to match #2a2b2f
             farClip: 1000,
             nearClip: 0.1,
             fov: 60
@@ -157,7 +172,7 @@ class Viewer {
         this.axesEntity = entity;
     }
 
-    private async exportPly() {
+    private async exportData(format: 'ply' | 'gszip' = 'ply') {
         if (!this.splatEntity || !this.splatEntity.gsplat) return;
 
         const component = this.splatEntity.gsplat as any;
@@ -240,6 +255,32 @@ class Viewer {
         const framesToExport = (this.originalFrames && this.originalFrames > 0) ? this.originalFrames : Math.ceil(this.duration);
         header += `comment frames ${framesToExport}\n`;
 
+        // 3.5 Add camera presets to header
+        if (this.cameraPresets.length > 0) {
+            const camerasJson = JSON.stringify(this.cameraPresets.map(p => ({
+                name: p.name,
+                pos: [p.pos.x, p.pos.y, p.pos.z],
+                pitch: p.pitch,
+                yaw: p.yaw
+            })));
+            header += `comment cameras ${camerasJson}\n`;
+        }
+
+        // 3.6 Add object pose (position and rotation) to header
+        if (this.splatEntity) {
+            const pos = this.splatEntity.getPosition();
+            const rot = this.splatEntity.getEulerAngles();
+            const poseJson = JSON.stringify({
+                px: pos.x.toFixed(3),
+                py: pos.y.toFixed(3),
+                pz: pos.z.toFixed(3),
+                rx: rot.x.toFixed(2),
+                ry: rot.y.toFixed(2),
+                rz: rot.z.toFixed(2)
+            });
+            header += `comment pose ${poseJson}\n`;
+        }
+
         header += "end_header\n";
 
         const headerBlob = new TextEncoder().encode(header);
@@ -267,21 +308,84 @@ class Viewer {
         }
 
         // 5. Trigger Download
-        const blob = new Blob([headerBlob, dataBuffer], { type: "application/octet-stream" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `exported_scene_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, "")}.ply`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const combinedBuffer = new Uint8Array(headerBlob.length + dataBuffer.byteLength);
+        combinedBuffer.set(headerBlob);
+        combinedBuffer.set(new Uint8Array(dataBuffer), headerBlob.length);
+
+        if (format === 'gszip') {
+            const overlay = document.getElementById('loading-overlay');
+            const status = document.getElementById('loading-status');
+            const detail = document.getElementById('loading-detail');
+            const stepProgress = document.getElementById('loading-step-progress');
+            const stepSquares = document.querySelectorAll('.step-square');
+
+            const updateProgress = (p: number, msg: string) => {
+                if (overlay) overlay.classList.remove('hidden');
+                if (status) status.innerText = "COMPRESSING";
+                if (detail) detail.innerText = msg;
+
+                // Map 0-100% to 0-9 steps
+                const stepIndex = Math.min(9, Math.floor(p / 10));
+
+                if (stepProgress) {
+                    const percentage = (stepIndex / (stepSquares.length - 1)) * 100;
+                    stepProgress.style.width = `${percentage}%`;
+                }
+
+                stepSquares.forEach((sq, idx) => {
+                    const element = sq as HTMLElement;
+                    if (idx <= stepIndex) {
+                        element.classList.add('reached');
+                    } else {
+                        element.classList.remove('reached');
+                    }
+                });
+            };
+
+            updateProgress(0, "Initializing...");
+
+            try {
+                const zipper = new ZipPly();
+                // Pass progress callback
+                const gszipBlob = await zipper.compress(combinedBuffer.buffer, {}, (p, msg) => {
+                    updateProgress(p, msg);
+                }) as Blob;
+
+                updateProgress(100, "Download Starting...");
+
+                const url = URL.createObjectURL(gszipBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+                a.download = `exported_scene_${timestamp}.gszip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                console.error("GSZIP compression failed:", err);
+                alert("Compression failed. Checking console for details.");
+            } finally {
+                if (overlay) setTimeout(() => overlay.classList.add('hidden'), 500);
+            }
+        }
+
+        if (format === 'ply') {
+            const blob = new Blob([combinedBuffer], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+            a.download = `exported_scene_${timestamp}.ply`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
     }
 
     private setupEventListeners() {
-        // 0. Export Button
-        const exportBtn = document.getElementById('export-file');
-        exportBtn?.addEventListener('click', () => this.exportPly());
+        // 0. Export Button is now handled by sub-buttons (ply/gszip) in the menu.
 
         // 1. Disable Right-Click Context Menu
         window.addEventListener('contextmenu', e => e.preventDefault());
@@ -289,23 +393,51 @@ class Viewer {
         const openBtn = document.getElementById('open-file');
         const fileInput = document.getElementById('file-input') as HTMLInputElement;
         const resetBtn = document.getElementById('reset-cam');
+        const exportPlyBtn = document.getElementById('export-ply');
+        const exportGszipBtn = document.getElementById('export-gszip');
 
         openBtn?.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         resetBtn?.addEventListener('click', () => this.resetCamera());
-
-        // --- Sidebar Visibility Toggle ---
+        exportPlyBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.exportData('ply');
+        });
+        exportGszipBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.exportData('gszip');
+        });
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
-        const toggleSidebar = document.getElementById('toggle-sidebar');
+
+        const toggleUI = document.getElementById('toggle-ui');
         const headerBrand = document.getElementById('header-brand');
-        toggleSidebar?.addEventListener('click', () => {
-            sidebar?.classList.toggle('sidebar-hidden');
-            playbar?.classList.toggle('bottom-bar-hidden');
-            selectionToolbar?.classList.toggle('tools-hidden');
-            headerBrand?.classList.toggle('header-hidden');
+
+        const doToggle = () => this.toggleUIVisibility();
+
+
+        toggleUI?.addEventListener('click', doToggle);
+
+        const simplePrev = document.getElementById('simple-prev');
+        const simpleNext = document.getElementById('simple-next');
+        const simplePlay = document.getElementById('simple-play-pause');
+        const simpleToggleUI = document.getElementById('simple-toggle-ui');
+
+        simplePrev?.addEventListener('click', () => {
+            if (this.cameraPresets.length === 0) return;
+            let nextIdx = this.currentPresetIndex - 1;
+            if (nextIdx < 0) nextIdx = this.cameraPresets.length - 1;
+            this.jumpToPreset(nextIdx);
         });
+        simpleNext?.addEventListener('click', () => {
+            if (this.cameraPresets.length === 0) return;
+            let nextIdx = this.currentPresetIndex + 1;
+            if (nextIdx >= this.cameraPresets.length) nextIdx = 0;
+            this.jumpToPreset(nextIdx);
+        });
+        simplePlay?.addEventListener('click', () => this.togglePlay());
+        simpleToggleUI?.addEventListener('click', doToggle);
 
         // --- Double Click to Toggle UI ---
         window.addEventListener('dblclick', (e) => {
@@ -315,13 +447,11 @@ class Viewer {
                 target.closest('.ui-playbar') ||
                 target.closest('#selection-toolbar') ||
                 target.closest('header') ||
-                target.closest('#loading-overlay');
+                target.closest('#loading-overlay') ||
+                target.closest('#simplified-panel');
 
             if (!isUIPanel) {
-                sidebar?.classList.toggle('sidebar-hidden');
-                playbar?.classList.toggle('bottom-bar-hidden');
-                selectionToolbar?.classList.toggle('tools-hidden');
-                headerBrand?.classList.toggle('header-hidden');
+                this.toggleUIVisibility();
             }
         });
 
@@ -402,29 +532,29 @@ class Viewer {
         });
 
         // --- Themes ---
-        const themeBtns = document.querySelectorAll('.bg-picker');
-        themeBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                // 1. Handle Active State
-                themeBtns.forEach(b => b.classList.remove('active-theme'));
-                btn.classList.add('active-theme');
+        const themeBtn = document.getElementById('toggle-theme');
+        let currentTheme = 'dark';
 
-                // 2. Handle Camera Color
-                const element = btn as HTMLElement;
-                const colorStr = element.dataset.bg;
-                if (colorStr && this.camera?.camera) {
-                    const c = colorStr.split(',').map(Number);
-                    this.camera.camera.clearColor = new pc.Color(c[0], c[1], c[2], 1);
-                }
-
-                // 3. Handle UI Theme (Light/Dark)
-                const theme = element.dataset.theme;
+        const updateTheme = (theme: string) => {
+            currentTheme = theme;
+            if (this.camera?.camera) {
                 if (theme === 'light') {
+                    this.camera.camera.clearColor = new pc.Color(0.95, 0.96, 0.98, 1);
                     document.body.classList.add('theme-light');
                 } else {
+                    this.camera.camera.clearColor = new pc.Color(0.1, 0.1, 0.1, 1);
                     document.body.classList.remove('theme-light');
                 }
-            });
+                // Keep the button 'active' (highlighted) to match other tools in the panel
+                if (themeBtn) this.updateToggleButton(themeBtn, true);
+            }
+        };
+
+        // Initialize state: make it active (green) by default to match Grid/Axes
+        if (themeBtn) this.updateToggleButton(themeBtn, true);
+
+        themeBtn?.addEventListener('click', () => {
+            updateTheme(currentTheme === 'dark' ? 'light' : 'dark');
         });
 
         const fpsItems = document.querySelectorAll('.fps-item');
@@ -444,19 +574,7 @@ class Viewer {
         const timeSlider = document.getElementById('time-slider') as HTMLInputElement;
         const timeLabel = document.getElementById('time-label');
 
-        let isPlaying = false;
-        let currentTime = 0;
-
-        const togglePlay = () => {
-            isPlaying = !isPlaying;
-            if (playBtn) {
-                playBtn.innerHTML = isPlaying
-                    ? '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
-                    : '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M8 5v14l11-7z"/></svg>';
-            }
-        };
-
-        playBtn?.addEventListener('click', togglePlay);
+        playBtn?.addEventListener('click', () => this.togglePlay());
 
         let isScrubbing = false;
 
@@ -470,13 +588,13 @@ class Viewer {
 
         timeSlider?.addEventListener('input', () => {
             // When scrubbing, we explicitly set currentTime
-            currentTime = parseFloat(timeSlider.value);
+            this.currentTime = parseFloat(timeSlider.value);
             const total = Math.ceil(this.duration);
-            if (timeLabel) timeLabel.innerText = `${Math.floor(currentTime)} / ${total}`;
+            if (timeLabel) timeLabel.innerText = `${Math.floor(this.currentTime)} / ${total}`;
 
             // Immediate visual update
             if (this.splatEntity?.gsplat) {
-                (this.splatEntity.gsplat as any).time = currentTime;
+                (this.splatEntity.gsplat as any).time = this.currentTime;
             }
         });
 
@@ -562,6 +680,19 @@ class Viewer {
             }
         }, { passive: false });
 
+        window.addEventListener('keydown', (e) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+
+            if (e.key.toLowerCase() === 'h') {
+                this.toggleUIVisibility();
+            }
+            if (e.key === ' ') {
+                e.preventDefault();
+                this.togglePlay();
+            }
+        });
+
         const handleEnd = () => {
             if (activeScrubInput) {
                 activeScrubInput = null;
@@ -579,10 +710,13 @@ class Viewer {
 
         window.addEventListener('keydown', (e) => {
             if (isUIInteracting) return;
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+
             keys[e.code] = true;
             if (e.code === 'Space') {
                 e.preventDefault();
-                togglePlay();
+                this.togglePlay();
             }
             if (e.code === 'Escape') {
                 if (this.selectionTool && this.selectionTool.currentTool !== 'none') {
@@ -671,8 +805,32 @@ class Viewer {
         });
 
         this.app.on('update', (dt: number) => {
+            // Smooth Camera Animation
+            if (this.isCameraAnimating && this.camera) {
+                this.animProgress += dt * 2.0; // Transition speed
+                if (this.animProgress >= 1) {
+                    this.animProgress = 1;
+                    this.isCameraAnimating = false;
+                }
+
+                // Ease out cubic
+                const t = 1 - Math.pow(1 - this.animProgress, 3);
+
+                const currentPos = new pc.Vec3().lerp(this.animStartPos, this.animTargetPos, t);
+                const currentPitch = pc.math.lerp(this.animStartPitch, this.animTargetPitch, t);
+                const currentYaw = pc.math.lerp(this.animStartYaw, this.animTargetYaw, t);
+
+                this.camera.setPosition(currentPos);
+                this.camera.setEulerAngles(currentPitch, currentYaw, 0);
+                this.pitch = currentPitch;
+                this.yaw = currentYaw;
+            }
+
             // WASD Camera Movement - blocked only if we are actively scrubbing or focused on UI
-            if (this.camera && !isUIInteracting) {
+            const activeEl = document.activeElement as HTMLElement;
+            const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
+
+            if (this.camera && !isUIInteracting && !this.isCameraAnimating && !isTyping) {
                 const speed = dt * 5;
                 if (keys['KeyW']) this.camera.translateLocal(0, 0, -speed);
                 if (keys['KeyS']) this.camera.translateLocal(0, 0, speed);
@@ -682,18 +840,17 @@ class Viewer {
                 if (keys['KeyE']) this.camera.translateLocal(0, speed, 0);
             }
 
-            if (isPlaying) {
+            if (this.isPlaying) {
                 // Use FPS-based playback
-                currentTime += dt * this.fps;
+                this.currentTime += dt * this.fps;
 
                 // Loop logic
-                if (currentTime > this.duration) {
-                    currentTime = 0;
+                if (this.currentTime > this.duration) {
+                    this.currentTime = 0;
                 }
 
                 // For UI, we floor to closest frame
-                // For UI, we floor to closest frame
-                const displayFrame = Math.floor(currentTime);
+                const displayFrame = Math.floor(this.currentTime);
                 const total = Math.ceil(this.duration); // Duration is roughly max frame index or count
 
                 // Only auto-update slider if user is NOT scrubbing
@@ -707,7 +864,7 @@ class Viewer {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
                         // User request: input 't' must be integer frame if playing as frames
-                        const shaderTime = (this.duration > 1.0) ? Math.floor(currentTime) : currentTime;
+                        const shaderTime = (this.duration > 1.0) ? Math.floor(this.currentTime) : this.currentTime;
                         material.setParameter('uTime', shaderTime);
                     }
                 }
@@ -716,7 +873,7 @@ class Viewer {
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
-                        const shaderTime = (this.duration > 1.0) ? Math.floor(currentTime) : currentTime;
+                        const shaderTime = (this.duration > 1.0) ? Math.floor(this.currentTime) : this.currentTime;
                         material.setParameter('uTime', shaderTime);
                     }
                 }
@@ -771,6 +928,195 @@ class Viewer {
         };
 
         initSamples();
+
+        // --- Camera Presets ---
+        const addPresetBtn = document.getElementById('add-preset');
+        const clearPresetsBtn = document.getElementById('clear-presets');
+
+        this.renderPresets();
+        addPresetBtn?.addEventListener('click', () => {
+            if (!this.camera) return;
+            this.cameraPresets.push({
+                name: `CAM_${this.cameraPresets.length + 1}`,
+                pos: this.camera.getPosition().clone(),
+                pitch: this.pitch,
+                yaw: this.yaw
+            });
+            this.renderPresets();
+        });
+
+        clearPresetsBtn?.addEventListener('click', () => {
+            if (confirm('Clear all presets?')) {
+                this.cameraPresets = [];
+                this.renderPresets();
+            }
+        });
+    }
+
+    private renderPresets() {
+        const presetsList = document.getElementById('presets-list');
+        if (!presetsList) return;
+        presetsList.innerHTML = '';
+        this.cameraPresets.forEach((preset, index) => {
+            const item = document.createElement('div');
+            item.className = 'ui-item group justify-between py-1.5 px-2 cursor-grab active:cursor-grabbing';
+            item.setAttribute('draggable', 'true');
+            item.dataset.index = index.toString();
+
+            item.innerHTML = `
+                <div class="flex items-center gap-2 overflow-hidden flex-1 cursor-pointer">
+                    <div class="ui-dot"></div>
+                    <span class="preset-name text-[9px] ui-text-primary font-medium truncate">${preset.name}</span>
+                </div>
+                <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            `;
+
+            // --- Rename Logic ---
+            const nameSpan = item.querySelector('.preset-name') as HTMLElement;
+            nameSpan.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = preset.name;
+                input.className = 'bg-black/50 border-none outline-none text-[9px] w-full ui-text-highlight px-1 rounded';
+
+                const finishEdit = () => {
+                    const newName = input.value.trim() || `CAM_${index + 1}`;
+                    preset.name = newName;
+                    this.renderPresets();
+                };
+
+                input.addEventListener('blur', finishEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') finishEdit();
+                    if (e.key === 'Escape') this.renderPresets();
+                });
+
+                nameSpan.replaceWith(input);
+                input.focus();
+                input.select();
+            });
+
+            // --- Drag and Drop Logic ---
+            item.addEventListener('dragstart', (e) => {
+                if (e.dataTransfer) {
+                    e.dataTransfer.setData('text/plain', index.toString());
+                    item.classList.add('opacity-40');
+                }
+            });
+
+            item.addEventListener('dragend', () => {
+                item.classList.remove('opacity-40');
+            });
+
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                item.classList.add('bg-white/5');
+            });
+
+            item.addEventListener('dragleave', () => {
+                item.classList.remove('bg-white/5');
+            });
+
+            item.addEventListener('drop', (e) => {
+                e.preventDefault();
+                item.classList.remove('bg-white/5');
+                const sourceIdx = parseInt(e.dataTransfer?.getData('text/plain') || '-1');
+                if (sourceIdx !== -1 && sourceIdx !== index) {
+                    const movedItem = this.cameraPresets.splice(sourceIdx, 1)[0];
+                    this.cameraPresets.splice(index, 0, movedItem);
+                    this.renderPresets();
+                }
+            });
+
+            // Jump to preset
+            item.querySelector('.flex')?.addEventListener('click', (e) => {
+                if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+                if (!this.camera) return;
+                this.isCameraAnimating = true;
+                this.animProgress = 0;
+                this.animStartPos.copy(this.camera.getPosition());
+                this.animStartPitch = this.pitch;
+                this.animStartYaw = this.yaw;
+
+                this.animTargetPos.copy(preset.pos);
+                this.animTargetPitch = preset.pitch;
+                this.animTargetYaw = preset.yaw;
+            });
+
+            // Delete preset
+            item.querySelector('.delete-preset')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.cameraPresets.splice(index, 1);
+                this.renderPresets();
+            });
+
+            presetsList.appendChild(item);
+        });
+    }
+
+    private togglePlay() {
+        this.isPlaying = !this.isPlaying;
+        const playBtn = document.getElementById('play-pause');
+        const simplePlayBtn = document.getElementById('simple-play-pause');
+
+        const icon = this.isPlaying
+            ? '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
+            : '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M8 5v14l11-7z"/></svg>';
+
+        const simpleIcon = this.isPlaying
+            ? '<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
+            : '<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M8 5v14l11-7z"/></svg>';
+
+        if (playBtn) playBtn.innerHTML = icon;
+        if (simplePlayBtn) simplePlayBtn.innerHTML = simpleIcon;
+    }
+
+    private jumpToPreset(index: number) {
+        if (index < 0 || index >= this.cameraPresets.length) return;
+        this.currentPresetIndex = index;
+        const preset = this.cameraPresets[index];
+        if (!this.camera) return;
+        this.isCameraAnimating = true;
+        this.animProgress = 0;
+        this.animStartPos.copy(this.camera.getPosition());
+        this.animStartPitch = this.pitch;
+        this.animStartYaw = this.yaw;
+        this.animTargetPos.copy(preset.pos);
+        this.animTargetPitch = preset.pitch;
+        this.animTargetYaw = preset.yaw;
+    }
+
+    private isUIHidden() {
+        const sidebar = document.getElementById('sidebar');
+        return sidebar?.classList.contains('sidebar-hidden');
+    }
+
+    private toggleUIVisibility(forceHidden?: boolean) {
+        const sidebar = document.getElementById('sidebar');
+        const playbar = document.getElementById('playbar-container');
+        const selectionToolbar = document.getElementById('selection-toolbar');
+        const controlPanel = document.getElementById('control-panel');
+        const simplifiedPanel = document.getElementById('simplified-panel');
+
+        const shouldHide = forceHidden !== undefined ? forceHidden : !this.isUIHidden();
+
+        if (shouldHide) {
+            sidebar?.classList.add('sidebar-hidden');
+            playbar?.classList.add('bottom-bar-hidden');
+            selectionToolbar?.classList.add('tools-hidden');
+            controlPanel?.classList.add('panel-hidden');
+            simplifiedPanel?.classList.remove('hidden-panel');
+        } else {
+            sidebar?.classList.remove('sidebar-hidden');
+            playbar?.classList.remove('bottom-bar-hidden');
+            selectionToolbar?.classList.remove('tools-hidden');
+            controlPanel?.classList.remove('panel-hidden');
+            simplifiedPanel?.classList.add('hidden-panel');
+        }
     }
 
     private async loadSampleFile(url: string) {
@@ -851,6 +1197,11 @@ class Viewer {
     }
 
     private async loadFile(file: File) {
+        // If on small screen (phone/tablet), auto-hide UI to simplified mode
+        if (window.innerWidth < 1024) {
+            this.toggleUIVisibility(true);
+        }
+
         if (!file.name.endsWith('.ply') && !file.name.endsWith('.splat') && !file.name.endsWith('.zip') && !file.name.endsWith('.gszip')) {
             alert('Please drop a .ply, .splat, .zip, or .gszip file');
             return;
@@ -890,6 +1241,9 @@ class Viewer {
         this.currentFileName = file.name;
 
         if (this.splatEntity) this.splatEntity.destroy();
+        this.cameraPresets = [];
+        this.renderPresets();
+
         const scElem = document.getElementById('splat-count');
         if (scElem) scElem.innerText = "--";
 
@@ -961,6 +1315,17 @@ class Viewer {
                         this.selectionTool.setTool('none');
                     }
 
+                    // --- Load Camera Presets from PLY if present ---
+                    if (parsed.cameras && parsed.cameras.length > 0) {
+                        this.cameraPresets = parsed.cameras.map((c: any) => ({
+                            name: c.name,
+                            pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                            pitch: c.pitch,
+                            yaw: c.yaw
+                        }));
+                        this.renderPresets();
+                    }
+
                     setProgress(9, "READY", "System Update Complete");
 
                     const reorderedMu = splatData.getProp('lifetime_mu');
@@ -1001,8 +1366,13 @@ class Viewer {
                         this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture);
                     }
 
-                    this.originalFrames = parsed.dataFrames || null;
-                    this.duration = parsed.dataFrames ? parsed.dataFrames : (parsed.maxMu || 100);
+                    this.originalFrames = zipFrameCount || parsed.dataFrames || null;
+                    if (this.originalFrames) {
+                        this.duration = this.originalFrames; // Explicit frame count is the authority
+                    } else {
+                        // Fallback to maxMu if no explicit frame count
+                        this.duration = parsed.maxMu || 100;
+                    }
                     const slider = document.getElementById('time-slider') as HTMLInputElement;
                     if (slider) {
                         slider.max = Math.ceil(this.duration).toString();
@@ -1021,7 +1391,30 @@ class Viewer {
                     }, 600);
                     this.updateStats(asset);
 
-                    if (this.currentFileName) {
+                    if (parsed.pose) {
+                        // Apply pose from PLY
+                        if (this.splatEntity) {
+                            this.splatEntity.setPosition(parseFloat(parsed.pose.px), parseFloat(parsed.pose.py), parseFloat(parsed.pose.pz));
+                            this.splatEntity.setEulerAngles(parseFloat(parsed.pose.rx), parseFloat(parsed.pose.ry), parseFloat(parsed.pose.rz));
+
+                            // Sync UI inputs
+                            const posX = document.getElementById('pos-x') as HTMLInputElement;
+                            const posY = document.getElementById('pos-y') as HTMLInputElement;
+                            const posZ = document.getElementById('pos-z') as HTMLInputElement;
+                            const rotX = document.getElementById('rot-x') as HTMLInputElement;
+                            const rotY = document.getElementById('rot-y') as HTMLInputElement;
+                            const rotZ = document.getElementById('rot-z') as HTMLInputElement;
+
+                            if (posX) posX.value = parsed.pose.px;
+                            if (posY) posY.value = parsed.pose.py;
+                            if (posZ) posZ.value = parsed.pose.pz;
+                            if (rotX) rotX.value = parsed.pose.rx;
+                            if (rotY) rotY.value = parsed.pose.ry;
+                            if (rotZ) rotZ.value = parsed.pose.rz;
+
+                            console.log("Restored pose from PLY header");
+                        }
+                    } else if (this.currentFileName) {
                         this.loadCachedTransform(this.currentFileName);
                     } else {
                         this.resetObjectTransformUI();
@@ -1269,6 +1662,8 @@ class Viewer {
         const lines = headerText.split('\n');
 
         let vertexCount = 0;
+        let parsedCameras: any[] = [];
+        let parsedPose: any = null;
 
         // Property mapping
         const props: { name: string, type: string, offset: number }[] = [];
@@ -1293,6 +1688,20 @@ class Viewer {
             } else if (line.startsWith('comment frames')) {
                 const parts = line.split(/\s+/);
                 dataFrames = parseInt(parts[2]);
+            } else if (line.startsWith('comment cameras')) {
+                const jsonStr = line.replace('comment cameras ', '').trim();
+                try {
+                    parsedCameras = JSON.parse(jsonStr);
+                } catch (e) {
+                    console.warn("Failed to parse cameras comment", e);
+                }
+            } else if (line.startsWith('comment pose')) {
+                const jsonStr = line.replace('comment pose ', '').trim();
+                try {
+                    parsedPose = JSON.parse(jsonStr);
+                } catch (e) {
+                    console.warn("Failed to parse pose comment", e);
+                }
             }
         }
 
@@ -1474,16 +1883,26 @@ class Viewer {
             plyData: { elements: [vertexElement] },
             maxMu: maxMu,
             dataFrames: dataFrames,
+            cameras: parsedCameras,
+            pose: parsedPose,
             positions: null, colors: null, lifetimes: null
         };
     }
 
     private resetCamera() {
         if (!this.camera) return;
-        this.camera.setPosition(0, 1, 5);
-        this.camera.setEulerAngles(0, 0, 0);
-        this.pitch = 0;
-        this.yaw = 0;
+        if (this.cameraPresets.length > 0) {
+            const first = this.cameraPresets[0];
+            this.camera.setPosition(first.pos);
+            this.pitch = first.pitch;
+            this.yaw = first.yaw;
+            this.camera.setLocalEulerAngles(this.pitch, this.yaw, 0);
+        } else {
+            this.camera.setPosition(0, 1, 5);
+            this.camera.setEulerAngles(0, 0, 0);
+            this.pitch = 0;
+            this.yaw = 0;
+        }
     }
 
     private updateStats(asset: pc.Asset) {

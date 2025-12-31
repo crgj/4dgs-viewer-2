@@ -89,29 +89,30 @@ input[type=text]:hover {
 
 
 :root {
-    /* Premium Dark Theme - Obsidian & Emerald */
-    --ui-bg: #0f0f12;
-    --glass-bg: rgba(18, 18, 18, 0.85);
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --glass-shadow: rgba(0, 0, 0, 0.8);
+    /* Premium Dark Theme - High Contrast UI */
+    --ui-bg: #1a1a1a;
+    /* Matches your 0.1, 0.1, 0.1 */
+    --glass-bg: rgba(45, 45, 50, 0.9);
+    /* Lighter panels */
+    --glass-border: rgba(255, 255, 255, 0.15);
+    --glass-shadow: rgba(0, 0, 0, 0.5);
 
     --text-primary: #ffffff;
-    --text-secondary: #a1a1aa;
-    --text-dim: #52525b;
+    --text-secondary: #d1d1d6;
+    --text-dim: #71717a;
     --text-highlight: #10b981;
-    /* Emerald-500 */
 
-    --input-bg: rgba(255, 255, 255, 0.03);
-    --input-border: rgba(255, 255, 255, 0.06);
+    --input-bg: rgba(255, 255, 255, 0.08);
+    --input-border: rgba(255, 255, 255, 0.12);
     --input-hover: rgba(16, 185, 129, 0.2);
 
-    --btn-hover-bg: rgba(255, 255, 255, 0.1);
+    --btn-hover-bg: rgba(255, 255, 255, 0.15);
     --accent-glow: rgba(16, 185, 129, 0.4);
 
-    --icon-fill: #f4f4f5;
-    --card-bg: rgba(255, 255, 255, 0.05);
+    --icon-fill: #ffffff;
+    --card-bg: rgba(255, 255, 255, 0.1);
 
-    --playbar-bg: rgba(15, 15, 18, 0.8);
+    --playbar-bg: rgba(35, 35, 40, 0.9);
 }
 
 body.theme-light {
@@ -168,11 +169,7 @@ body.theme-light {
     background: rgba(16, 185, 129, 0.1) !important;
 }
 
-.active-theme {
-    border-color: var(--text-highlight) !important;
-    border-width: 2px !important;
-    box-shadow: 0 0 20px var(--accent-glow);
-}
+
 
 .fps-item.active {
     color: #ffffff !important;
