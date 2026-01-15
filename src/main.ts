@@ -1,10 +1,30 @@
 import * as pc from 'playcanvas';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { UnzipPipeline } from './utils/unzip-pipeline';
+import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SelectionTool } from './ui/selection-tool';
 import { ZipPly } from './utils/zip_ply';
+import { GaussianEffects } from './particle-effects';
 
 // --- Configuration & State ---
+interface CameraPreset {
+    name: string;
+    pos: pc.Vec3;
+    pitch: number;
+    yaw: number;
+    textObjects?: {
+        id: string;
+        content: string;
+        font: string;
+        fontSize: number;
+        color: string;
+        fontWeight: string;
+        fontStyle: string;
+        top: number;
+        left: number;
+    }[];
+}
+
 class Viewer {
     app: pc.Application;
     camera: pc.Entity | null = null;
@@ -23,15 +43,21 @@ class Viewer {
     // Cache for Selection Tool
     cachedPositions: Float32Array | null = null;
     selectionTool: SelectionTool;
+    private effects: GaussianEffects;
 
     private pitch = 0;
     private yaw = 0;
     private gridEntity: pc.Entity | null = null;
     private axesEntity: pc.Entity | null = null;
 
+    // --- Text Object Feature Interfaces #WDD 2026-01-15 ---
+    private activeTextId: string | null = null;
+    private textOverlays: Map<string, HTMLElement> = new Map();
+
     // Camera Presets State
-    private cameraPresets: { name: string, pos: pc.Vec3, pitch: number, yaw: number }[] = [];
+    private cameraPresets: CameraPreset[] = [];
     private isCameraAnimating = false;
+    private wasPlayingBeforeAnim = false; // #WDD 2026-01-15 Store playback state
     private animTargetPos = new pc.Vec3();
     private animTargetPitch = 0;
     private animTargetYaw = 0;
@@ -89,6 +115,7 @@ class Viewer {
 
         // Init Selection Tool
         this.selectionTool = new SelectionTool(this.app, this);
+        this.effects = new GaussianEffects(this.app);
 
         this.setupEventListeners();
 
@@ -284,7 +311,8 @@ class Viewer {
                 name: p.name,
                 pos: [p.pos.x, p.pos.y, p.pos.z],
                 pitch: p.pitch,
-                yaw: p.yaw
+                yaw: p.yaw,
+                textObjects: p.textObjects // #WDD 2026-01-15 Save text objects
             })));
             header += `comment cameras ${camerasJson}\n`;
         }
@@ -562,6 +590,14 @@ class Viewer {
         const themeBtn = document.getElementById('toggle-theme');
         let currentTheme = 'dark';
 
+        // --- Transition Effect Toggle #WDD 2026-01-15 ---
+        const transitionBtn = document.getElementById('toggle-transition-effect');
+        transitionBtn?.addEventListener('click', () => {
+            this.effects.isEnabled = !this.effects.isEnabled;
+            this.updateToggleButton(transitionBtn, this.effects.isEnabled);
+        });
+        if (transitionBtn) this.updateToggleButton(transitionBtn, this.effects.isEnabled);
+
         const updateTheme = (theme: string) => {
             currentTheme = theme;
             if (this.camera?.camera) {
@@ -625,23 +661,43 @@ class Viewer {
             }
         });
 
+        // Close text edit when clicking anywhere outside
+        window.addEventListener('mousedown', (e) => {
+            const panel = document.getElementById('text-edit-panel');
+            if (panel && panel.classList.contains('show')) {
+                const target = e.target as HTMLElement;
+                const isOverlay = target.closest('#text-overlay-container');
+                const isPanel = target.closest('#text-edit-panel');
+                const isPresetBtn = target.closest('.add-text');
+
+                if (!isOverlay && !isPanel && !isPresetBtn) {
+                    this.closeTextEdit();
+                }
+            }
+        });
+
         // --- Interaction & Keyboard ---
         let isLMB = false;
         let isRMB = false;
         const lastMousePos = new pc.Vec2();
         const keys: Record<string, boolean> = {};
         let isUIInteracting = false;
+        let isHoveringUI = false; // #WDD 2026-01-15 Tracking hover state separately
 
         // Block camera when mouse is over UI panels
-        const uiPanels = ['sidebar', 'time-controls', 'header-brand', 'selection-toolbar'];
+        // #WDD 2026-01-15 Added 'control-panel' to the list to cover the entire right area
+        const uiPanels = ['sidebar', 'control-panel', 'time-controls', 'header-brand', 'selection-toolbar'];
         uiPanels.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
-            el.addEventListener('mouseenter', () => { isUIInteracting = true; });
-            el.addEventListener('mouseleave', () => { if (!activeScrubInput) isUIInteracting = false; });
-            el.addEventListener('mousedown', (e) => e.stopPropagation());
+            el.addEventListener('mouseenter', () => { isHoveringUI = true; });
+            el.addEventListener('mouseleave', () => { isHoveringUI = false; });
+            el.addEventListener('mousedown', (e) => {
+                isHoveringUI = true; // Extra safety
+                e.stopPropagation();
+            });
             el.addEventListener('touchstart', (e) => {
-                isUIInteracting = true;
+                isHoveringUI = true;
                 // Don't stop propagation if we want the actual touch event to reach children (like buttons)
                 // but we want to prevent the camera from moving.
             }, { passive: true });
@@ -650,7 +706,8 @@ class Viewer {
         window.addEventListener('mouseup', () => {
             isLMB = false;
             isRMB = false;
-            if (!activeScrubInput) isUIInteracting = false;
+            // #WDD 2026-01-15 Removed reset here as it was breaking camera lock when mouse is still over UI
+            // if (!activeScrubInput) isUIInteracting = false; 
             document.body.style.cursor = 'default';
         });
 
@@ -736,7 +793,7 @@ class Viewer {
         this.yaw = 0;
 
         window.addEventListener('keydown', (e) => {
-            if (isUIInteracting) return;
+            if (isUIInteracting || isHoveringUI) return; // #WDD 2026-01-15 Also check hover
             const target = e.target as HTMLElement;
             if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
 
@@ -753,15 +810,17 @@ class Viewer {
         });
         window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
-        this.app.mouse.on(pc.EVENT_MOUSEDOWN, (e: pc.MouseEvent) => {
-            if (isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
+        this.app.mouse.on(pc.EVENT_MOUSEDOWN, (e: any) => {
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (isUIInteracting || isHoveringUI || isEditing) return; // #WDD 2026-01-15 Also check hover
             if (e.button === pc.MOUSEBUTTON_LEFT) isLMB = true;
             if (e.button === pc.MOUSEBUTTON_RIGHT) isRMB = true;
             lastMousePos.set(e.x, e.y);
         });
 
         this.app.mouse.on(pc.EVENT_MOUSEMOVE, (e: pc.MouseEvent) => {
-            if (!this.camera || isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (!this.camera || isUIInteracting || isHoveringUI || isEditing || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return; // #WDD 2026-01-15 Also check hover
             const dx = e.x - lastMousePos.x;
             const dy = e.y - lastMousePos.y;
 
@@ -776,8 +835,10 @@ class Viewer {
             lastMousePos.set(e.x, e.y);
         });
 
+        // Zoom logic #WDD 2026-01-15
         this.app.mouse.on(pc.EVENT_MOUSEWHEEL, (e: any) => {
-            if (this.camera && !isUIInteracting && (!this.selectionTool || this.selectionTool.currentTool === 'none'))
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (this.camera && !isUIInteracting && !isEditing && (!this.selectionTool || this.selectionTool.currentTool === 'none'))
                 this.camera.translateLocal(0, 0, -e.wheel * 0.5);
         });
 
@@ -786,8 +847,9 @@ class Viewer {
         let lastTouchPos = new pc.Vec2();
         let prevTouchCount = 0;
 
-        this.app.touch.on(pc.EVENT_TOUCHSTART, (e: pc.TouchEvent) => {
-            if (isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
+        this.app.touch.on(pc.EVENT_TOUCHSTART, (e: any) => {
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (isUIInteracting || isEditing || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
 
             prevTouchCount = e.touches.length;
 
@@ -801,8 +863,9 @@ class Viewer {
             }
         });
 
-        this.app.touch.on(pc.EVENT_TOUCHMOVE, (e: pc.TouchEvent) => {
-            if (!this.camera || isUIInteracting || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
+        this.app.touch.on(pc.EVENT_TOUCHMOVE, (e: any) => {
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (!this.camera || isUIInteracting || isEditing || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
             // e.event.preventDefault(); // Managed by PlayCanvas TouchDevice usually, but good for safety
 
             // Detect touch count change (switch between single/multi touch) and reset anchors
@@ -861,12 +924,20 @@ class Viewer {
         });
 
         this.app.on('update', (dt: number) => {
+            // #WDD 2026-01-15 Update text visibility based on camera proximity
+            this.updateTextVisibility();
+
             // Smooth Camera Animation
             if (this.isCameraAnimating && this.camera) {
-                this.animProgress += dt * 2.0; // Transition speed
+                this.animProgress += dt / 1.0; // Transition speed: 1.0 second total #WDD 2026-01-15
                 if (this.animProgress >= 1) {
                     this.animProgress = 1;
                     this.isCameraAnimating = false;
+                    // Resume playback if it was playing before #WDD 2026-01-15
+                    if (this.wasPlayingBeforeAnim) {
+                        this.togglePlay();
+                        this.wasPlayingBeforeAnim = false;
+                    }
                 }
 
                 // Ease out cubic
@@ -880,18 +951,35 @@ class Viewer {
                 this.camera.setEulerAngles(currentPitch, currentYaw, 0);
                 this.pitch = currentPitch;
                 this.yaw = currentYaw;
+
+                // Update Transition Effect #WDD 2026-01-15
+                const material = (this.splatEntity?.gsplat as any)?.instance?.material;
+                if (material) {
+                    material.setParameter('uTime', this.currentTime); // Ensure uTime is also updated
+                    this.effects.update(this.animProgress, material);
+                }
+            } else {
+                // Ensure effect is reset when not animating
+                const material = (this.splatEntity?.gsplat as any)?.instance?.material;
+                if (material) {
+                    this.effects.reset(material);
+                }
             }
 
             // WASD Camera Movement - blocked only if we are actively scrubbing or focused on UI
             const activeEl = document.activeElement as HTMLElement;
             const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
 
-            if (this.camera && !isUIInteracting && !this.isCameraAnimating && !isTyping) {
+            const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
+            if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.isCameraAnimating && !isTyping) {
                 const speed = dt * 5;
                 if (keys['KeyW']) this.camera.translateLocal(0, 0, -speed);
                 if (keys['KeyS']) this.camera.translateLocal(0, 0, speed);
                 if (keys['KeyA']) this.camera.translateLocal(-speed, 0, 0);
                 if (keys['KeyD']) this.camera.translateLocal(speed, 0, 0);
+                if (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD']) {
+                    // Sync overlays on manual move too? Maybe not every frame, but proximity needs it.
+                }
                 if (keys['KeyQ']) this.camera.translateLocal(0, -speed, 0);
                 if (keys['KeyE']) this.camera.translateLocal(0, speed, 0);
             }
@@ -1015,22 +1103,60 @@ class Viewer {
         presetsList.innerHTML = '';
         this.cameraPresets.forEach((preset, index) => {
             const item = document.createElement('div');
-            item.className = 'ui-item group justify-between py-1.5 px-2 cursor-grab active:cursor-grabbing';
-            item.setAttribute('draggable', 'true');
-            item.dataset.index = index.toString();
+            item.className = 'flex flex-col gap-1';
 
-            item.innerHTML = `
+            const mainRow = document.createElement('div');
+            mainRow.className = 'ui-item group justify-between py-1.5 px-2 cursor-grab active:cursor-grabbing';
+            mainRow.setAttribute('draggable', 'true');
+            mainRow.dataset.index = index.toString();
+
+            mainRow.innerHTML = `
                 <div class="flex items-center gap-2 overflow-hidden flex-1 cursor-pointer">
                     <div class="ui-dot"></div>
                     <span class="preset-name text-[9px] ui-text-primary font-medium truncate">${preset.name}</span>
                 </div>
-                <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
-                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                </button>
+                <div class="flex items-center gap-1">
+                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    </button>
+                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
+                        <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                </div>
             `;
 
+            // --- Text Objects List for this preset #WDD 2026-01-15 ---
+            const textObjectsList = document.createElement('div');
+            textObjectsList.className = 'flex flex-col gap-0.5 ml-6 mb-1';
+            if (preset.textObjects && preset.textObjects.length > 0) {
+                preset.textObjects.forEach((textObj) => {
+                    const textItem = document.createElement('div');
+                    textItem.className = 'flex items-center justify-between group/text hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer';
+                    textItem.innerHTML = `
+                        <span class="text-[8px] opacity-40 group-hover/text:opacity-100 truncate flex-1">${textObj.content || '(Empty)'}</span>
+                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
+                             <svg viewBox="0 0 24 24" class="w-2.5 h-2.5 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                        </button>
+                    `;
+                    textItem.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.openTextEdit(textObj, index);
+                    });
+                    textItem.querySelector('.delete-text')?.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        preset.textObjects = preset.textObjects?.filter(t => t.id !== textObj.id);
+                        this.renderPresets();
+                        this.syncTextOverlays();
+                    });
+                    textObjectsList.appendChild(textItem);
+                });
+            }
+
+            item.appendChild(mainRow);
+            item.appendChild(textObjectsList);
+
             // --- Rename Logic ---
-            const nameSpan = item.querySelector('.preset-name') as HTMLElement;
+            const nameSpan = mainRow.querySelector('.preset-name') as HTMLElement;
             nameSpan.addEventListener('dblclick', (e) => {
                 e.stopPropagation();
                 const input = document.createElement('input');
@@ -1056,29 +1182,29 @@ class Viewer {
             });
 
             // --- Drag and Drop Logic ---
-            item.addEventListener('dragstart', (e) => {
+            mainRow.addEventListener('dragstart', (e) => {
                 if (e.dataTransfer) {
                     e.dataTransfer.setData('text/plain', index.toString());
-                    item.classList.add('opacity-40');
+                    mainRow.classList.add('opacity-40');
                 }
             });
 
-            item.addEventListener('dragend', () => {
-                item.classList.remove('opacity-40');
+            mainRow.addEventListener('dragend', () => {
+                mainRow.classList.remove('opacity-40');
             });
 
-            item.addEventListener('dragover', (e) => {
+            mainRow.addEventListener('dragover', (e) => {
                 e.preventDefault();
-                item.classList.add('bg-white/5');
+                mainRow.classList.add('bg-white/5');
             });
 
-            item.addEventListener('dragleave', () => {
-                item.classList.remove('bg-white/5');
+            mainRow.addEventListener('dragleave', () => {
+                mainRow.classList.remove('bg-white/5');
             });
 
-            item.addEventListener('drop', (e) => {
+            mainRow.addEventListener('drop', (e) => {
                 e.preventDefault();
-                item.classList.remove('bg-white/5');
+                mainRow.classList.remove('bg-white/5');
                 const sourceIdx = parseInt(e.dataTransfer?.getData('text/plain') || '-1');
                 if (sourceIdx !== -1 && sourceIdx !== index) {
                     const movedItem = this.cameraPresets.splice(sourceIdx, 1)[0];
@@ -1088,10 +1214,17 @@ class Viewer {
             });
 
             // Jump to preset
-            item.querySelector('.flex')?.addEventListener('click', (e) => {
+            mainRow.querySelector('.flex')?.addEventListener('click', (e) => {
                 if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
                 if (!this.camera) return;
+
+                // --- Stop playback during animation #WDD 2026-01-15 ---
+                this.wasPlayingBeforeAnim = this.isPlaying;
+                if (this.isPlaying) {
+                    this.togglePlay();
+                }
+
                 this.isCameraAnimating = true;
                 this.animProgress = 0;
                 this.animStartPos.copy(this.camera.getPosition());
@@ -1103,14 +1236,267 @@ class Viewer {
                 this.animTargetYaw = preset.yaw;
             });
 
+            // Add Text
+            mainRow.querySelector('.add-text')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.addTextToPreset(index);
+            });
+
             // Delete preset
-            item.querySelector('.delete-preset')?.addEventListener('click', (e) => {
+            mainRow.querySelector('.delete-preset')?.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.cameraPresets.splice(index, 1);
                 this.renderPresets();
+                this.syncTextOverlays();
             });
 
             presetsList.appendChild(item);
+        });
+    }
+
+    // --- Text Object Management Methods #WDD 2026-01-15 ---
+
+    private addTextToPreset(index: number) {
+        const preset = this.cameraPresets[index];
+        if (!preset.textObjects) preset.textObjects = [];
+
+        const id = `text_${Date.now()}`;
+        const newText = {
+            id: id,
+            content: "New Annotation",
+            font: "'Inter', sans-serif",
+            fontSize: 24,
+            color: "#ffffff",
+            fontWeight: "normal",
+            fontStyle: "normal",
+            top: 50,
+            left: 50
+        };
+
+        preset.textObjects.push(newText);
+        this.renderPresets();
+        this.syncTextOverlays();
+        this.openTextEdit(newText, index);
+    }
+
+    private openTextEdit(textObj: any, presetIndex: number) {
+        this.activeTextId = textObj.id;
+        const panel = document.getElementById('text-edit-panel');
+        const contentArea = document.getElementById('text-edit-content') as HTMLTextAreaElement;
+        const sizeSelect = document.getElementById('text-edit-size') as HTMLSelectElement;
+        const colorInput = document.getElementById('text-edit-color') as HTMLInputElement;
+        const fontSelect = document.getElementById('text-edit-font') as HTMLSelectElement;
+
+        if (!panel || !contentArea || !sizeSelect || !colorInput || !fontSelect) return;
+
+        contentArea.value = textObj.content;
+        sizeSelect.value = textObj.fontSize.toString();
+        colorInput.value = textObj.color;
+        fontSelect.value = textObj.font;
+
+        const boldBtn = document.getElementById('text-bold');
+        const italicBtn = document.getElementById('text-italic');
+
+        const updateStyleToggle = () => {
+            if (boldBtn) boldBtn.classList.toggle('ui-text-highlight', textObj.fontWeight === 'bold');
+            if (italicBtn) italicBtn.classList.toggle('ui-text-highlight', textObj.fontStyle === 'italic');
+        };
+        updateStyleToggle();
+
+        panel.classList.add('show');
+
+        // --- Dynamic Positioning near text obj #WDD 2026-01-15 ---
+        const textEl = this.textOverlays.get(textObj.id);
+        if (textEl) {
+            const rect = textEl.getBoundingClientRect();
+            let top = rect.bottom + 10;
+            let left = rect.left;
+
+            // Constrain to window
+            const panelWidth = 288; // w-72
+            const panelHeight = panel.offsetHeight || 300;
+            if (left + panelWidth > window.innerWidth) left = window.innerWidth - panelWidth - 20;
+            if (top + panelHeight > window.innerHeight) top = rect.top - panelHeight - 10;
+            if (left < 10) left = 10;
+            if (top < 10) top = 10;
+
+            panel.style.top = `${top}px`;
+            panel.style.left = `${left}px`;
+            panel.style.bottom = 'auto'; // Override fixed bottom if any
+            panel.style.right = 'auto';  // Override fixed right if any
+            panel.style.transform = 'scale(1)'; // Ensure scale is 1
+        }
+
+        // --- Make Panel Draggable #WDD 2026-01-15 ---
+        const header = panel.querySelector('.flex.items-center.justify-between');
+        if (header) {
+            (header as HTMLElement).style.cursor = 'move';
+            let isDragging = false;
+            let startX = 0, startY = 0;
+            let initialTop = 0, initialLeft = 0;
+
+            const onMouseDown = (e: MouseEvent) => {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                initialTop = panel.offsetTop;
+                initialLeft = panel.offsetLeft;
+                e.preventDefault();
+            };
+
+            const onMouseMove = (e: MouseEvent) => {
+                if (!isDragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                panel.style.top = `${initialTop + dy}px`;
+                panel.style.left = `${initialLeft + dx}px`;
+            };
+
+            const onMouseUp = () => { isDragging = false; };
+
+            header.addEventListener('mousedown', onMouseDown as any);
+            window.addEventListener('mousemove', onMouseMove as any);
+            window.addEventListener('mouseup', onMouseUp as any);
+        }
+
+        // Update handlers
+        const updateText = () => {
+            if (this.activeTextId !== textObj.id) return;
+            textObj.content = contentArea.value;
+            textObj.fontSize = parseInt(sizeSelect.value) || 24;
+            textObj.color = colorInput.value;
+            textObj.font = fontSelect.value;
+
+            this.renderPresets();
+            this.syncTextOverlays();
+        };
+
+        contentArea.oninput = updateText;
+        sizeSelect.onchange = updateText;
+        colorInput.oninput = updateText;
+        fontSelect.onchange = updateText;
+
+        if (boldBtn) {
+            boldBtn.onclick = () => {
+                textObj.fontWeight = textObj.fontWeight === 'bold' ? 'normal' : 'bold';
+                updateStyleToggle();
+                updateText();
+            };
+        }
+        if (italicBtn) {
+            italicBtn.onclick = () => {
+                textObj.fontStyle = textObj.fontStyle === 'italic' ? 'normal' : 'italic';
+                updateStyleToggle();
+                updateText();
+            };
+        }
+
+        const deleteBtn = document.getElementById('delete-text-obj');
+        if (deleteBtn) {
+            deleteBtn.onclick = () => {
+                const preset = this.cameraPresets[presetIndex];
+                preset.textObjects = preset.textObjects?.filter(t => t.id !== textObj.id);
+                this.closeTextEdit();
+                this.renderPresets();
+                this.syncTextOverlays();
+            };
+        }
+    }
+
+    private closeTextEdit() {
+        this.activeTextId = null;
+        document.getElementById('text-edit-panel')?.classList.remove('show');
+    }
+
+    private syncTextOverlays() {
+        const container = document.getElementById('text-overlay-container');
+        if (!container) return;
+
+        // Collect all text objects across all presets
+        const allTextObjects: { text: any, preset: any }[] = [];
+        this.cameraPresets.forEach(preset => {
+            if (preset.textObjects) {
+                preset.textObjects.forEach(t => allTextObjects.push({ text: t, preset }));
+            }
+        });
+
+        // Remove old ones that no longer exist
+        this.textOverlays.forEach((el, id) => {
+            if (!allTextObjects.find(o => o.text.id === id)) {
+                el.remove();
+                this.textOverlays.delete(id);
+            }
+        });
+
+        // Create or update
+        allTextObjects.forEach(({ text, preset }) => {
+            let el = this.textOverlays.get(text.id);
+            if (!el) {
+                el = document.createElement('div');
+                el.className = 'text-object';
+                el.id = text.id;
+                container.appendChild(el);
+                this.textOverlays.set(text.id, el);
+
+                // Make draggable in screen space
+                let isDragging = false;
+                el.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    this.openTextEdit(text, this.cameraPresets.indexOf(preset));
+                    e.stopPropagation();
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (isDragging && el) {
+                        const top = (e.clientY / window.innerHeight) * 100;
+                        const left = (e.clientX / window.innerWidth) * 100;
+                        text.top = top;
+                        text.left = left;
+                        el.style.top = `${top}%`;
+                        el.style.left = `${left}%`;
+                    }
+                });
+                window.addEventListener('mouseup', () => { isDragging = false; });
+            }
+
+            el.innerText = text.content;
+            el.style.fontFamily = text.font;
+            el.style.fontSize = `${text.fontSize}px`;
+            el.style.color = text.color;
+            el.style.fontWeight = text.fontWeight;
+            el.style.fontStyle = text.fontStyle;
+            el.style.top = `${text.top}%`;
+            el.style.left = `${text.left}%`;
+
+            if (this.activeTextId === text.id) {
+                el.classList.add('active');
+            } else {
+                el.classList.remove('active');
+            }
+        });
+    }
+
+    private updateTextVisibility() {
+        if (!this.camera) return;
+        const camPos = this.camera.getPosition();
+
+        this.cameraPresets.forEach(preset => {
+            if (!preset.textObjects) return;
+
+            // Distance-based fade #WDD 2026-01-15
+            const dist = camPos.distance(preset.pos);
+            const fadeStart = 0.5;
+            const fadeEnd = 3.0;
+            let opacity = 1.0 - (dist - fadeStart) / (fadeEnd - fadeStart);
+            opacity = Math.max(0, Math.min(1, opacity));
+
+            preset.textObjects.forEach(textObj => {
+                const el = this.textOverlays.get(textObj.id);
+                if (el) {
+                    el.style.opacity = opacity.toString();
+                    el.style.pointerEvents = opacity > 0.1 ? 'auto' : 'none';
+                    el.style.display = opacity > 0 ? 'block' : 'none';
+                }
+            });
         });
     }
 
@@ -1136,11 +1522,19 @@ class Viewer {
         this.currentPresetIndex = index;
         const preset = this.cameraPresets[index];
         if (!this.camera) return;
+
+        // --- Stop playback during animation #WDD 2026-01-15 ---
+        this.wasPlayingBeforeAnim = this.isPlaying;
+        if (this.isPlaying) {
+            this.togglePlay();
+        }
+
         this.isCameraAnimating = true;
         this.animProgress = 0;
         this.animStartPos.copy(this.camera.getPosition());
         this.animStartPitch = this.pitch;
         this.animStartYaw = this.yaw;
+
         this.animTargetPos.copy(preset.pos);
         this.animTargetPitch = preset.pitch;
         this.animTargetYaw = preset.yaw;
@@ -1258,8 +1652,8 @@ class Viewer {
             this.toggleUIVisibility(true);
         }
 
-        if (!file.name.endsWith('.ply') && !file.name.endsWith('.splat') && !file.name.endsWith('.zip') && !file.name.endsWith('.gszip')) {
-            alert('Please drop a .ply, .splat, .zip, or .gszip file');
+        if (!file.name.endsWith('.ply') && !file.name.endsWith('.splat') && !file.name.endsWith('.zip') && !file.name.endsWith('.gszip') && !file.name.endsWith('.truesplats')) {
+            alert('Please drop a .ply, .splat, .zip, .gszip, or .truesplats file');
             return;
         }
 
@@ -1304,7 +1698,6 @@ class Viewer {
         if (scElem) scElem.innerText = "--";
 
         try {
-            // 1. Get Buffer (Directly or via Unzip)
             let buffer: ArrayBuffer;
             let zipFrameCount: number | null = null;
 
@@ -1313,10 +1706,8 @@ class Viewer {
                 const result = await pipeline.process(file, (p: number, s: string) => {
                     let step = 1;
                     if (p < 50) {
-                        // Map 0-50% progress to steps 1-8 (The slow HEVC decoding phase)
                         step = 1 + Math.floor((p / 50) * 7);
                     } else {
-                        // Map 50-100% progress to step 9 (The fast reconstruction phase)
                         step = 9;
                     }
                     setProgress(step, "DECOMPRESSING", s);
@@ -1324,23 +1715,41 @@ class Viewer {
                 buffer = result.buffer;
                 zipFrameCount = result.frameCount;
                 setProgress(9, "PROCESSING", "Finalizing Reconstruction...");
-            } else {
+            } else if (file.name.endsWith('.truesplats')) {
+                const loader = new TrueSplatsLoader(this.app);
+                const result = await loader.load(file, (p, msg) => {
+                    setProgress(Math.floor(1 + (p / 100) * 8), "LOADING .TRUESPLATS", msg);
+                });
+
+                const splatData = new pc.GSplatData(result.plyData.elements);
+                const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
+                const asset = new pc.Asset(file.name, 'gsplat', { url: URL.createObjectURL(file) });
+                asset.resource = resource;
+                asset.loaded = true;
+                this.app.assets.add(asset);
+
+                const entity = new pc.Entity('GSplat');
+                this.app.root.addChild(entity);
+                this.splatEntity = entity;
+                entity.addComponent('gsplat', { asset: asset });
+
+                this.finalizeGSplatLoad(asset, result.count, result.plyData, result.trajectory?.frames || 300, result);
+                return;
+            }
+            else {
                 setProgress(1, "LOADING", "Reading File Buffer...");
                 buffer = await file.arrayBuffer();
                 setProgress(2, "LOADING", "Buffer Ready");
             }
 
             if (file.name.endsWith('.ply') || file.name.endsWith('.zip') || file.name.endsWith('.gszip')) {
-                // Parse PLY with SH Injection
                 setProgress(9, "PARSING", "Analyzing PLY Header...");
                 const parsed = this.parsePly(buffer);
                 if (parsed) {
                     setProgress(9, "PARSING", "Creating GSplatResource...");
-                    // Create GSplatResource directly from our prepared data
                     const splatData = new pc.GSplatData(parsed.plyData.elements);
                     const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
-                    const url = URL.createObjectURL(file);
-                    const asset = new pc.Asset(file.name, 'gsplat', { url: url }, { propData: parsed.plyData });
+                    const asset = new pc.Asset(file.name, 'gsplat', { url: URL.createObjectURL(file) }, { propData: parsed.plyData });
                     asset.resource = resource;
                     asset.loaded = true;
                     this.app.assets.add(asset);
@@ -1350,189 +1759,7 @@ class Viewer {
                     this.splatEntity = entity;
                     entity.addComponent('gsplat', { asset: asset });
 
-                    // --- Cache Positions for Selection (Must use reordered data from GSplatData) ---
-                    const x = splatData.getProp('x');
-                    const y = splatData.getProp('y');
-                    const z = splatData.getProp('z');
-
-                    if (x && y && z) {
-                        const num = Math.min(splatData.numSplats, x.length, y.length, z.length);
-                        this.cachedPositions = new Float32Array(num * 3);
-                        for (let i = 0; i < num; i++) {
-                            this.cachedPositions[i * 3 + 0] = x[i];
-                            this.cachedPositions[i * 3 + 1] = y[i];
-                            this.cachedPositions[i * 3 + 2] = z[i];
-                        }
-                    }
-
-                    if (this.cachedPositions) {
-                        const num = this.cachedPositions.length / 3;
-                        this.selectionTool.init(num);
-                        this.selectionTool.setTool('none');
-                    }
-
-                    // --- Load Camera Presets from PLY if present ---
-                    if (parsed.cameras && parsed.cameras.length > 0) {
-                        this.cameraPresets = parsed.cameras.map((c: any) => ({
-                            name: c.name,
-                            pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
-                            pitch: c.pitch,
-                            yaw: c.yaw
-                        }));
-                        this.renderPresets();
-                    }
-
-                    setProgress(9, "READY", "System Update Complete");
-
-                    const reorderedMu = splatData.getProp('lifetime_mu');
-                    const reorderedW = splatData.getProp('lifetime_w');
-                    const reorderedK = splatData.getProp('lifetime_k');
-
-                    let lifeTexture: pc.Texture | null = null;
-
-                    if (reorderedMu && reorderedW && reorderedK) {
-                        const width = Math.ceil(Math.sqrt(splatData.numSplats));
-                        const height = Math.ceil(splatData.numSplats / width);
-                        const texData = new Float32Array(width * height * 4);
-                        for (let i = 0; i < splatData.numSplats; i++) {
-                            texData[i * 4 + 0] = reorderedMu[i];
-                            texData[i * 4 + 1] = reorderedW[i];
-                            texData[i * 4 + 2] = reorderedK[i];
-                            texData[i * 4 + 3] = 0.0;
-                        }
-
-                        lifeTexture = new pc.Texture(this.app.graphicsDevice, {
-                            width: width,
-                            height: height,
-                            format: pc.PIXELFORMAT_RGBA32F,
-                            mipmaps: false,
-                            minFilter: pc.FILTER_NEAREST,
-                            magFilter: pc.FILTER_NEAREST,
-                            addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-                            addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-                            name: 'lifetimeTexture'
-                        });
-
-                        const lockRef = lifeTexture.lock();
-                        lockRef.set(texData);
-                        lifeTexture.unlock();
-                    }
-
-                    // --- 4DGS Dynamic Logic #WDD 2026-01-08 支持新的4dgsply格式 ---
-                    let dgsTextureA: pc.Texture | null = null;
-                    let dgsTextureB: pc.Texture | null = null;
-
-                    if (parsed.is4DGS) {
-                        const vx = splatData.getProp('vx');
-                        const vy = splatData.getProp('vy');
-                        const vz = splatData.getProp('vz');
-                        const t_start = splatData.getProp('t_start');
-                        const duration = splatData.getProp('duration');
-
-                        if (vx && vy && vz && t_start && duration) {
-                            const width = Math.ceil(Math.sqrt(splatData.numSplats));
-                            const height = Math.ceil(splatData.numSplats / width);
-                            const texDataA = new Float32Array(width * height * 4);
-                            const texDataB = new Float32Array(width * height * 4);
-
-                            for (let i = 0; i < splatData.numSplats; i++) {
-                                texDataA[i * 4 + 0] = vx[i];
-                                texDataA[i * 4 + 1] = vy[i];
-                                texDataA[i * 4 + 2] = vz[i];
-                                texDataA[i * 4 + 3] = t_start[i];
-
-                                texDataB[i * 4 + 0] = duration[i];
-                            }
-
-                            dgsTextureA = new pc.Texture(this.app.graphicsDevice, {
-                                width: width,
-                                height: height,
-                                format: pc.PIXELFORMAT_RGBA32F,
-                                mipmaps: false,
-                                minFilter: pc.FILTER_NEAREST,
-                                magFilter: pc.FILTER_NEAREST,
-                                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-                                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-                                name: 'u4dgsTextureA'
-                            });
-                            dgsTextureA.lock().set(texDataA);
-                            dgsTextureA.unlock();
-
-                            dgsTextureB = new pc.Texture(this.app.graphicsDevice, {
-                                width: width,
-                                height: height,
-                                format: pc.PIXELFORMAT_RGBA32F,
-                                mipmaps: false,
-                                minFilter: pc.FILTER_NEAREST,
-                                magFilter: pc.FILTER_NEAREST,
-                                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-                                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-                                name: 'u4dgsTextureB'
-                            });
-                            dgsTextureB.lock().set(texDataB);
-                            dgsTextureB.unlock();
-                        }
-                    }
-
-                    if (this.splatEntity.gsplat) {
-                        this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture, dgsTextureA, dgsTextureB);
-                    }
-
-                    this.originalFrames = zipFrameCount || parsed.dataFrames || null;
-                    if (this.originalFrames) {
-                        this.duration = this.originalFrames; // Explicit frame count is the authority
-                    } else {
-                        // Fallback to maxMu if no explicit frame count
-                        this.duration = parsed.maxMu || 100;
-                    }
-                    const slider = document.getElementById('time-slider') as HTMLInputElement;
-                    if (slider) {
-                        slider.max = Math.ceil(this.duration).toString();
-                        slider.step = "0.1";
-                        slider.value = "0";
-                    }
-
-                    this.updateTimelineTicks(this.duration);
-                    const timeLabel = document.getElementById('time-label');
-                    if (timeLabel) {
-                        timeLabel.innerText = `0 / ${Math.ceil(this.duration)}`;
-                    }
-                    setProgress(9, "READY", "System Update Complete");
-                    setTimeout(() => {
-                        if (overlay) overlay.classList.add('hidden');
-                    }, 600);
-                    this.updateStats(asset);
-
-                    if (parsed.pose) {
-                        // Apply pose from PLY
-                        if (this.splatEntity) {
-                            this.splatEntity.setPosition(parseFloat(parsed.pose.px), parseFloat(parsed.pose.py), parseFloat(parsed.pose.pz));
-                            this.splatEntity.setEulerAngles(parseFloat(parsed.pose.rx), parseFloat(parsed.pose.ry), parseFloat(parsed.pose.rz));
-
-                            // Sync UI inputs
-                            const posX = document.getElementById('pos-x') as HTMLInputElement;
-                            const posY = document.getElementById('pos-y') as HTMLInputElement;
-                            const posZ = document.getElementById('pos-z') as HTMLInputElement;
-                            const rotX = document.getElementById('rot-x') as HTMLInputElement;
-                            const rotY = document.getElementById('rot-y') as HTMLInputElement;
-                            const rotZ = document.getElementById('rot-z') as HTMLInputElement;
-
-                            if (posX) posX.value = parsed.pose.px;
-                            if (posY) posY.value = parsed.pose.py;
-                            if (posZ) posZ.value = parsed.pose.pz;
-                            if (rotX) rotX.value = parsed.pose.rx;
-                            if (rotY) rotY.value = parsed.pose.ry;
-                            if (rotZ) rotZ.value = parsed.pose.rz;
-
-                            console.log("Restored pose from PLY header");
-                        }
-                    } else if (this.currentFileName) {
-                        this.loadCachedTransform(this.currentFileName);
-                    } else {
-                        this.resetObjectTransformUI();
-                    }
-
-                    this.resetCamera();
+                    this.finalizeGSplatLoad(asset, parsed.count || splatData.numSplats, parsed.plyData, zipFrameCount || parsed.dataFrames || 0, parsed);
                     return;
                 }
             } else if (file.name.endsWith('.splat')) {
@@ -1551,9 +1778,7 @@ class Viewer {
                     asset.ready(() => {
                         entity.addComponent('gsplat', { asset: asset });
                         setProgress(9, "READY", "System Update Complete");
-                        setTimeout(() => {
-                            if (overlay) overlay.classList.add('hidden');
-                        }, 600);
+                        setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
                         this.updateStats(asset);
                         this.resetObjectTransformUI();
                         this.resetCamera();
@@ -1570,7 +1795,110 @@ class Viewer {
         }
     }
 
+    private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
+        const splatData = (asset.resource as pc.GSplatResource).splatData;
+        const overlay = document.getElementById('loading-overlay');
 
+        // --- Cache Positions for Selection ---
+        const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
+        if (x && y && z) {
+            const num = Math.min(splatData.numSplats, x.length, y.length, z.length);
+            this.cachedPositions = new Float32Array(num * 3);
+            for (let i = 0; i < num; i++) {
+                this.cachedPositions[i * 3 + 0] = x[i];
+                this.cachedPositions[i * 3 + 1] = y[i];
+                this.cachedPositions[i * 3 + 2] = z[i];
+            }
+        }
+        if (this.cachedPositions) this.selectionTool.init(this.cachedPositions.length / 3);
+
+        // --- Camera Presets ---
+        if (parsed.cameras && parsed.cameras.length > 0) {
+            this.cameraPresets = parsed.cameras.map((c: any) => ({
+                name: c.name, pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                pitch: c.pitch, yaw: c.yaw, textObjects: c.textObjects
+            }));
+            this.renderPresets();
+            this.syncTextOverlays();
+        }
+
+        // --- Lifetime Texture ---
+        const reorderedMu = splatData.getProp('lifetime_mu');
+        const reorderedW = splatData.getProp('lifetime_w');
+        const reorderedK = splatData.getProp('lifetime_k');
+        let lifeTexture: pc.Texture | null = null;
+        if (reorderedMu && reorderedW && reorderedK) {
+            const width = Math.ceil(Math.sqrt(splatData.numSplats)), height = Math.ceil(splatData.numSplats / width);
+            const texData = new Float32Array(width * height * 4);
+            for (let i = 0; i < splatData.numSplats; i++) {
+                texData[i * 4 + 0] = reorderedMu[i]; texData[i * 4 + 1] = reorderedW[i];
+                texData[i * 4 + 2] = reorderedK[i]; texData[i * 4 + 3] = 0.0;
+            }
+            lifeTexture = new pc.Texture(this.app.graphicsDevice, {
+                width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'lifetimeTexture'
+            });
+            lifeTexture.lock().set(texData); lifeTexture.unlock();
+        }
+
+        // --- 4DGS Textures ---
+        let dgsTextureA: pc.Texture | null = null, dgsTextureB: pc.Texture | null = null;
+        if (parsed.is4DGS) {
+            const vx = splatData.getProp('vx'), vy = splatData.getProp('vy'), vz = splatData.getProp('vz'), ts = splatData.getProp('t_start'), du = splatData.getProp('duration');
+            if (vx && vy && vz && ts && du) {
+                const width = Math.ceil(Math.sqrt(splatData.numSplats)), height = Math.ceil(splatData.numSplats / width);
+                const texA = new Float32Array(width * height * 4), texB = new Float32Array(width * height * 4);
+                for (let i = 0; i < splatData.numSplats; i++) {
+                    texA[i * 4 + 0] = vx[i]; texA[i * 4 + 1] = vy[i]; texA[i * 4 + 2] = vz[i]; texA[i * 4 + 3] = ts[i];
+                    texB[i * 4 + 0] = du[i];
+                }
+                dgsTextureA = new pc.Texture(this.app.graphicsDevice, {
+                    width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                    minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dgsA'
+                });
+                dgsTextureA.lock().set(texA); dgsTextureA.unlock();
+                dgsTextureB = new pc.Texture(this.app.graphicsDevice, {
+                    width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                    minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dgsB'
+                });
+                dgsTextureB.lock().set(texB); dgsTextureB.unlock();
+            }
+        }
+
+        if (this.splatEntity?.gsplat) {
+            this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture, dgsTextureA, dgsTextureB);
+        }
+
+        this.originalFrames = originalFrames;
+        this.duration = originalFrames || parsed.maxMu || 100;
+        const slider = (document.getElementById('time-slider') as HTMLInputElement);
+        if (slider) { slider.max = Math.ceil(this.duration).toString(); slider.step = "0.1"; slider.value = "0"; }
+        this.updateTimelineTicks(this.duration);
+        const timeLabel = document.getElementById('time-label');
+        if (timeLabel) timeLabel.innerText = `0 / ${Math.ceil(this.duration)}`;
+
+        setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
+        this.updateStats(asset);
+
+        if (parsed.pose) {
+            if (this.splatEntity) {
+                this.splatEntity.setPosition(parseFloat(parsed.pose.px), parseFloat(parsed.pose.py), parseFloat(parsed.pose.pz));
+                this.splatEntity.setEulerAngles(parseFloat(parsed.pose.rx), parseFloat(parsed.pose.ry), parseFloat(parsed.pose.rz));
+                ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z'].forEach(id => {
+                    const el = (document.getElementById(id) as HTMLInputElement);
+                    if (el) el.value = parsed.pose[id.replace('-', '')];
+                });
+            }
+        } else if (this.currentFileName) {
+            this.loadCachedTransform(this.currentFileName);
+        } else {
+            this.resetObjectTransformUI();
+        }
+        this.resetCamera();
+    }
     // Selection Tool Support
     private updateSelectionUniform(tex: pc.Texture) {
         if (this.splatEntity?.gsplat) {
@@ -1597,6 +1925,7 @@ class Viewer {
 
         const material = instance.material;
         material.setParameter('uTime', 0.0);
+        material.setParameter('uTransitionFactor', 0.0); // #WDD 2026-01-15 Initialize transition factor
 
         if (lifetimeTexture) {
             material.setParameter('lifetimeTexture', lifetimeTexture);
@@ -2025,7 +2354,7 @@ class Viewer {
         };
 
         // Return structure compatible with pc.GSplatData constructor (which expects { elements: [...] })
-        return { plyData: { elements: [vertexElement] }, cameras: parsedCameras, pose: parsedPose, dataFrames, maxMu, is4DGS }; // #WDD 2026-01-08 增加is4DGS
+        return { plyData: { elements: [vertexElement] }, count: vertexCount, cameras: parsedCameras, pose: parsedPose, dataFrames, maxMu, is4DGS }; // #WDD 2026-01-08 增加is4DGS
     }
 
     private resetCamera() {

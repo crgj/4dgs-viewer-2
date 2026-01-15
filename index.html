@@ -73,6 +73,9 @@
                 Surface Active
             </div>
         </div>
+
+        <!-- 2D Text Overlay Layer #WDD 2026-01-15 -->
+        <div id="text-overlay-container" class="absolute inset-0 pointer-events-none z-10"></div>
     </div>
 
     <!-- UI Overlay: Top Left Brand -->
@@ -150,7 +153,7 @@
                     </button>
                 </div>
             </div>
-            <input type="file" id="file-input" class="hidden" accept=".ply,.splat,.zip,.gszip" />
+            <input type="file" id="file-input" class="hidden" accept=".ply,.splat,.zip,.gszip,.truesplats" />
         </div>
 
         <aside id="sidebar"
@@ -283,6 +286,19 @@
                                 <path
                                     d="M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7zM9 21h6">
                                 </path>
+                            </svg>
+                        </button>
+                        <!-- Particle Effect Toggle #WDD 2026-01-15 -->
+                        <button id="toggle-transition-effect"
+                            class="w-8 h-8 flex items-center justify-center rounded-lg ui-btn ui-text-highlight has-tooltip"
+                            aria-label="Toggle Particles">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                                <path
+                                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
+                                <circle cx="12" cy="12" r="3" />
+                                <path
+                                    d="M7 12h2m6 0h2M12 7v2m0 6v2m-3.5-3.5l1.4 1.4m4.2-4.2l1.4 1.4m-7 0l1.4-1.4m4.2 4.2l1.4-1.4"
+                                    stroke="currentColor" stroke-width="2" />
                             </svg>
                         </button>
                     </div>
@@ -472,6 +488,71 @@
                     d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
             </svg>
         </button>
+    </div>
+
+    <!-- Floating Text Edit Panel #WDD 2026-01-15 -->
+    <div id="text-edit-panel"
+        class="fixed bottom-32 right-8 glass-blue rounded-xl p-4 z-50 flex flex-col gap-3 shadow-2xl transition-all duration-300 opacity-0 pointer-events-none scale-95 border border-white/10 w-72">
+        <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold uppercase tracking-widest ui-text-primary">Edit Annotation</span>
+            <button id="close-text-edit" class="p-1 hover:ui-text-highlight transition-colors">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path
+                        d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+            </button>
+        </div>
+        <div class="h-px ui-border"></div>
+        <div class="flex flex-col gap-2">
+            <textarea id="text-edit-content" rows="2" class="ui-input w-full bg-black/20 text-xs resize-none"
+                placeholder="Enter text..."></textarea>
+
+            <div class="flex gap-2">
+                <button id="text-bold" class="ui-btn flex-1 py-1 rounded text-[10px] font-bold">B</button>
+                <button id="text-italic" class="ui-btn flex-1 py-1 rounded text-[10px] italic">I</button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <div class="flex flex-col gap-1">
+                    <span class="text-[8px] uppercase opacity-50 font-bold">Size</span>
+                    <select id="text-edit-size" class="ui-input text-xs">
+                        <option value="12">12px</option>
+                        <option value="14">14px</option>
+                        <option value="16">16px</option>
+                        <option value="18">18px</option>
+                        <option value="20">20px</option>
+                        <option value="24" selected>24px</option>
+                        <option value="32">32px</option>
+                        <option value="48">48px</option>
+                        <option value="64">64px</option>
+                        <option value="80">80px</option>
+                        <option value="120">120px</option>
+                    </select>
+                </div>
+                <div class="flex flex-col gap-1">
+                    <span class="text-[8px] uppercase opacity-50 font-bold">Color</span>
+                    <input type="color" id="text-edit-color" class="ui-input h-8 p-0 cursor-pointer" value="#ffffff">
+                </div>
+            </div>
+            <div class="flex flex-col gap-1">
+                <span class="text-[8px] uppercase opacity-50 font-bold">Font Family</span>
+                <select id="text-edit-font" class="ui-input text-xs">
+                    <option value="'Inter', sans-serif">Inter</option>
+                    <option value="'PingFang SC', 'Microsoft YaHei', sans-serif">System Sans</option>
+                    <option value="'Times New Roman', serif">System Serif</option>
+                    <option value="'Courier New', monospace">System Mono</option>
+                    <option value="Arial, sans-serif">Arial</option>
+                    <option value="Verdana, sans-serif">Verdana</option>
+                    <option value="Georgia, serif">Georgia</option>
+                    <option value="Impact, sans-serif">Impact</option>
+                </select>
+            </div>
+            <div class="h-px ui-border mt-1"></div>
+            <button id="delete-text-obj"
+                class="ui-btn py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50">
+                Delete Annotation
+            </button>
+        </div>
     </div>
 
     <script src="/libde265.js"></script>

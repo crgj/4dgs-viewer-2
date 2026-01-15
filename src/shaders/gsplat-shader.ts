@@ -196,31 +196,31 @@ export const splatMainVS = `
     uniform float isSelectionMode; // 1.0 if selecting, 0.0 otherwise
 
     uniform float uTime;
-    
+
     // 4DGS Dynamic Data #WDD 2026-01-08 支持新的4dgsply格式
     uniform sampler2D u4dgsTextureA; // vx, vy, vz, t_start
     uniform sampler2D u4dgsTextureB; // duration, (unused), (unused), (unused)
+
+    // Transition Effect #WDD 2026-01-15
+    uniform float uTransitionFactor;
+    uniform float uRotationFactor; // Raw progress 0->1 #WDD 2026-01-15
+
+    // Pseudo-random helper
+    float fract_sin(float val) {
+        return fract(sin(val) * 43758.5453123);
+    }
 
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
     float getLifetimeOpacityTexture(ivec2 uv, float t) {
         #ifdef USE_LIFETIME_TEXTURE
             vec4 val = texelFetch(lifetimeTexture, uv, 0);
             float mu = val.r;
-            float w = abs(val.g);     // Python: w = torch.abs(w)
-            float k = abs(val.b);     // Python: k = torch.abs(k)
-
-            // robustness: match python k logic if needed, but sigmoid handles 0 fine (0.5). 
-            // Python doesn't force k = 50.0 if < 0.1 explicitly in the provided snippet, 
-            // but we'll keep a small epsilon or just allow it.
-            // Let's stick to EXACT formula match first.
+            float w = abs(val.g);     
+            float k = abs(val.b);     
             
-            // Left Sigmoid: sigmoid(k * (t - (mu - w)))
-            // GLSL: 1.0 / (1.0 + exp( - (k * (t - (mu - w))) ))
             float argLeft = k * (t - (mu - w));
             float left = 1.0 / (1.0 + exp(-argLeft));
 
-            // Right Sigmoid: sigmoid(-k * (t - (mu + w)))
-            // GLSL: 1.0 / (1.0 + exp( - (-k * (t - (mu + w))) )) -> exp( k * ... )
             float argRight = -k * (t - (mu + w));
             float right = 1.0 / (1.0 + exp(-argRight));
             
@@ -260,6 +260,66 @@ export const splatMainVS = `
             center += vec3(vx, vy, vz) * dt;
         #endif
 
+        // --- Transition Snowflake Effect #WDD 2026-01-15 ---
+        float visualFactor = pow(uTransitionFactor, 0.3); 
+        float effectScale = 1.0;
+        bool isSnowflake = false;
+        
+        if (uTransitionFactor > 0.0) {
+            isSnowflake = true;
+            float seed = float(splatId);
+            
+            // --- EXTREME RANDOMNESS PHYSICS #WDD 2026-01-15 ---
+            
+            // 1. Randomized Timing & Progress Curve per Splat
+            // Power curve for initial pop, no pMultiplier to avoid "staying at max distance" #WDD 2026-01-15 
+            float individualFactor = pow(uTransitionFactor, 0.6); 
+
+            // 2. Randomized 3D Burst Directions
+            vec3 burstDir = normalize(vec3(
+                fract_sin(seed * 1.618) * 2.0 - 1.0,
+                fract_sin(seed * 9.123) * 2.0 - 1.0,
+                fract_sin(seed * 3.141) * 2.0 - 1.0
+            ));
+
+            // 3. 3D Explosive Scatter Distance - HALVED AGAIN #WDD 2026-01-15 
+            float randomDist = (0.5 + fract_sin(seed * 6.78) * 1.25) * individualFactor;
+            
+            // Initial position is now a combination of burst and jitter
+            vec3 scatteredPos = center + burstDir * randomDist;
+
+            // 4. Tornado Rotation around Y-axis
+            // Speed variance for chaotic interaction - HALVED TURNS #WDD 2026-01-15 
+            float speedMult = 1.0 + fract_sin(seed * 7.89) * 2.5; 
+            float randomOffset = fract_sin(seed * 4.56) * 6.28;
+            float angle = 3.14159265 * uRotationFactor * speedMult + randomOffset;
+            
+            float cosA = cos(angle);
+            float sinA = sin(angle);
+            
+            // Orbiting with an additional chaotic wobble
+            vec2 offset = scatteredPos.xz - center.xz;
+            vec2 rotatedOffset = vec2(
+                offset.x * cosA - offset.y * sinA,
+                offset.x * sinA + offset.y * cosA
+            );
+            
+            // Final position with chaotic Y-axis drift
+            vec3 rotatedPos = vec3(center.x + rotatedOffset.x, scatteredPos.y, center.z + rotatedOffset.y);
+
+            // 5. Wind turbulence (Horizontal only)
+            float jitterFreq = 22.0; 
+            vec2 jitter = vec2(
+                sin(uTime * jitterFreq + seed * 1.3),
+                cos(uTime * jitterFreq * 0.8 + seed * 2.1)
+            ) * 0.12; 
+
+            center = rotatedPos + vec3(jitter.x, 0.0, jitter.y) * individualFactor; 
+
+            // Aesthetic: Volume stays high
+            effectScale = max(0.7, 1.0 - visualFactor * 0.3); 
+        }
+
         mat4 model_view = matrix_view * matrix_model;
         vec4 splat_cam = model_view * vec4(center, 1.0);
         
@@ -275,6 +335,28 @@ export const splatMainVS = `
         getCovariance(covA, covB);
         vec4 v1v2 = calcV1V2(splat_cam.xyz, covA, covB, transpose(mat3(model_view)));
 
+        // --- Forced 'Small Dot' logic #WDD 2026-01-15 ---
+        float finalScale;
+        if (isSnowflake) {
+            // Increased base dot radius to 12.0 pixels for better visibility #WDD 2026-01-15
+            float dotRadius = 12.0 * effectScale; 
+            v1v2 = vec4(dotRadius, 0.0, 0.0, dotRadius);
+            finalScale = 1.0; 
+        } else {
+            finalScale = min(1.0, sqrt(-log(1.0 / 255.0 / color.a)) / 2.0);
+            v1v2 *= finalScale;
+        }
+
+        // Check for small splats
+        if (dot(v1v2.xy, v1v2.xy) < 4.0 && dot(v1v2.zw, v1v2.zw) < 4.0) {
+            gl_Position = discardVec;
+            return;
+        }
+
+        gl_Position = splat_proj + vec4((vertex_position.x * v1v2.xy + vertex_position.y * v1v2.zw) / viewport * splat_proj.w, 0, 0);
+        
+        texCoord = vertex_position.xy * finalScale / 2.0; 
+
         // Base Color Fetch
         color = texelFetch(splatColor, splatUV, 0);
 
@@ -282,19 +364,24 @@ export const splatMainVS = `
         float alphaMult = getLifetimeOpacityTexture(splatUV, uTime);
         color.a *= alphaMult; 
         
+        // --- Rapid Visual Transition #WDD 2026-01-15 ---
+        if (isSnowflake) {
+            // Preserving more original color - reduced whiteness mix
+            color.rgb = mix(color.rgb, vec3(1.0), visualFactor * 0.4); 
+            // Keep high opacity for better volume feel
+            color.a = mix(color.a, 0.6 * color.a, visualFactor);
+        }
+        
         // --- Selection Highlight ---
         float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;
         
         if (isSelectionMode > 0.5) {
-             // In selection mode:
-             // Ensure minimal visibility for all points so they can be selected
-             // even if their lifetime opacity is near 0.
              color.a = max(color.a, 0.2); 
         }
 
         if (selectionVal > 0.0) {
             color = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
-            color.a = 1.0; // Force selected to be fully opaque
+            color.a = 1.0; 
         }
 
         // --- Deletion check ---
@@ -303,22 +390,7 @@ export const splatMainVS = `
             gl_Position = discardVec;
             return;
         }
-        // ----------------------
-
-        float scale = min(1.0, sqrt(-log(1.0 / 255.0 / color.a)) / 2.0);
-        v1v2 *= scale;
-
-        // FIXED: PlayCanvas Check for small splats
-        if (dot(v1v2.xy, v1v2.xy) < 4.0 && dot(v1v2.zw, v1v2.zw) < 4.0) {
-            gl_Position = discardVec;
-            return;
-        }
-
-        gl_Position = splat_proj + vec4((vertex_position.x * v1v2.xy + vertex_position.y * v1v2.zw) / viewport * splat_proj.w, 0, 0);
         
-        // FIXED Scale: PlayCanvas uses '/ 2.0', not '* 2.0'
-        texCoord = vertex_position.xy * scale / 2.0; 
-
         #ifdef USE_SH1
             vec4 worldCenter = matrix_model * vec4(center, 1.0);
             vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
