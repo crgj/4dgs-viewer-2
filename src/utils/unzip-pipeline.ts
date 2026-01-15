@@ -176,6 +176,7 @@ export class UnzipPipeline {
             return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
         });
 
+        console.log(`[Unzip] Metadata Compression Mode: '${metadata.compression_mode}'`);
         console.log(`[Unzip] Found ${binFiles.length} bin files:`, binFiles);
 
         const decodedBuffers: (Uint8Array | Uint16Array)[] = [];

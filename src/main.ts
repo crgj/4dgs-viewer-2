@@ -42,18 +42,41 @@ class Viewer {
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
+        if (!canvas) {
+            console.error("Canvas element not found!");
+            throw new Error("Canvas element not found!");
+        }
 
-        this.app = new pc.Application(canvas, {
+        // --- Robust WebGL Initialization #WDD 2026-01-08 修复WebGL启动错误 ---
+        const options: any = {
             mouse: new pc.Mouse(canvas),
             touch: new pc.TouchDevice(canvas),
-            elementInput: new pc.ElementInput(canvas),
-            graphicsDeviceOptions: {
-                antialias: true,
-                alpha: false,
-                preserveDrawingBuffer: false,
-                powerPreference: 'high-performance'
+            elementInput: new pc.ElementInput(canvas)
+        };
+
+        try {
+            this.app = new pc.Application(canvas, {
+                ...options,
+                graphicsDeviceOptions: {
+                    antialias: true,
+                    alpha: false,
+                    preserveDrawingBuffer: false,
+                    powerPreference: 'high-performance'
+                }
+            });
+        } catch (e) {
+            console.warn("High-performance WebGL failed, retrying with defaults...", e);
+            try {
+                this.app = new pc.Application(canvas, options);
+            } catch (e2) {
+                console.error("Critical: WebGL not supported even with defaults.", e2);
+                document.body.innerHTML = `<div style="padding:20px; color:white; background:#222; font-family:sans-serif;">
+                    <h2>WebGL Not Supported</h2>
+                    <p>This viewer requires WebGL. Please ensure your browser supports it and hardware acceleration is enabled.</p>
+                </div>`;
+                throw e2;
             }
-        });
+        }
 
         this.app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
         this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
@@ -347,7 +370,11 @@ class Viewer {
             try {
                 const zipper = new ZipPly();
                 // Pass progress callback
-                const gszipBlob = await zipper.compress(combinedBuffer.buffer, {}, (p, msg) => {
+                const gszipBlob = await zipper.compress(combinedBuffer.buffer, {
+                    xyzBits: 16,    // High precision (QP=0 equivalent)
+                    attrBits: 12,   // Max precision (QP=0 equivalent)
+                    pcaDim: 12      // Match Python script default
+                }, (p, msg) => {
                     updateProgress(p, msg);
                 }) as Blob;
 
@@ -1391,8 +1418,64 @@ class Viewer {
                         lifeTexture.unlock();
                     }
 
+                    // --- 4DGS Dynamic Logic #WDD 2026-01-08 支持新的4dgsply格式 ---
+                    let dgsTextureA: pc.Texture | null = null;
+                    let dgsTextureB: pc.Texture | null = null;
+
+                    if (parsed.is4DGS) {
+                        const vx = splatData.getProp('vx');
+                        const vy = splatData.getProp('vy');
+                        const vz = splatData.getProp('vz');
+                        const t_start = splatData.getProp('t_start');
+                        const duration = splatData.getProp('duration');
+
+                        if (vx && vy && vz && t_start && duration) {
+                            const width = Math.ceil(Math.sqrt(splatData.numSplats));
+                            const height = Math.ceil(splatData.numSplats / width);
+                            const texDataA = new Float32Array(width * height * 4);
+                            const texDataB = new Float32Array(width * height * 4);
+
+                            for (let i = 0; i < splatData.numSplats; i++) {
+                                texDataA[i * 4 + 0] = vx[i];
+                                texDataA[i * 4 + 1] = vy[i];
+                                texDataA[i * 4 + 2] = vz[i];
+                                texDataA[i * 4 + 3] = t_start[i];
+
+                                texDataB[i * 4 + 0] = duration[i];
+                            }
+
+                            dgsTextureA = new pc.Texture(this.app.graphicsDevice, {
+                                width: width,
+                                height: height,
+                                format: pc.PIXELFORMAT_RGBA32F,
+                                mipmaps: false,
+                                minFilter: pc.FILTER_NEAREST,
+                                magFilter: pc.FILTER_NEAREST,
+                                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+                                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+                                name: 'u4dgsTextureA'
+                            });
+                            dgsTextureA.lock().set(texDataA);
+                            dgsTextureA.unlock();
+
+                            dgsTextureB = new pc.Texture(this.app.graphicsDevice, {
+                                width: width,
+                                height: height,
+                                format: pc.PIXELFORMAT_RGBA32F,
+                                mipmaps: false,
+                                minFilter: pc.FILTER_NEAREST,
+                                magFilter: pc.FILTER_NEAREST,
+                                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+                                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+                                name: 'u4dgsTextureB'
+                            });
+                            dgsTextureB.lock().set(texDataB);
+                            dgsTextureB.unlock();
+                        }
+                    }
+
                     if (this.splatEntity.gsplat) {
-                        this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture);
+                        this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture, dgsTextureA, dgsTextureB);
                     }
 
                     this.originalFrames = zipFrameCount || parsed.dataFrames || null;
@@ -1509,7 +1592,7 @@ class Viewer {
         }
     }
 
-    private async setupLifetimeShader(instance: any, lifetimeTexture: pc.Texture | null) {
+    private async setupLifetimeShader(instance: any, lifetimeTexture: pc.Texture | null, dgsTextureA?: pc.Texture | null, dgsTextureB?: pc.Texture | null) {
         console.log("Setting up Lifetime Shader with Texture...", lifetimeTexture);
 
         const material = instance.material;
@@ -1518,6 +1601,9 @@ class Viewer {
         if (lifetimeTexture) {
             material.setParameter('lifetimeTexture', lifetimeTexture);
         }
+
+        if (dgsTextureA) material.setParameter('u4dgsTextureA', dgsTextureA);
+        if (dgsTextureB) material.setParameter('u4dgsTextureB', dgsTextureB);
 
         // --- ROBUST SHADER INJECTION ---
 
@@ -1539,6 +1625,9 @@ class Viewer {
                     if (!options.defines) options.defines = [];
                     if (lifetimeTexture) {
                         if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
+                    }
+                    if (dgsTextureA && dgsTextureB) {
+                        if (!options.defines.includes('USE_4DGS')) options.defines.push('USE_4DGS');
                     }
                     if (!options.defines.includes('USE_SH1')) options.defines.push('USE_SH1');
                     if (!options.defines.includes('USE_SH2')) options.defines.push('USE_SH2');
@@ -1698,6 +1787,7 @@ class Viewer {
         const props: { name: string, type: string, offset: number }[] = [];
         let currentOffset = 0;
         let dataFrames = 0;
+        let is4DGS = false; // #WDD 2026-01-08 支持新的4dgsply格式
 
         const typeSizes: Record<string, number> = {
             'char': 1, 'uchar': 1, 'short': 2, 'ushort': 2, 'int': 4, 'uint': 4, 'float': 4, 'double': 8
@@ -1714,6 +1804,8 @@ class Viewer {
                 const name = parts[2];
                 props.push({ name, type, offset: currentOffset });
                 currentOffset += typeSizes[type] || 4;
+            } else if (line.startsWith('comment plytype: 4dgs')) {
+                is4DGS = true; // #WDD 2026-01-08 支持新的4dgsply格式
             } else if (line.startsWith('comment frames')) {
                 const parts = line.split(/\s+/);
                 dataFrames = parseInt(parts[2]);
@@ -1763,6 +1855,13 @@ class Viewer {
             lifetime_mu: new Float32Array(vertexCount),
             lifetime_w: new Float32Array(vertexCount),
             lifetime_k: new Float32Array(vertexCount),
+
+            // 4DGS Dynamic Data #WDD 2026-01-08 支持新的4dgsply格式
+            vx: new Float32Array(vertexCount),
+            vy: new Float32Array(vertexCount),
+            vz: new Float32Array(vertexCount),
+            t_start: new Float32Array(vertexCount),
+            duration: new Float32Array(vertexCount),
         };
 
         // Initialize storage for ALL 45 SH coefficients (f_rest_0 to f_rest_44)
@@ -1787,6 +1886,10 @@ class Viewer {
         const pMu = getPropParams('lifetime_mu');
         const pW = getPropParams('lifetime_w');
         const pK = getPropParams('lifetime_k');
+
+        // #WDD 2026-01-08 支持新的4dgsply格式
+        const pVx = getPropParams('vx'), pVy = getPropParams('vy'), pVz = getPropParams('vz');
+        const pTStart = getPropParams('t_start'), pDur = getPropParams('duration');
 
         let maxMu = 1.0;
 
@@ -1833,6 +1936,13 @@ class Viewer {
                 }
                 if (pW) data.lifetime_w[i] = dataView.getFloat32(rowOffset + pW.offset, true);
                 if (pK) data.lifetime_k[i] = dataView.getFloat32(rowOffset + pK.offset, true);
+
+                // #WDD 2026-01-08 支持新的4dgsply格式
+                if (pVx) data.vx[i] = dataView.getFloat32(rowOffset + pVx.offset, true);
+                if (pVy) data.vy[i] = dataView.getFloat32(rowOffset + pVy.offset, true);
+                if (pVz) data.vz[i] = dataView.getFloat32(rowOffset + pVz.offset, true);
+                if (pTStart) data.t_start[i] = dataView.getFloat32(rowOffset + pTStart.offset, true);
+                if (pDur) data.duration[i] = dataView.getFloat32(rowOffset + pDur.offset, true);
             }
 
             // Second Pass: Fill SH data if it exists
@@ -1892,7 +2002,14 @@ class Viewer {
             // Lifetime properties for reordering
             { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
             { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
-            { name: 'lifetime_k', type: 'float', storage: data.lifetime_k }
+            { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
+
+            // 4DGS properties for reordering #WDD 2026-01-08 支持新的4dgsply格式
+            { name: 'vx', type: 'float', storage: data.vx },
+            { name: 'vy', type: 'float', storage: data.vy },
+            { name: 'vz', type: 'float', storage: data.vz },
+            { name: 't_start', type: 'float', storage: data.t_start },
+            { name: 'duration', type: 'float', storage: data.duration }
         ];
 
         // Add SH prop defs (0-44)
@@ -1908,14 +2025,7 @@ class Viewer {
         };
 
         // Return structure compatible with pc.GSplatData constructor (which expects { elements: [...] })
-        return {
-            plyData: { elements: [vertexElement] },
-            maxMu: maxMu,
-            dataFrames: dataFrames,
-            cameras: parsedCameras,
-            pose: parsedPose,
-            positions: null, colors: null, lifetimes: null
-        };
+        return { plyData: { elements: [vertexElement] }, cameras: parsedCameras, pose: parsedPose, dataFrames, maxMu, is4DGS }; // #WDD 2026-01-08 增加is4DGS
     }
 
     private resetCamera() {

@@ -197,6 +197,10 @@ export const splatMainVS = `
 
     uniform float uTime;
     
+    // 4DGS Dynamic Data #WDD 2026-01-08 支持新的4dgsply格式
+    uniform sampler2D u4dgsTextureA; // vx, vy, vz, t_start
+    uniform sampler2D u4dgsTextureB; // duration, (unused), (unused), (unused)
+
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
     float getLifetimeOpacityTexture(ivec2 uv, float t) {
         #ifdef USE_LIFETIME_TEXTURE
@@ -234,6 +238,28 @@ export const splatMainVS = `
         }
         
         vec3 center = getCenter();
+
+        // --- 4DGS Dynamic Logic #WDD 2026-01-08 支持新的4dgsply格式 ---
+        #ifdef USE_4DGS
+            vec4 dgsA = texelFetch(u4dgsTextureA, splatUV, 0);
+            vec4 dgsB = texelFetch(u4dgsTextureB, splatUV, 0);
+            float vx = dgsA.r;
+            float vy = dgsA.g;
+            float vz = dgsA.b;
+            float t_start = dgsA.a;
+            float duration = dgsB.r;
+
+            // Visibility Check
+            if (uTime < t_start || uTime >= t_start + duration) {
+                gl_Position = discardVec;
+                return;
+            }
+
+            // Position Update: x_t = x + vx * (t - t_start)
+            float dt = uTime - t_start;
+            center += vec3(vx, vy, vz) * dt;
+        #endif
+
         mat4 model_view = matrix_view * matrix_model;
         vec4 splat_cam = model_view * vec4(center, 1.0);
         
