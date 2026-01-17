@@ -1,9 +1,9 @@
 import * as pc from 'playcanvas';
+import { PlyExporter } from './utils/ply-exporter';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
-import { UnzipPipeline } from './utils/unzip-pipeline';
+
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SelectionTool } from './ui/selection-tool';
-import { ZipPly } from './utils/zip_ply';
 import { GaussianEffects } from './particle-effects';
 
 // --- Configuration & State ---
@@ -65,6 +65,18 @@ class Viewer {
     private animStartPitch = 0;
     private animStartYaw = 0;
     private animProgress = 0;
+
+    // Debugging #WDD 2026-01-15
+    private swizzleMode = 0; // 0=yzwx, 1=xyzw, 2=wxyz
+
+    private is4DGS = false;
+    private trajectoryData: Float32Array | null = null;
+    private keyframes = 0;
+    private xyzStride = 1;
+    private rotTrajectoryData: Float32Array | null = null;
+    private rotKeyframes = 0;
+    private rotStride = 1;
+    private totalFrames = 0;
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
@@ -222,7 +234,9 @@ class Viewer {
         this.axesEntity = entity;
     }
 
-    private async exportData(format: 'ply' | 'gszip' = 'ply') {
+    // exportData removed (Legacy PLY/GSZIP)
+    // #WDD 2026-01-16 Restored for internal logic / verification
+    private async exportData(format: 'ply' | 'gszip') {
         if (!this.splatEntity || !this.splatEntity.gsplat) return;
 
         const component = this.splatEntity.gsplat as any;
@@ -240,11 +254,211 @@ class Viewer {
         }
 
         const resource = asset.resource as pc.GSplatResource;
-        const splatData = resource.splatData;
+        let splatData = resource.splatData; // WDD: Changed to let to allow override
 
         if (!splatData) {
             console.error("Export failed: No SplatData in resource.");
             return;
+        }
+
+        // --- 4DGS CPU Reconstruction (Verification) #WDD 2026-01-15 ---
+        if (this.is4DGS && this.trajectoryData) {
+            console.log(`[Export] 4DGS Detected. Reconstructing frame at time ${this.currentTime} for verification...`);
+
+            const numSplats = splatData.numSplats;
+            const t = this.currentTime;
+
+            // 1. Reconstruct XYZ (Linear Interpolation)
+            // progress = t / (TotalFrames - 1)
+            // But here we need to map t directly to keyframes logic
+            // post_save.py:
+            // t is integer frame index 0..T-1
+            // xyz_times = linspace
+
+            // In our loader/shader:
+            // progress = uTime / max(1.0, uTotalFrames - 1.0)
+            // kFloat = progress * (uKeyframes - 1.0)
+
+            const totalFrames = this.totalFrames; // e.g. 50
+            const keyframes = this.keyframes;     // e.g. 18
+            const stride = this.xyzStride;
+
+            // XYZ Stride Logic (Verified vs post_save.py)
+            let idx = Math.floor(t / stride);
+            if (idx >= keyframes - 1) idx = keyframes - 2;
+
+            let t0 = idx * stride;
+            let t1 = (idx + 1) * stride;
+            if (idx === keyframes - 2) {
+                t1 = totalFrames - 1;
+            }
+
+            const k0 = idx;
+            const k1 = idx + 1;
+            const u = (t - t0) / (t1 - t0);
+
+            // ROT Stride Logic
+            const rotKeyframes = this.rotKeyframes;
+            const rStride = this.rotStride;
+
+            let rIdx = Math.floor(t / rStride);
+            if (rIdx >= rotKeyframes - 1) rIdx = rotKeyframes - 2;
+
+            let rt0 = rIdx * rStride;
+            let rt1 = (rIdx + 1) * rStride;
+            if (rIdx === rotKeyframes - 2) {
+                rt1 = totalFrames - 1;
+            }
+
+            const rk0 = rIdx;
+            const rk1 = rIdx + 1;
+            const ru = (t - rt0) / (rt1 - rt0);
+
+            // Allocate new temporary storage for reconstructed frame
+            const newX = new Float32Array(numSplats);
+            const newY = new Float32Array(numSplats);
+            const newZ = new Float32Array(numSplats);
+            const newRot0 = new Float32Array(numSplats);
+            const newRot1 = new Float32Array(numSplats);
+            const newRot2 = new Float32Array(numSplats);
+            const newRot3 = new Float32Array(numSplats);
+            const newOpacity = new Float32Array(numSplats);
+
+            // Helpers
+            const sigmoid = (x: number) => 1.0 / (1.0 + Math.exp(-x));
+            const q0 = new pc.Quat();
+            const q1 = new pc.Quat();
+            const qFinal = new pc.Quat();
+
+            // Get static/base data
+            const muArr = splatData.getProp('lifetime_mu');
+            const wArr = splatData.getProp('lifetime_w');
+            const kArr = splatData.getProp('lifetime_k');
+            const baseOpac = splatData.getProp('opacity'); // Logits!
+
+            // Stride info (assuming packed XYZRGB / ROTRGBA)
+            // trajectoryData is Float32Array. 
+            // Layout is typically [x,y,z, x,y,z ...] for all splats?
+            // checking parseBIN: data[baseOff + k * C + j]
+            // It is Splat-Major? parseBIN loop: for i < N ... for k < K ... data[...] 
+            // Yes, baseOff = i * K * C. So data is [Splat0_Frame0, Splat0_Frame1..., Splat1_Frame0...]
+
+            for (let i = 0; i < numSplats; i++) {
+                // XYZ
+                const xyzBase = i * keyframes * 3;
+
+                const p0x = this.trajectoryData[xyzBase + k0 * 3 + 0];
+                const p0y = this.trajectoryData[xyzBase + k0 * 3 + 1];
+                const p0z = this.trajectoryData[xyzBase + k0 * 3 + 2];
+
+                const p1x = this.trajectoryData[xyzBase + k1 * 3 + 0];
+                const p1y = this.trajectoryData[xyzBase + k1 * 3 + 1];
+                const p1z = this.trajectoryData[xyzBase + k1 * 3 + 2];
+
+                newX[i] = p0x * (1 - u) + p1x * u;
+                newY[i] = p0y * (1 - u) + p1y * u;
+                newZ[i] = p0z * (1 - u) + p1z * u;
+
+                // ROT
+                if (this.rotTrajectoryData) {
+                    const rotBase = i * rotKeyframes * 4;
+                    // Quaternion layout? parseBin: 4 floats.
+                    q0.set(
+                        this.rotTrajectoryData[rotBase + rk0 * 4 + 0],
+                        this.rotTrajectoryData[rotBase + rk0 * 4 + 1],
+                        this.rotTrajectoryData[rotBase + rk0 * 4 + 2],
+                        this.rotTrajectoryData[rotBase + rk0 * 4 + 3]
+                    );
+                    q1.set(
+                        this.rotTrajectoryData[rotBase + rk1 * 4 + 0],
+                        this.rotTrajectoryData[rotBase + rk1 * 4 + 1],
+                        this.rotTrajectoryData[rotBase + rk1 * 4 + 2],
+                        this.rotTrajectoryData[rotBase + rk1 * 4 + 3]
+                    );
+                    // Slerp
+                    qFinal.slerp(q0, q1, ru);
+                    newRot0[i] = qFinal.x;
+                    newRot1[i] = qFinal.y;
+                    newRot2[i] = qFinal.z;
+                    newRot3[i] = qFinal.w;
+                } else {
+                    // Static override? Or just fail safely
+                    newRot0[i] = 0; newRot1[i] = 0; newRot2[i] = 0; newRot3[i] = 1;
+                }
+
+                // Opacity Gating
+                // sigmoid(10 * (t - (mu - w))) * sigmoid(10 * ((mu + w) - t))
+                const mu = muArr ? muArr[i] : 0;
+                const w = wArr ? wArr[i] : 100;
+                // k logic? Loader says data.lifetime_k[i] = 10.0;
+
+                const gate = sigmoid(10.0 * (t - (mu - w))) * sigmoid(10.0 * ((mu + w) - t));
+
+                // Base opacity is logit. Converted to probability?
+                // Shader: B = exp(-A) * color.a
+                // color.a comes from texture opacity.
+                // parseSOG: data.opacity[i] = inverseSigmoid(texData...) -> Logit
+                // So original stored is logit.
+                // We need to export SIGMOID-ed opacity (0..1) for PLY usually? 
+                // Or Logit? PLY usually stores opacity as logit if standard 3DGS, OR 0-255 if .splat?
+                // Standard 3DGS .ply property 'opacity' is LOGIT.
+
+                // Wait, post_save.py:
+                // opac_active = base_opac_active * gate  <-- base_opac_active is sigmoid(logit)
+                // v_opac = logit(opac_active[mask])
+                // So we need to:
+                // 1. Sigmoid(base_logit) -> prob
+                // 2. prob * gate -> new_prob
+                // 3. Logit(new_prob) -> stored property
+                // 4. Threshold on new_prob >= 0.01
+
+                const baseLogit = baseOpac ? baseOpac[i] : 100;
+                const baseProb = sigmoid(baseLogit);
+                const activeProb = baseProb * gate;
+
+                if (activeProb < 0.01) {
+                    // Mark for deletion/filtering
+                    // We can use selectionData trick or just make a new validIndices list later
+                    newOpacity[i] = -999; // Sentinel
+                } else {
+                    // Avoid log(0)
+                    const safeProb = Math.max(1e-6, Math.min(1 - 1e-6, activeProb));
+                    newOpacity[i] = Math.log(safeProb / (1 - safeProb));
+                }
+            }
+
+            // Create a temporary "Reconstructed" GSplatData-like structure to feed into the rest of the export function
+            // We need to clone the original splatData but override X,Y,Z, Rot, Opacity
+
+            // Ideally we filter out the -999 opacity ones entirely from the index list
+            // But exportData has a logic to filter logic:
+            // "const validIndices: number[] = [];"
+
+            // Let's attach these new arrays to a temp object and use them in step 3
+            // We'll wrap accessing them.
+
+            const tempStorage: any = {
+                x: newX, y: newY, z: newZ,
+                rot_0: newRot0, rot_1: newRot1, rot_2: newRot2, rot_3: newRot3,
+                opacity: newOpacity
+            };
+
+            // Override splatData.getProp for this scope
+            const originalGetProp = splatData.getProp.bind(splatData);
+
+            // Create a proxy/shim
+            const proxySplatData = {
+                numSplats: numSplats,
+                getProp: (name: string) => {
+                    if (tempStorage[name]) return tempStorage[name];
+                    return originalGetProp(name);
+                }
+            };
+
+            splatData = proxySplatData as any; // Swap for the rest of the function
+
+            // Add custom filter for opacity
+            // We can modify the `validIndices` loop below
         }
 
         // 1. Identify valid indices (not deleted)
@@ -252,16 +466,31 @@ class Viewer {
         const selectionData = this.selectionTool.selectionData;
         const count = splatData.numSplats;
 
-        if (selectionData) {
+        if (this.is4DGS && this.trajectoryData) {
+            // 4DGS Filter Mode: Check opacity sentinel
+            const opac = splatData.getProp('opacity'); // This gets our newOpacity array
             for (let i = 0; i < count; i++) {
-                // If G channel (index * 4 + 1) is > 0, it's deleted
-                if (selectionData[i * 4 + 1] === 0) {
+                // Check selection tool AND our opacity threshold
+                const isSelectedDeleted = selectionData ? (selectionData[i * 4 + 1] > 0) : false;
+                const isOpacityCulling = opac && opac[i] === -999;
+
+                if (!isSelectedDeleted && !isOpacityCulling) {
                     validIndices.push(i);
                 }
             }
         } else {
-            // No selection tool initialized? Save all.
-            for (let i = 0; i < count; i++) validIndices.push(i);
+            // Standard Mode
+            if (selectionData) {
+                for (let i = 0; i < count; i++) {
+                    // If G channel (index * 4 + 1) is > 0, it's deleted
+                    if (selectionData[i * 4 + 1] === 0) {
+                        validIndices.push(i);
+                    }
+                }
+            } else {
+                // No selection tool initialized? Save all.
+                for (let i = 0; i < count; i++) validIndices.push(i);
+            }
         }
 
         const newCount = validIndices.length;
@@ -395,47 +624,23 @@ class Viewer {
 
             updateProgress(0, "Initializing...");
 
-            try {
-                const zipper = new ZipPly();
-                // Pass progress callback
-                const gszipBlob = await zipper.compress(combinedBuffer.buffer, {
-                    xyzBits: 16,    // High precision (QP=0 equivalent)
-                    attrBits: 12,   // Max precision (QP=0 equivalent)
-                    pcaDim: 12      // Match Python script default
-                }, (p, msg) => {
-                    updateProgress(p, msg);
-                }) as Blob;
+            if (format === 'gszip') {
+                alert("GSZIP export is currently disabled as legacy components were removed.");
+                return;
+            }
 
-                updateProgress(100, "Download Starting...");
-
-                const url = URL.createObjectURL(gszipBlob);
+            if (format === 'ply') {
+                const blob = new Blob([combinedBuffer], { type: "application/octet-stream" });
+                const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
                 const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
-                a.download = `exported_scene_${timestamp}.gszip`;
+                a.download = `exported_scene_${timestamp}.ply`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-            } catch (err) {
-                console.error("GSZIP compression failed:", err);
-                alert("Compression failed. Checking console for details.");
-            } finally {
-                if (overlay) setTimeout(() => overlay.classList.add('hidden'), 500);
             }
-        }
-
-        if (format === 'ply') {
-            const blob = new Blob([combinedBuffer], { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
-            a.download = `exported_scene_${timestamp}.ply`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         }
     }
 
@@ -454,14 +659,10 @@ class Viewer {
         openBtn?.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         resetBtn?.addEventListener('click', () => this.resetCamera());
-        exportPlyBtn?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.exportData('ply');
-        });
-        exportGszipBtn?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.exportData('gszip');
-        });
+
+        // New Export Menu Handlers
+        exportPlyBtn?.addEventListener('click', () => this.exportData('ply'));
+        exportGszipBtn?.addEventListener('click', () => this.exportData('gszip'));
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
@@ -573,6 +774,32 @@ class Viewer {
             this.camera.setEulerAngles(-90, 0, 0);
             this.pitch = -90; this.yaw = 0;
         });
+
+        // --- Custom Debug Toggle (K Key) #WDD 2026-01-15 ---
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'k' || e.key === 'K') {
+                this.swizzleMode = (this.swizzleMode + 1) % 3;
+                console.log(`[Debug] Switched Swizzle Mode to: ${this.swizzleMode} (0=yzwx, 1=xyzw, 2=wxyz)`);
+
+                if (this.splatEntity?.gsplat) {
+                    const instance = (this.splatEntity.gsplat as any).instance;
+                    if (instance && instance.material) {
+                        instance.material.setParameter('uSwizzleMode', this.swizzleMode);
+                        instance.material.update();
+                    }
+                }
+            }
+            if (e.key === 'l' || e.key === 'L') {
+                // Log Texture debug info
+                console.log("--- Texture Debug Info ---");
+                if (this.splatEntity?.gsplat) {
+                    const instance = (this.splatEntity.gsplat as any).instance;
+                    // We can't easily read GPU texture back here without async, but we can check sizes
+                    // Actually we logged sizes during load.
+                }
+            }
+        });
+
         document.getElementById('view-front')?.addEventListener('click', () => {
             if (!this.camera) return;
             this.camera.setPosition(0, 0, 5);
@@ -989,13 +1216,18 @@ class Viewer {
                 this.currentTime += dt * this.fps;
 
                 // Loop logic
-                if (this.currentTime > this.duration) {
+                // Loop logic #WDD 2026-01-16
+                // If total frames is 50, indices are 0..49. Duration is 50 (count).
+                // We should loop when we hit the last frame index.
+                const maxTime = Math.max(0, this.duration - 1.0);
+                if (this.currentTime > maxTime) {
                     this.currentTime = 0;
                 }
 
                 // For UI, we floor to closest frame
                 const displayFrame = Math.floor(this.currentTime);
-                const total = Math.ceil(this.duration); // Duration is roughly max frame index or count
+                // #WDD 2026-01-16 Fix: Display 0 to N-1
+                const total = Math.max(0, Math.ceil(this.duration) - 1); // Duration is roughly max frame index or count
 
                 // Only auto-update slider if user is NOT scrubbing
                 if (timeSlider && !isScrubbing) {
@@ -1007,9 +1239,9 @@ class Viewer {
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
-                        // User request: input 't' must be integer frame if playing as frames
-                        const shaderTime = (this.duration > 1.0) ? Math.floor(this.currentTime) : this.currentTime;
+                        const shaderTime = this.currentTime; // #WDD 2026-01-16: Use continuous time for smooth interpolation
                         material.setParameter('uTime', shaderTime);
+                        material.setParameter('uGlobalTotalFrames', this.duration);
                     }
                 }
             } else {
@@ -1017,8 +1249,9 @@ class Viewer {
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
-                        const shaderTime = (this.duration > 1.0) ? Math.floor(this.currentTime) : this.currentTime;
+                        const shaderTime = this.currentTime; // #WDD 2026-01-16
                         material.setParameter('uTime', shaderTime);
+                        material.setParameter('uGlobalTotalFrames', this.duration);
                     }
                 }
             }
@@ -1652,10 +1885,13 @@ class Viewer {
             this.toggleUIVisibility(true);
         }
 
-        if (!file.name.endsWith('.ply') && !file.name.endsWith('.splat') && !file.name.endsWith('.zip') && !file.name.endsWith('.gszip') && !file.name.endsWith('.truesplats')) {
-            alert('Please drop a .ply, .splat, .zip, .gszip, or .truesplats file');
+        const name = file.name.toLowerCase();
+        if (!name.endsWith('.truesplats')) {
+            alert('Please drop a .truesplats file');
             return;
         }
+
+        console.log(`[Viewer] Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
         const overlay = document.getElementById('loading-overlay');
         const status = document.getElementById('loading-status');
@@ -1698,95 +1934,58 @@ class Viewer {
         if (scElem) scElem.innerText = "--";
 
         try {
-            let buffer: ArrayBuffer;
-            let zipFrameCount: number | null = null;
+            setProgress(9, "READY", "Processing Asset...");
 
-            if (file.name.endsWith('.zip') || file.name.endsWith('.gszip')) {
-                const pipeline = new UnzipPipeline();
-                const result = await pipeline.process(file, (p: number, s: string) => {
-                    let step = 1;
-                    if (p < 50) {
-                        step = 1 + Math.floor((p / 50) * 7);
-                    } else {
-                        step = 9;
-                    }
-                    setProgress(step, "DECOMPRESSING", s);
-                });
-                buffer = result.buffer;
-                zipFrameCount = result.frameCount;
-                setProgress(9, "PROCESSING", "Finalizing Reconstruction...");
-            } else if (file.name.endsWith('.truesplats')) {
-                const loader = new TrueSplatsLoader(this.app);
-                const result = await loader.load(file, (p, msg) => {
-                    setProgress(Math.floor(1 + (p / 100) * 8), "LOADING .TRUESPLATS", msg);
-                });
+            const loader = new TrueSplatsLoader(this.app);
+            const parsed = await loader.load(file, (p: number, msg: string) => {
+                setProgress(Math.floor(p / 10), "LOADING", msg);
+            });
 
-                const splatData = new pc.GSplatData(result.plyData.elements);
+            if (parsed) {
+                const count = parsed.count;
+
+                // #WDD 2026-01-16: Force Static Frame 0 for debugging
+                const forceStatic = true;
+                let elements = parsed.plyData.elements;
+                if (forceStatic) {
+                    console.log(`[Debug] Forcing Static Frame 0 Reconstruction (Verified getFrameElements Path)...`);
+                    elements = loader.getFrameElements(0);
+                }
+
+                // TrueSplatsLoader returns a ready-to-use vertexElement in plyData
+                let vertexElement = elements[0];
+
+                // Instantiating GSplatData with the elements option correctly
+                const splatData = new (pc.GSplatData as any)([vertexElement]);
+
                 const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
-                const asset = new pc.Asset(file.name, 'gsplat', { url: URL.createObjectURL(file) });
+
+                const url = URL.createObjectURL(file);
+                const asset = new pc.Asset(file.name, 'gsplat', { url: url });
                 asset.resource = resource;
                 asset.loaded = true;
+
                 this.app.assets.add(asset);
 
                 const entity = new pc.Entity('GSplat');
+                entity.addComponent('gsplat', { asset: asset });
                 this.app.root.addChild(entity);
                 this.splatEntity = entity;
-                entity.addComponent('gsplat', { asset: asset });
 
-                this.finalizeGSplatLoad(asset, result.count, result.plyData, result.trajectory?.frames || 300, result);
+                setProgress(9, "READY", "System Update Complete");
+                setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
+
+                // Finalize
+                this.updateStats(asset);
+                this.resetObjectTransformUI();
+                this.resetCamera();
+                const container = document.getElementById('timeline-ticks');
+                if (container) container.innerHTML = '';
+
+                // Call legacy finalize to setup shaders
+                // #WDD 2026-01-16
+                this.finalizeGSplatLoad(asset, count, null, parsed.frames || parsed.maxMu || 100, parsed);
                 return;
-            }
-            else {
-                setProgress(1, "LOADING", "Reading File Buffer...");
-                buffer = await file.arrayBuffer();
-                setProgress(2, "LOADING", "Buffer Ready");
-            }
-
-            if (file.name.endsWith('.ply') || file.name.endsWith('.zip') || file.name.endsWith('.gszip')) {
-                setProgress(9, "PARSING", "Analyzing PLY Header...");
-                const parsed = this.parsePly(buffer);
-                if (parsed) {
-                    setProgress(9, "PARSING", "Creating GSplatResource...");
-                    const splatData = new pc.GSplatData(parsed.plyData.elements);
-                    const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
-                    const asset = new pc.Asset(file.name, 'gsplat', { url: URL.createObjectURL(file) }, { propData: parsed.plyData });
-                    asset.resource = resource;
-                    asset.loaded = true;
-                    this.app.assets.add(asset);
-
-                    const entity = new pc.Entity('GSplat');
-                    this.app.root.addChild(entity);
-                    this.splatEntity = entity;
-                    entity.addComponent('gsplat', { asset: asset });
-
-                    this.finalizeGSplatLoad(asset, parsed.count || splatData.numSplats, parsed.plyData, zipFrameCount || parsed.dataFrames || 0, parsed);
-                    return;
-                }
-            } else if (file.name.endsWith('.splat')) {
-                setProgress(9, "READY", "Processing Asset...");
-                const parsed = this.parseSplat(buffer);
-                if (parsed) {
-                    const url = URL.createObjectURL(file);
-                    const entity = new pc.Entity('GSplat');
-                    this.app.root.addChild(entity);
-                    this.splatEntity = entity;
-
-                    const asset = new pc.Asset(file.name, 'gsplat', { url: url });
-                    this.app.assets.add(asset);
-                    this.app.assets.load(asset);
-
-                    asset.ready(() => {
-                        entity.addComponent('gsplat', { asset: asset });
-                        setProgress(9, "READY", "System Update Complete");
-                        setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
-                        this.updateStats(asset);
-                        this.resetObjectTransformUI();
-                        this.resetCamera();
-                        const container = document.getElementById('timeline-ticks');
-                        if (container) container.innerHTML = '';
-                    });
-                    return;
-                }
             }
         } catch (e) {
             console.error("Load Error:", e);
@@ -1796,12 +1995,19 @@ class Viewer {
     }
 
     private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
+        this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
+        this.totalFrames = this.duration; // #WDD 2026-01-16: Keep sync
+        this.originalFrames = originalFrames;
+
         const splatData = (asset.resource as pc.GSplatResource).splatData;
         const overlay = document.getElementById('loading-overlay');
+
+        console.log(`[Finalize] Splats: ${numSplats}, GSplatData Num: ${splatData.numSplats}`);
 
         // --- Cache Positions for Selection ---
         const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
         if (x && y && z) {
+            console.log(`[Debug] First 3 positions: (${x[0].toFixed(3)}, ${y[0].toFixed(3)}, ${z[0].toFixed(3)}), (${x[1].toFixed(3)}, ${y[1].toFixed(3)}, ${z[1].toFixed(3)}), (${x[2].toFixed(3)}, ${y[2].toFixed(3)}, ${z[2].toFixed(3)})`);
             const num = Math.min(splatData.numSplats, x.length, y.length, z.length);
             this.cachedPositions = new Float32Array(num * 3);
             for (let i = 0; i < num; i++) {
@@ -1811,6 +2017,14 @@ class Viewer {
             }
         }
         if (this.cachedPositions) this.selectionTool.init(this.cachedPositions.length / 3);
+
+        const origIndices = splatData.getProp('original_index');
+        if (origIndices) {
+            console.log(`[Finalize] Reordering Check: First Index=${origIndices[0]}, Last Index=${origIndices[numSplats - 1]}`);
+            if (origIndices[0] !== 0) {
+                console.log(`[Finalize] ALERT: Reordering Detected! Aligning trajectories...`);
+            }
+        }
 
         // --- Camera Presets ---
         if (parsed.cameras && parsed.cameras.length > 0) {
@@ -1823,62 +2037,157 @@ class Viewer {
         }
 
         // --- Lifetime Texture ---
-        const reorderedMu = splatData.getProp('lifetime_mu');
-        const reorderedW = splatData.getProp('lifetime_w');
-        const reorderedK = splatData.getProp('lifetime_k');
+        const muArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_mu').storage;
+        const wArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_w').storage;
+        const kArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_k').storage;
         let lifeTexture: pc.Texture | null = null;
-        if (reorderedMu && reorderedW && reorderedK) {
-            const width = Math.ceil(Math.sqrt(splatData.numSplats)), height = Math.ceil(splatData.numSplats / width);
-            const texData = new Float32Array(width * height * 4);
-            for (let i = 0; i < splatData.numSplats; i++) {
-                texData[i * 4 + 0] = reorderedMu[i]; texData[i * 4 + 1] = reorderedW[i];
-                texData[i * 4 + 2] = reorderedK[i]; texData[i * 4 + 3] = 0.0;
+
+        // Use consistent dimensions with PlayCanvas internal textures
+        const res = asset.resource as any;
+        let width = Math.ceil(Math.sqrt(splatData.numSplats));
+        if (res.colorTexture) width = res.colorTexture.width;
+        else if (res.transformATexture) width = res.transformATexture.width;
+        const height = Math.ceil(splatData.numSplats / width);
+
+        if (muArrRaw && wArrRaw && kArrRaw) {
+            // #WDD 2026-01-16 Scale values to 0-255 for RGBA8 compatibility
+            const timeScale = 255.0 / (this.duration || 50);
+            console.log(`[Finalize] Encoding Lifetime Texture (Original Order) with timeScale: ${timeScale}`);
+            const texData = new Uint8Array(width * height * 4);
+            for (let i = 0; i < numSplats; i++) {
+                texData[i * 4 + 0] = Math.max(0, Math.min(255, muArrRaw[i] * timeScale));
+                texData[i * 4 + 1] = Math.max(0, Math.min(255, wArrRaw[i] * timeScale));
+                texData[i * 4 + 2] = Math.max(0, Math.min(255, (kArrRaw[i] / 20.0) * 255.0));
+                texData[i * 4 + 3] = 255;
             }
             lifeTexture = new pc.Texture(this.app.graphicsDevice, {
-                width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                width, height, format: pc.PIXELFORMAT_RGBA8, mipmaps: false,
                 minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
                 addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'lifetimeTexture'
             });
-            lifeTexture.lock().set(texData); lifeTexture.unlock();
+            const dst = lifeTexture.lock();
+            dst.set(texData);
+            lifeTexture.unlock();
         }
 
-        // --- 4DGS Textures ---
-        let dgsTextureA: pc.Texture | null = null, dgsTextureB: pc.Texture | null = null;
-        if (parsed.is4DGS) {
-            const vx = splatData.getProp('vx'), vy = splatData.getProp('vy'), vz = splatData.getProp('vz'), ts = splatData.getProp('t_start'), du = splatData.getProp('duration');
-            if (vx && vy && vz && ts && du) {
-                const width = Math.ceil(Math.sqrt(splatData.numSplats)), height = Math.ceil(splatData.numSplats / width);
-                const texA = new Float32Array(width * height * 4), texB = new Float32Array(width * height * 4);
-                for (let i = 0; i < splatData.numSplats; i++) {
-                    texA[i * 4 + 0] = vx[i]; texA[i * 4 + 1] = vy[i]; texA[i * 4 + 2] = vz[i]; texA[i * 4 + 3] = ts[i];
-                    texB[i * 4 + 0] = du[i];
+        // --- 4DGS Trajectory Texture ---
+        let trajectoryTexture: pc.Texture | null = null;
+        if (parsed.trajectory) {
+            this.is4DGS = true;
+            this.trajectoryData = parsed.trajectory as Float32Array;
+            this.keyframes = parsed.keyframes || 0;
+            this.xyzStride = parsed.xyzStride || 1;
+
+            const trajData = parsed.trajectory as Float32Array;
+            const K = parsed.keyframes || 0;
+            const texWidth = 4096;
+            const totalPixels = numSplats * K;
+            const texHeight = Math.ceil(totalPixels / texWidth);
+            const texData = new Float32Array(texWidth * texHeight * 4);
+
+            // #WDD 2026-01-16: Use Original Order (Shader uses splatId)
+            for (let i = 0; i < numSplats; i++) {
+                for (let k = 0; k < K; k++) {
+                    const srcOff = (i * K + k) * 3;
+                    const dstOff = (i * K + k) * 4;
+                    texData[dstOff + 0] = trajData[srcOff + 0];
+                    texData[dstOff + 1] = trajData[srcOff + 1];
+                    texData[dstOff + 2] = trajData[srcOff + 2];
                 }
-                dgsTextureA = new pc.Texture(this.app.graphicsDevice, {
-                    width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
-                    minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
-                    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dgsA'
-                });
-                dgsTextureA.lock().set(texA); dgsTextureA.unlock();
-                dgsTextureB = new pc.Texture(this.app.graphicsDevice, {
-                    width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
-                    minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
-                    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dgsB'
-                });
-                dgsTextureB.lock().set(texB); dgsTextureB.unlock();
             }
+
+            trajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'trajectoryTexture'
+            });
+            const dst = trajectoryTexture.lock();
+            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
+            trajectoryTexture.unlock();
+        }
+
+
+        // --- 4DGS Rotation Texture ---
+        let rotationTexture: pc.Texture | null = null;
+        if (parsed.rotTrajectory) {
+            this.rotTrajectoryData = parsed.rotTrajectory as Float32Array;
+            this.rotKeyframes = parsed.rotKeyframes || 0;
+            this.rotStride = parsed.rotStride || 1;
+
+            const rotData = parsed.rotTrajectory as Float32Array;
+            const Kvar = parsed.rotKeyframes || 0;
+            const texWidth = 4096;
+            const totalPixels = numSplats * Kvar;
+            const texHeight = Math.ceil(totalPixels / texWidth);
+            const texData = new Float32Array(texWidth * texHeight * 4);
+
+            // #WDD 2026-01-16: Use Original Order
+            for (let i = 0; i < numSplats; i++) {
+                for (let k = 0; k < Kvar; k++) {
+                    const srcOff = (i * Kvar + k) * 4;
+                    const dstOff = (i * Kvar + k) * 4;
+                    texData[dstOff + 0] = rotData[srcOff + 0];
+                    texData[dstOff + 1] = rotData[srcOff + 1];
+                    texData[dstOff + 2] = rotData[srcOff + 2];
+                    texData[dstOff + 3] = rotData[srcOff + 3];
+                }
+            }
+
+            rotationTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'rotationTexture'
+            });
+            const dst = rotationTexture.lock();
+            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
+            rotationTexture.unlock();
+        }
+
+
+        // --- Scales Texture (for dynamic rotation reconstruction) ---
+        let scalesTexture: pc.Texture | null = null;
+        const s0 = splatData.getProp('scale_0');
+        const s1 = splatData.getProp('scale_1');
+        const s2 = splatData.getProp('scale_2');
+        if (s0 && s1 && s2) {
+            const texData = new Float32Array(width * height * 4);
+            for (let i = 0; i < splatData.numSplats; i++) {
+                texData[i * 4 + 0] = s0[i];
+                texData[i * 4 + 1] = s1[i];
+                texData[i * 4 + 2] = s2[i];
+                texData[i * 4 + 3] = 0.0;
+            }
+            scalesTexture = new pc.Texture(this.app.graphicsDevice, {
+                width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'scalesTexture'
+            });
+            const dst = scalesTexture.lock();
+            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
+            scalesTexture.unlock();
         }
 
         if (this.splatEntity?.gsplat) {
-            this.setupLifetimeShader((this.splatEntity.gsplat as any).instance, lifeTexture, dgsTextureA, dgsTextureB);
+            this.setupLifetimeShader(
+                (this.splatEntity.gsplat as any).instance,
+                lifeTexture,
+                trajectoryTexture, parsed.keyframes,
+                rotationTexture, parsed.rotKeyframes,
+                this.duration, // #WDD 2026-01-16 Use calculated duration
+                scalesTexture,
+                parsed.bands // #WDD 2026-01-16 Pass bands
+            );
         }
 
         this.originalFrames = originalFrames;
         this.duration = originalFrames || parsed.maxMu || 100;
         const slider = (document.getElementById('time-slider') as HTMLInputElement);
-        if (slider) { slider.max = Math.ceil(this.duration).toString(); slider.step = "0.1"; slider.value = "0"; }
+        // #WDD 2026-01-16 Fix: Max index is duration - 1
+        const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
+        if (slider) { slider.max = maxIdx.toString(); slider.step = "0.1"; slider.value = "0"; }
         this.updateTimelineTicks(this.duration);
         const timeLabel = document.getElementById('time-label');
-        if (timeLabel) timeLabel.innerText = `0 / ${Math.ceil(this.duration)}`;
+        if (timeLabel) timeLabel.innerText = `0 / ${maxIdx}`;
 
         setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
         this.updateStats(asset);
@@ -1920,19 +2229,51 @@ class Viewer {
         }
     }
 
-    private async setupLifetimeShader(instance: any, lifetimeTexture: pc.Texture | null, dgsTextureA?: pc.Texture | null, dgsTextureB?: pc.Texture | null) {
-        console.log("Setting up Lifetime Shader with Texture...", lifetimeTexture);
+    private async setupLifetimeShader(
+        instance: any,
+        lifetimeTexture: pc.Texture | null,
+        trajectoryTexture: pc.Texture | null = null,
+        keyframes: number = 0,
+        rotationTexture: pc.Texture | null = null,
+        rotKeyframes: number = 0,
+        totalFrames: number = 0,
+        scalesTexture: pc.Texture | null = null,
+        bands: number = 0 // #WDD 2026-01-16
+    ) {
+        console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands });
 
         const material = instance.material;
         material.setParameter('uTime', 0.0);
-        material.setParameter('uTransitionFactor', 0.0); // #WDD 2026-01-15 Initialize transition factor
+        material.setParameter('uTransitionFactor', 0.0);
+        material.setParameter('uSwizzleMode', this.swizzleMode); // #WDD 2026-01-15 Init
 
         if (lifetimeTexture) {
             material.setParameter('lifetimeTexture', lifetimeTexture);
         }
 
-        if (dgsTextureA) material.setParameter('u4dgsTextureA', dgsTextureA);
-        if (dgsTextureB) material.setParameter('u4dgsTextureB', dgsTextureB);
+        if (totalFrames > 0) {
+            material.setParameter('uGlobalTotalFrames', totalFrames);
+        }
+
+        if (trajectoryTexture) {
+            material.setParameter('uTrajectoryTexture', trajectoryTexture);
+            material.setParameter('uKeyframes', keyframes);
+            material.setParameter('uGlobalTotalFrames', totalFrames); // #WDD 2026-01-16 Use passed totalFrames
+            material.setParameter('uXYZStride', this.xyzStride);
+            material.setParameter('uRotKeyframes', this.rotKeyframes);
+            material.setParameter('uRotStride', this.rotStride);
+        }
+
+        if (rotationTexture) {
+            material.setParameter('uRotationTexture', rotationTexture);
+            material.setParameter('uRotKeyframes', rotKeyframes);
+        }
+
+        if (scalesTexture) {
+            material.setParameter('uScalesTexture', scalesTexture);
+        }
+
+        if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // --- ROBUST SHADER INJECTION ---
 
@@ -1945,22 +2286,36 @@ class Viewer {
 
             library.getProgram = function (name: string, options: any, processingOptions: any) {
                 if (name === 'splat') {
-                    console.log("[ShaderInject] Intercepted 'splat' shader generation. Injecting Custom VS/PS (Lifetime Texture & Fixed SH).");
+                    console.log("[ShaderInject] Intercepted 'splat' shader generation.");
 
                     // We must bypass the original generator's concatenation because it uses a broken splatCoreVS.
                     // Instead, we construct the full shader here using our FIXED core and mains.
 
                     // 1. Prepare Defines
                     if (!options.defines) options.defines = [];
+                    /* #WDD 2026-01-16 DEBUG: Disable 4D logic for static check
                     if (lifetimeTexture) {
+                        console.log("[ShaderInject] Defining USE_LIFETIME_TEXTURE");
                         if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
                     }
-                    if (dgsTextureA && dgsTextureB) {
-                        if (!options.defines.includes('USE_4DGS')) options.defines.push('USE_4DGS');
+                    if (trajectoryTexture) {
+                        if (!options.defines.includes('USE_TRAJECTORY')) options.defines.push('USE_TRAJECTORY');
                     }
-                    if (!options.defines.includes('USE_SH1')) options.defines.push('USE_SH1');
-                    if (!options.defines.includes('USE_SH2')) options.defines.push('USE_SH2');
-                    if (!options.defines.includes('USE_SH3')) options.defines.push('USE_SH3');
+                    if (rotationTexture) {
+                        if (!options.defines.includes('USE_ROTATION')) options.defines.push('USE_ROTATION');
+                    }
+                    */
+
+                    // #WDD 2026-01-16 Dynamically set SH bands
+                    if (bands >= 1) {
+                        if (!options.defines.includes('USE_SH1')) options.defines.push('USE_SH1');
+                    }
+                    if (bands >= 2) {
+                        if (!options.defines.includes('USE_SH2')) options.defines.push('USE_SH2');
+                    }
+                    if (bands >= 3) {
+                        if (!options.defines.includes('USE_SH3')) options.defines.push('USE_SH3');
+                    }
 
                     // Check for other standard options usually passed
                     // e.g. DITHER_NONE, TONEMAP...
@@ -2017,7 +2372,8 @@ class Viewer {
         if (!container) return;
         container.innerHTML = '';
 
-        const maxFrame = Math.ceil(duration);
+        // #WDD 2026-01-16 Fix: Ticks up to N-1
+        const maxFrame = Math.max(0, Math.ceil(duration) - 1);
         // Determine step size to keep UI clean
         let step = 1;
         if (maxFrame > 20) step = 5;
@@ -2049,313 +2405,8 @@ class Viewer {
     // private createPointCloud... Removed
 
 
-    private parseSplat(buffer: ArrayBuffer) {
-        // Standard .splat: P(3f), S(3f), C(4b), R(4b) = 32 bytes
-        const ROW_SIZE = 32;
-        const numVertices = Math.floor(buffer.byteLength / ROW_SIZE);
-        const positions = new Float32Array(numVertices * 3);
-        const colors = new Uint8Array(numVertices * 4);
 
-        const dataView = new DataView(buffer);
 
-        for (let i = 0; i < numVertices; i++) {
-            const offset = i * ROW_SIZE;
-            positions[i * 3 + 0] = dataView.getFloat32(offset + 0, true);
-            positions[i * 3 + 1] = dataView.getFloat32(offset + 4, true);
-            positions[i * 3 + 2] = dataView.getFloat32(offset + 8, true);
-
-            // Splat format colors are RGBA
-            colors[i * 4 + 0] = dataView.getUint8(offset + 24);
-            colors[i * 4 + 1] = dataView.getUint8(offset + 25);
-            colors[i * 4 + 2] = dataView.getUint8(offset + 26);
-            colors[i * 4 + 3] = dataView.getUint8(offset + 27);
-        }
-
-        return { positions, colors };
-    }
-
-    private parsePly(buffer: ArrayBuffer) {
-        // Robust header parsing to find binary start
-        const view = new Uint8Array(buffer);
-        let headerEndOffset = 0;
-        const target = new TextEncoder().encode("end_header");
-
-        // Scan for end_header
-        for (let i = 0; i < Math.min(view.length, 5000); i++) {
-            let match = true;
-            for (let j = 0; j < target.length; j++) {
-                if (view[i + j] !== target[j]) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) {
-                let ptr = i + target.length;
-                // Skip newline(s) to find start of binary data
-                while (ptr < view.length && (view[ptr] === 0x0A || view[ptr] === 0x0D || view[ptr] === 0x20)) {
-                    ptr++;
-                }
-                headerEndOffset = ptr;
-                break;
-            }
-        }
-
-        if (headerEndOffset === 0) {
-            console.error("Could not find end_header in PLY");
-            return null;
-        }
-
-        const headerText = new TextDecoder().decode(buffer.slice(0, headerEndOffset));
-        const lines = headerText.split('\n');
-
-        let vertexCount = 0;
-        let parsedCameras: any[] = [];
-        let parsedPose: any = null;
-
-        // Property mapping
-        const props: { name: string, type: string, offset: number }[] = [];
-        let currentOffset = 0;
-        let dataFrames = 0;
-        let is4DGS = false; // #WDD 2026-01-08 支持新的4dgsply格式
-
-        const typeSizes: Record<string, number> = {
-            'char': 1, 'uchar': 1, 'short': 2, 'ushort': 2, 'int': 4, 'uint': 4, 'float': 4, 'double': 8
-        };
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (line.startsWith('element vertex')) {
-                const parts = line.split(/\s+/);
-                vertexCount = parseInt(parts[2]);
-            } else if (line.startsWith('property')) {
-                const parts = line.split(/\s+/);
-                const type = parts[1];
-                const name = parts[2];
-                props.push({ name, type, offset: currentOffset });
-                currentOffset += typeSizes[type] || 4;
-            } else if (line.startsWith('comment plytype: 4dgs')) {
-                is4DGS = true; // #WDD 2026-01-08 支持新的4dgsply格式
-            } else if (line.startsWith('comment frames')) {
-                const parts = line.split(/\s+/);
-                dataFrames = parseInt(parts[2]);
-            } else if (line.startsWith('comment cameras')) {
-                const jsonStr = line.replace('comment cameras ', '').trim();
-                try {
-                    parsedCameras = JSON.parse(jsonStr);
-                } catch (e) {
-                    console.warn("Failed to parse cameras comment", e);
-                }
-            } else if (line.startsWith('comment pose')) {
-                const jsonStr = line.replace('comment pose ', '').trim();
-                try {
-                    parsedPose = JSON.parse(jsonStr);
-                } catch (e) {
-                    console.warn("Failed to parse pose comment", e);
-                }
-            }
-        }
-
-        if (vertexCount === 0) {
-            console.error("Vertex count is 0");
-            return null;
-        }
-
-        const rowSize = currentOffset;
-        const dataView = new DataView(buffer, headerEndOffset);
-
-        // Prepare data containers for all standard GSplat properties + SH Hack
-        const data: any = {
-            x: new Float32Array(vertexCount),
-            y: new Float32Array(vertexCount),
-            z: new Float32Array(vertexCount),
-            f_dc_0: new Float32Array(vertexCount),
-            f_dc_1: new Float32Array(vertexCount),
-            f_dc_2: new Float32Array(vertexCount),
-            opacity: new Float32Array(vertexCount),
-            rot_0: new Float32Array(vertexCount),
-            rot_1: new Float32Array(vertexCount),
-            rot_2: new Float32Array(vertexCount),
-            rot_3: new Float32Array(vertexCount),
-            scale_0: new Float32Array(vertexCount),
-            scale_1: new Float32Array(vertexCount),
-            scale_2: new Float32Array(vertexCount),
-
-            // Lifetime Data containers (initialize explicit)
-            lifetime_mu: new Float32Array(vertexCount),
-            lifetime_w: new Float32Array(vertexCount),
-            lifetime_k: new Float32Array(vertexCount),
-
-            // 4DGS Dynamic Data #WDD 2026-01-08 支持新的4dgsply格式
-            vx: new Float32Array(vertexCount),
-            vy: new Float32Array(vertexCount),
-            vz: new Float32Array(vertexCount),
-            t_start: new Float32Array(vertexCount),
-            duration: new Float32Array(vertexCount),
-        };
-
-        // Initialize storage for ALL 45 SH coefficients (f_rest_0 to f_rest_44)
-        // Whether they exist in PLY or not, we need the storage for GSplatData
-        for (let i = 0; i < 45; i++) {
-            (data as any)[`f_rest_${i}`] = new Float32Array(vertexCount);
-        }
-
-        // Property offsets
-        const getPropParams = (name: string) => {
-            const p = props.find(p => p.name === name);
-            return p ? { offset: p.offset, type: p.type } : null;
-        };
-
-        const pX = getPropParams('x');
-        const pY = getPropParams('y');
-        const pZ = getPropParams('z');
-        const pR0 = getPropParams('rot_0'), pR1 = getPropParams('rot_1'), pR2 = getPropParams('rot_2'), pR3 = getPropParams('rot_3');
-        const pS0 = getPropParams('scale_0'), pS1 = getPropParams('scale_1'), pS2 = getPropParams('scale_2');
-        const pD0 = getPropParams('f_dc_0'), pD1 = getPropParams('f_dc_1'), pD2 = getPropParams('f_dc_2');
-        const pOp = getPropParams('opacity');
-        const pMu = getPropParams('lifetime_mu');
-        const pW = getPropParams('lifetime_w');
-        const pK = getPropParams('lifetime_k');
-
-        // #WDD 2026-01-08 支持新的4dgsply格式
-        const pVx = getPropParams('vx'), pVy = getPropParams('vy'), pVz = getPropParams('vz');
-        const pTStart = getPropParams('t_start'), pDur = getPropParams('duration');
-
-        let maxMu = 1.0;
-
-        // Populate Data
-        try {
-            for (let i = 0; i < vertexCount; i++) {
-                const rowOffset = i * rowSize;
-                if (headerEndOffset + rowOffset + rowSize > buffer.byteLength) break;
-
-                // Position
-                if (pX) data.x[i] = dataView.getFloat32(rowOffset + pX.offset, true);
-                if (pY) data.y[i] = dataView.getFloat32(rowOffset + pY.offset, true);
-                if (pZ) data.z[i] = dataView.getFloat32(rowOffset + pZ.offset, true);
-
-                // Rotation
-                if (pR0) data.rot_0[i] = dataView.getFloat32(rowOffset + pR0.offset, true);
-                if (pR1) data.rot_1[i] = dataView.getFloat32(rowOffset + pR1.offset, true);
-                if (pR2) data.rot_2[i] = dataView.getFloat32(rowOffset + pR2.offset, true);
-                if (pR3) data.rot_3[i] = dataView.getFloat32(rowOffset + pR3.offset, true);
-
-                // Scale
-                if (pS0) data.scale_0[i] = dataView.getFloat32(rowOffset + pS0.offset, true);
-                if (pS1) data.scale_1[i] = dataView.getFloat32(rowOffset + pS1.offset, true);
-                if (pS2) data.scale_2[i] = dataView.getFloat32(rowOffset + pS2.offset, true);
-
-                // Color (DC)
-                if (pD0) data.f_dc_0[i] = dataView.getFloat32(rowOffset + pD0.offset, true);
-                if (pD1) data.f_dc_1[i] = dataView.getFloat32(rowOffset + pD1.offset, true);
-                if (pD2) data.f_dc_2[i] = dataView.getFloat32(rowOffset + pD2.offset, true);
-
-                // Opacity
-                if (pOp) {
-                    const opRaw = dataView.getFloat32(rowOffset + pOp.offset, true);
-                    data.opacity[i] = opRaw; // Pass raw logit, GSplatData applies sigmoid
-                } else {
-                    data.opacity[i] = 100.0; // Default (very opaque logit)
-                }
-
-                // LIFETIME PARSING (Separate)
-                if (pMu) {
-                    const mu = dataView.getFloat32(rowOffset + pMu.offset, true);
-                    if (mu > maxMu) maxMu = mu;
-                    data.lifetime_mu[i] = mu;
-                }
-                if (pW) data.lifetime_w[i] = dataView.getFloat32(rowOffset + pW.offset, true);
-                if (pK) data.lifetime_k[i] = dataView.getFloat32(rowOffset + pK.offset, true);
-
-                // #WDD 2026-01-08 支持新的4dgsply格式
-                if (pVx) data.vx[i] = dataView.getFloat32(rowOffset + pVx.offset, true);
-                if (pVy) data.vy[i] = dataView.getFloat32(rowOffset + pVy.offset, true);
-                if (pVz) data.vz[i] = dataView.getFloat32(rowOffset + pVz.offset, true);
-                if (pTStart) data.t_start[i] = dataView.getFloat32(rowOffset + pTStart.offset, true);
-                if (pDur) data.duration[i] = dataView.getFloat32(rowOffset + pDur.offset, true);
-            }
-
-            // Second Pass: Fill SH data if it exists
-            // Standard loop for all 45 coefficients
-            for (let shIdx = 0; shIdx < 45; shIdx++) {
-                const propName = `f_rest_${shIdx}`;
-                const pSH = getPropParams(propName);
-                if (pSH) {
-                    const arr = (data as any)[propName];
-                    for (let i = 0; i < vertexCount; i++) {
-                        arr[i] = dataView.getFloat32(i * rowSize + pSH.offset, true);
-                    }
-                }
-            }
-
-        } catch (e) {
-            console.error("Ply Parse Error", e);
-        }
-
-        // --- DEBUG: Log first 10 points completely ---
-        for (let i = 0; i < Math.min(vertexCount, 10); i++) {
-            const f_rest_debug = [];
-            for (let k = 0; k < 45; k++) {
-                if ((data as any)[`f_rest_${k}`]) f_rest_debug.push((data as any)[`f_rest_${k}`][i]);
-            }
-
-            console.log(`[PLY Parse Debug Pt ${i}]`, {
-                index: i,
-                xyz: [data.x[i], data.y[i], data.z[i]],
-                f_dc: [data.f_dc_0[i], data.f_dc_1[i], data.f_dc_2[i]],
-                opacity: data.opacity[i],
-                scale: [data.scale_0[i], data.scale_1[i], data.scale_2[i]],
-                rot: [data.rot_0[i], data.rot_1[i], data.rot_2[i], data.rot_3[i]],
-                lifetime: [data.lifetime_mu[i], data.lifetime_w[i], data.lifetime_k[i]],
-                f_rest: f_rest_debug
-            });
-        }
-        // ---------------------------------------------
-
-        // Create explicit properties definition for GSplatData with storage
-        const properties = [
-            { name: 'x', type: 'float', storage: data.x },
-            { name: 'y', type: 'float', storage: data.y },
-            { name: 'z', type: 'float', storage: data.z },
-            { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
-            { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
-            { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
-            { name: 'opacity', type: 'float', storage: data.opacity },
-            { name: 'rot_0', type: 'float', storage: data.rot_0 },
-            { name: 'rot_1', type: 'float', storage: data.rot_1 },
-            { name: 'rot_2', type: 'float', storage: data.rot_2 },
-            { name: 'rot_3', type: 'float', storage: data.rot_3 },
-            { name: 'scale_0', type: 'float', storage: data.scale_0 },
-            { name: 'scale_1', type: 'float', storage: data.scale_1 },
-            { name: 'scale_2', type: 'float', storage: data.scale_2 },
-
-            // Lifetime properties for reordering
-            { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
-            { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
-            { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
-
-            // 4DGS properties for reordering #WDD 2026-01-08 支持新的4dgsply格式
-            { name: 'vx', type: 'float', storage: data.vx },
-            { name: 'vy', type: 'float', storage: data.vy },
-            { name: 'vz', type: 'float', storage: data.vz },
-            { name: 't_start', type: 'float', storage: data.t_start },
-            { name: 'duration', type: 'float', storage: data.duration }
-        ];
-
-        // Add SH prop defs (0-44)
-        for (let i = 0; i < 45; i++) {
-            properties.push({ name: `f_rest_${i}`, type: 'float', storage: (data as any)[`f_rest_${i}`] });
-        }
-
-        // Make data match GSplatData expected structure (vertex element)
-        const vertexElement = {
-            name: 'vertex',
-            count: vertexCount,
-            properties: properties
-        };
-
-        // Return structure compatible with pc.GSplatData constructor (which expects { elements: [...] })
-        return { plyData: { elements: [vertexElement] }, count: vertexCount, cameras: parsedCameras, pose: parsedPose, dataFrames, maxMu, is4DGS }; // #WDD 2026-01-08 增加is4DGS
-    }
 
     private resetCamera() {
         if (!this.camera) return;
@@ -2457,11 +2508,86 @@ class Viewer {
         const cachedKey = `transform_cache_${fileName}`;
         localStorage.setItem(cachedKey, JSON.stringify(data));
     }
+
+    // Public method for window binding
+    public async exportPlySequence() {
+        if (!this.splatEntity || !this.splatEntity.gsplat) {
+            alert("No Splat loaded to export!");
+            return;
+        }
+
+        const component = this.splatEntity.gsplat as any;
+        const asset = component.asset;
+        if (!asset || !asset.resource) return;
+
+        const resource = asset.resource as pc.GSplatResource;
+        const splatData = resource.splatData;
+
+        // Collect extra props from loader
+        // We know we attached some custom props to vertex element 0?
+        // Or we pass the whole splatData structure and let the exporter inspect it.
+        // But PlyExporter expects a { count, plyData, ... } object similar to 'parsed'.
+        // We need to re-construct a suitable object or pass splatData directly if upgraded.
+
+        // Actually, PlyExporter.exportSequence takes 'data' which has 'trajectory', 'lifetime_mu' etc.
+        // We need to check if 'splatData' holds these.
+        // In finalizeGSplatLoad, we see:
+        // const x = splatData.getProp('x')...
+        // const reorderedMu = splatData.getProp('lifetime_mu');
+        // So splatData IS the source of truth.
+
+        // We construct a 'data' object that PlyExporter expects.
+        // It seems PlyExporter was designed to take the 'parsed' object from loader, or similar.
+        // But here we might not have 'parsed' anymore.
+        // We must reconstruct it from splatData props.
+
+        const data: any = {
+            count: splatData.numSplats,
+            plyData: { elements: [{ properties: [] }] }, // Mock if needed, or Exporter uses getProp from data?
+            // Wait, PlyExporter uses data.plyData.elements[0] to find properties?
+            // See PlyExporter.ts:43: const vertexElement = data.plyData.elements[0];
+            // So we need to provide that structure.
+        };
+
+        // Re-build vertex properties list from splatData
+        // We can just iterate the vertex element from splatData (it has one).
+        const elem = (splatData as any).elements[0]; // Access internal elements
+        data.plyData.elements[0] = elem;
+
+        // Pass validation props
+        // We need to ensure we pass keyframes/strides if 4DGS
+        if (this.is4DGS) {
+            data.is4DGS = true;
+            data.keyframes = this.keyframes;
+            data.rotKeyframes = this.rotKeyframes;
+            data.xyzStride = this.xyzStride;
+            data.rotStride = this.rotStride;
+
+            // Attaching arrays directly for convenience if Exporter needs them
+            data.trajectory = this.trajectoryData;
+            data.rotTrajectory = this.rotTrajectoryData;
+
+            data.lifetime_mu = splatData.getProp('lifetime_mu');
+            data.lifetime_w = splatData.getProp('lifetime_w');
+            data.lifetime_k = splatData.getProp('lifetime_k');
+        }
+
+        const totalFrames = this.totalFrames || Math.ceil(this.duration);
+
+        await PlyExporter.exportSequence(data, totalFrames, `sequence_${this.currentFileName}`);
+    }
 }
 
 // Global scoped app for access in callbacks
 let app: pc.Application;
+declare global {
+    interface Window {
+        exportPlySequence: () => void;
+    }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     const viewer = new Viewer();
     app = viewer.app;
+    window.exportPlySequence = () => viewer.exportPlySequence();
 });

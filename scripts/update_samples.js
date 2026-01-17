@@ -20,7 +20,7 @@ function scanFiles() {
     files.sort();
 
     const samples = files
-        .filter(file => file.endsWith('.gszip') || file.endsWith('.ply'))
+        .filter(file => file.endsWith('.gszip') || file.endsWith('.ply') || file.endsWith('.truesplats'))
         .map(file => ({
             name: file,
             url: `./gszip/${file}`

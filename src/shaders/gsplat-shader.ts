@@ -196,14 +196,46 @@ export const splatMainVS = `
     uniform float isSelectionMode; // 1.0 if selecting, 0.0 otherwise
 
     uniform float uTime;
+    uniform float uGlobalTotalFrames; // #WDD 2026-01-16
 
-    // 4DGS Dynamic Data #WDD 2026-01-08 支持新的4dgsply格式
-    uniform sampler2D u4dgsTextureA; // vx, vy, vz, t_start
-    uniform sampler2D u4dgsTextureB; // duration, (unused), (unused), (unused)
+    // Trajectory Data
+    #ifdef USE_TRAJECTORY
+        uniform sampler2D uTrajectoryTexture;
+        uniform float uKeyframes;
+        uniform float uXYZStride; // #WDD 2026-01-15
+    #endif
+
+    // Rotation & Scale Logic Declarations
+    #ifdef USE_ROTATION
+        uniform sampler2D uRotationTexture;
+        uniform sampler2D uScalesTexture;
+        uniform float uRotKeyframes;
+        uniform float uRotStride; // #WDD 2026-01-15
+
+        // Simple NLERP for quaternions
+        vec4 nlerp(vec4 a, vec4 b, float t) {
+            if (dot(a, b) < 0.0) b = -b; // Shortest path
+            return normalize(mix(a, b, t));
+        }
+
+        mat3 quatToMat3(vec4 q) {
+            float x = q.x, y = q.y, z = q.z, w = q.w;
+            float x2 = x + x, y2 = y + y, z2 = z + z;
+            float xx = x * x2, xy = x * y2, xz = x * z2;
+            float yy = y * y2, yz = y * z2, zz = z * z2;
+            float wx = w * x2, wy = w * y2, wz = w * z2;
+            return mat3(
+                1.0 - (yy + zz), xy + wz, xz - wy,
+                xy - wz, 1.0 - (xx + zz), yz + wx,
+                xz + wy, yz - wx, 1.0 - (xx + yy)
+            );
+        }
+    #endif
 
     // Transition Effect #WDD 2026-01-15
     uniform float uTransitionFactor;
     uniform float uRotationFactor; // Raw progress 0->1 #WDD 2026-01-15
+    uniform float uSwizzleMode; // #WDD 2026-01-15 0=yzwx (def), 1=xyzw, 2=wyzx
 
     // Pseudo-random helper
     float fract_sin(float val) {
@@ -211,20 +243,34 @@ export const splatMainVS = `
     }
 
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
-    float getLifetimeOpacityTexture(ivec2 uv, float t) {
+    float getLifetimeOpacityTexture(uint id, float t) {
         #ifdef USE_LIFETIME_TEXTURE
-            vec4 val = texelFetch(lifetimeTexture, uv, 0);
-            float mu = val.r;
-            float w = abs(val.g);     
-            float k = abs(val.b);     
+            // Robust Indexing #WDD 2026-01-16
+            int lWidth = textureSize(lifetimeTexture, 0).x;
+            ivec2 lUV = ivec2(int(id % uint(lWidth)), int(id / uint(lWidth)));
+            vec4 val = texelFetch(lifetimeTexture, lUV, 0);
             
+            float safeTotal = max(uGlobalTotalFrames, 50.0);
+            float mu = val.r * safeTotal;
+            float w = val.g * safeTotal;     
+            float k = val.b * 20.0;
+
             float argLeft = k * (t - (mu - w));
             float left = 1.0 / (1.0 + exp(-argLeft));
 
             float argRight = -k * (t - (mu + w));
             float right = 1.0 / (1.0 + exp(-argRight));
             
-            return left * right;
+            float visibility = left * right;
+
+            // #WDD 2026-01-16: HARD CUTOFF
+            // Ensure points completely outside the window are 0.0
+            if (t < (mu - w) || t > (mu + w)) {
+                visibility = 0.0;
+            }
+
+            return visibility;
+             
         #else
             return 1.0;
         #endif
@@ -232,6 +278,8 @@ export const splatMainVS = `
     
     void main(void)
     {
+        bool debugLifetime = false; 
+        splatId = uint(gl_InstanceID);
         if (!calcSplatUV()) {
             gl_Position = discardVec;
             return;
@@ -239,25 +287,138 @@ export const splatMainVS = `
         
         vec3 center = getCenter();
 
-        // --- 4DGS Dynamic Logic #WDD 2026-01-08 支持新的4dgsply格式 ---
-        #ifdef USE_4DGS
-            vec4 dgsA = texelFetch(u4dgsTextureA, splatUV, 0);
-            vec4 dgsB = texelFetch(u4dgsTextureB, splatUV, 0);
-            float vx = dgsA.r;
-            float vy = dgsA.g;
-            float vz = dgsA.b;
-            float t_start = dgsA.a;
-            float duration = dgsB.r;
+        // --- Trajectory Logic ---
+        #ifdef USE_TRAJECTORY
+            // #WDD 2026-01-15 Stride-based logic matching post_save.py / main.ts verification
+            // 逻辑检查: 
+            // - uTime 是当前帧索引 (float)
+            // - uXYZStride 是关键帧采样间隔 (例如 5)
+            // - idx 是当前时间对应的左侧关键帧索引 (0, 1, 2...)
+            int idx = int(floor(uTime / uXYZStride));
+            
+            // 边界检查: 确保不会读取超过纹理范围的关键帧
+            if (idx >= int(uKeyframes) - 1) idx = int(uKeyframes) - 2;
 
-            // Visibility Check
-            if (uTime < t_start || uTime >= t_start + duration) {
-                gl_Position = discardVec;
-                return;
+            float t0 = float(idx) * uXYZStride;
+            float t1 = float(idx + 1) * uXYZStride;
+            
+            // Handle last interval
+            if (idx == int(uKeyframes) - 2) {
+                t1 = max(uGlobalTotalFrames, 50.0) - 1.0;
             }
 
-            // Position Update: x_t = x + vx * (t - t_start)
-            float dt = uTime - t_start;
-            center += vec3(vx, vy, vz) * dt;
+            int k0 = idx;
+            int k1 = idx + 1;
+            
+            // 插值系数 t: 在两个关键帧之间的时间比例 (0.0 -> 1.0)
+            float t = clamp((uTime - t0) / (t1 - t0), 0.0, 1.0);
+
+            int width = textureSize(uTrajectoryTexture, 0).x;
+            uint baseIdx = splatId * uint(uKeyframes);
+            
+            uint idx0 = baseIdx + uint(k0);
+            ivec2 uv0 = ivec2(idx0 % uint(width), idx0 / uint(width));
+            vec3 p0 = texelFetch(uTrajectoryTexture, uv0, 0).rgb;
+
+            uint idx1 = baseIdx + uint(k1);
+            ivec2 uv1 = ivec2(idx1 % uint(width), idx1 / uint(width));
+            vec3 p1 = texelFetch(uTrajectoryTexture, uv1, 0).rgb;
+
+            center = mix(p0, p1, t);
+        #endif
+
+        // --- Rotation & Scale Logic (Dynamic Covariance) ---
+
+        // Covariance Variables
+        vec3 covA, covB;
+
+        #ifdef USE_ROTATION
+            // 1. Interpolate Rotation (Stride-based)
+            int rIdx = int(floor(uTime / uRotStride));
+            if (rIdx >= int(uRotKeyframes) - 1) rIdx = int(uRotKeyframes) - 2;
+
+            float rt0 = float(rIdx) * uRotStride;
+            float rt1 = float(rIdx + 1) * uRotStride;
+
+            if (rIdx == int(uRotKeyframes) - 2) {
+                rt1 = max(uGlobalTotalFrames, 50.0) - 1.0;
+            }
+
+            int rk0 = rIdx;
+            int rk1 = rIdx + 1;
+            float rt = clamp((uTime - rt0) / (rt1 - rt0), 0.0, 1.0);
+
+            int rWidth = textureSize(uRotationTexture, 0).x;
+            uint rBaseIdx = splatId * uint(uRotKeyframes);
+            
+            ivec2 ruv0 = ivec2((rBaseIdx + uint(rk0)) % uint(rWidth), (rBaseIdx + uint(rk0)) / uint(rWidth));
+            vec4 rq0 = texelFetch(uRotationTexture, ruv0, 0);
+
+            ivec2 ruv1 = ivec2((rBaseIdx + uint(rk1)) % uint(rWidth), (rBaseIdx + uint(rk1)) / uint(rWidth));
+            vec4 rq1 = texelFetch(uRotationTexture, ruv1, 0);
+
+            vec4 finalRot = nlerp(rq0, rq1, rt);
+
+            // 2. Fetch Scale (Static)
+            // SplatID -> UV for Static textures
+            int sWidth = textureSize(uScalesTexture, 0).x;
+            ivec2 sUV = ivec2(splatId % uint(sWidth), splatId / uint(sWidth));
+            vec3 scales = exp(texelFetch(uScalesTexture, sUV, 0).rgb); // Apply exp() for log-scale
+
+            // 3. Compute Covariance Matrix M = R * S
+            // Texture is likely WXYZ, but comp is XYZW. Swizzle if needed.
+            // Standard 3DGS is WXYZ. 
+            // Our nlerp returns a mfinalScaleix.
+            // quatToMat3 expects x,y,z,w in that variable naming.
+            
+            vec4 q;
+            if (uSwizzleMode > 1.5) {
+                // Mode 2: Inverted order or testing ZYXW? 
+                // Let's try identity for now as Mode 1, Mode 2 as .xyzw (dup).
+                // Actually let's assume Mode 1 is NO SWIZZLE (XYZW input)
+                // Mode 0 is current default (WXYZ input -> swizzle to XYZW)
+                
+                // Let's add Mode 2 as .wxyz (if data is YZWX?) random guess
+                q = finalRot.wxyz;
+            } else if (uSwizzleMode > 0.5) {
+                // Mode 1: No Swizzle (Data is already XYZW)
+                q = finalRot; 
+            } else {
+                // Mode 0: Default (Data is WXYZ -> Needs .yzwx to become XYZW)
+                q = finalRot.yzwx; 
+            }
+            
+            mat3 R = quatToMat3(q);
+            mat3 M = R * mat3(
+                scales.x, 0.0, 0.0,
+                0.0, scales.y, 0.0,
+                0.0, 0.0, scales.z
+            );
+            mat3 Sigma = M * transpose(M); // M * Mt
+
+            // 4. Extract covA, covB for calcV1V2
+            // Sigma is symmetric: 
+            // [0][0] [0][1] [0][2]
+            // [1][0] [1][1] [1][2]
+            // [2][0] [2][1] [2][2]
+            // covA = (00, 01, 02)
+            // covB = (11, 12, 22)  <-- wait, calcV1V2 expects specific packing
+            
+            // Re-checking calcV1V2:
+            // mat3 Vrk = mat3(covA.x, covA.y, covA.z,  covA.y, covB.x, covB.y,  covA.z, covB.y, covB.z)
+            // So:
+            // covA.x = Sigma[0][0]
+            // covA.y = Sigma[0][1]
+            // covA.z = Sigma[0][2]
+            // covB.x = Sigma[1][1]
+            // covB.y = Sigma[1][2]
+            // covB.z = Sigma[2][2]
+            
+            covA = vec3(Sigma[0][0], Sigma[0][1], Sigma[0][2]);
+            covB = vec3(Sigma[1][1], Sigma[1][2], Sigma[2][2]);
+        #else
+            // Fallback to static covariance
+            getCovariance(covA, covB);
         #endif
 
         // --- Transition Snowflake Effect #WDD 2026-01-15 ---
@@ -331,8 +492,20 @@ export const splatMainVS = `
         vec4 splat_proj = matrix_projection * splat_cam;
         splat_proj.z = clamp(splat_proj.z, -abs(splat_proj.w), abs(splat_proj.w));
         
-        vec3 covA, covB;
-        getCovariance(covA, covB);
+        // Base Color Fetch moved early for scale calc #WDD 2026-01-15
+        vec4 baseColor = texelFetch(splatColor, splatUV, 0);
+
+        // --- Lifetime Calculation & Early Discard ---
+        float alphaMult = getLifetimeOpacityTexture(splatId, uTime); // Passing splatId instead of UV
+        float activeAlpha = baseColor.a * alphaMult;
+
+        // #WDD 2026-01-15 Early Discard to match Python 
+        float uAlphaDiscard = 0.01; 
+        if (!debugLifetime && activeAlpha < uAlphaDiscard) {
+             gl_Position = discardVec;
+             return;
+        }
+
         vec4 v1v2 = calcV1V2(splat_cam.xyz, covA, covB, transpose(mat3(model_view)));
 
         // --- Forced 'Small Dot' logic #WDD 2026-01-15 ---
@@ -343,7 +516,9 @@ export const splatMainVS = `
             v1v2 = vec4(dotRadius, 0.0, 0.0, dotRadius);
             finalScale = 1.0; 
         } else {
-            finalScale = min(1.0, sqrt(-log(1.0 / 255.0 / color.a)) / 2.0);
+            // Use activeAlpha for scale: smaller = fainter. Prevents "black fog".
+            float alphaForScale = max(activeAlpha, 1e-8);
+            finalScale = min(1.0, sqrt(-log(1.0 / 255.0 / alphaForScale)) / 2.0);
             v1v2 *= finalScale;
         }
 
@@ -357,11 +532,7 @@ export const splatMainVS = `
         
         texCoord = vertex_position.xy * finalScale / 2.0; 
 
-        // Base Color Fetch
-        color = texelFetch(splatColor, splatUV, 0);
-
-        // --- Lifetime Calculation ---
-        float alphaMult = getLifetimeOpacityTexture(splatUV, uTime);
+        color = baseColor;
         color.a *= alphaMult; 
         
         // --- Rapid Visual Transition #WDD 2026-01-15 ---
@@ -380,7 +551,6 @@ export const splatMainVS = `
         }
 
         if (selectionVal > 0.0) {
-            color = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
             color.a = 1.0; 
         }
 
@@ -391,11 +561,54 @@ export const splatMainVS = `
             return;
         }
         
+ 
+
+        // #WDD 2026-01-16: LIFETIME DEBUG VISUALIZATION
+        // Set to true or create a uniform to debug culling
+
+
+
+ 
+
+
+
+        if (debugLifetime) {
+            #ifdef USE_LIFETIME_TEXTURE
+                int lWidth_dbg = textureSize(lifetimeTexture, 0).x;
+                ivec2 lUV_dbg = ivec2(int(splatId % uint(lWidth_dbg)), int(splatId / uint(lWidth_dbg)));
+                vec4 val = texelFetch(lifetimeTexture, lUV_dbg, 0);
+                
+                float safe_total_dbg = max(uGlobalTotalFrames, 50.0);
+                float mu = val.r * safe_total_dbg;
+                float w = val.g * safe_total_dbg;
+                float t = uTime;
+                
+                // --- DIAGNOSTIC COLORS ---
+                // R: (mu/duration) - Should vary across the character
+                // G: (t/duration)  - Should change uniformly when playing
+                // B: (w/duration)  - Should vary across the character
+                color.rgb = vec3(mu / safe_total_dbg, t / safe_total_dbg, w / safe_total_dbg);
+                
+                // Index check: If you see a gradient from left to right, then indices are working
+                // color.rgb = vec3(float(splatId % 1000u) / 1000.0, float(splatId / 1000u) / 100.0, 0.0);
+
+                // Cyan if mu=0 and w=0 (likely failed to read)
+                if (mu < 0.001 && w < 0.001) color.rgb = vec3(0.0, 1.0, 1.0);
+                
+                color.a = 1.0; 
+            #endif
+
+           
+
+        } else {
+
         #ifdef USE_SH1
             vec4 worldCenter = matrix_model * vec4(center, 1.0);
             vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
             color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
         #endif
+        
+        } // End Debug Block
 
         #ifndef DITHER_NONE
             id = float(splatId);
