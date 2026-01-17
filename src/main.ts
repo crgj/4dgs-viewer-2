@@ -1944,13 +1944,8 @@ class Viewer {
             if (parsed) {
                 const count = parsed.count;
 
-                // #WDD 2026-01-16: Force Static Frame 0 for debugging
-                const forceStatic = true;
+                // #WDD 2026-01-16: Removed Static Frame 0 override to support full 4D logic
                 let elements = parsed.plyData.elements;
-                if (forceStatic) {
-                    console.log(`[Debug] Forcing Static Frame 0 Reconstruction (Verified getFrameElements Path)...`);
-                    elements = loader.getFrameElements(0);
-                }
 
                 // TrueSplatsLoader returns a ready-to-use vertexElement in plyData
                 let vertexElement = elements[0];
@@ -2167,6 +2162,61 @@ class Viewer {
             scalesTexture.unlock();
         }
 
+        // --- Opacity Animation Texture (CPU Calculated) #WDD 2026-01-17 ---
+        // Pre-calculating opacity gating on CPU to save GPU cycles and ensure consistency.
+        let opacityAnimTexture: pc.Texture | null = null;
+        if (this.is4DGS && muArrRaw && wArrRaw) {
+            console.log(`[Finalize] #WDD 2026-01-17 Pre-calculating Opacity Animation Texture for ${numSplats} splats and ${this.totalFrames} frames...`);
+
+            const T = Math.ceil(this.totalFrames);
+            const totalValues = numSplats * T;
+
+            // Limit texture width to something reasonable (8192 is safe on most modern GPUs)
+            const texWidth = 8192;
+            const texHeight = Math.ceil(totalValues / texWidth);
+            const texData = new Uint8Array(texWidth * texHeight);
+
+            const sigmoid = (v: number) => 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, v))));
+
+            for (let i = 0; i < numSplats; i++) {
+                const mu = muArrRaw[i];
+                const w = wArrRaw[i];
+                const k = kArrRaw ? kArrRaw[i] : 10.0;
+
+                for (let t = 0; t < T; t++) {
+                    const argLeft = k * (t - (mu - w));
+                    const left = sigmoid(argLeft);
+                    const argRight = -k * (t - (mu + w));
+                    const right = sigmoid(argRight);
+
+                    let visibility = left * right;
+
+                    // Hard cutoff for performance/leakage prevention
+                    if (t < (mu - w - 1.0) || t > (mu + w + 1.0)) {
+                        visibility = 0.0;
+                    }
+
+                    const idx = i * T + t;
+                    texData[idx] = Math.floor(visibility * 255);
+                }
+            }
+
+            opacityAnimTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth,
+                height: texHeight,
+                format: pc.PIXELFORMAT_L8,
+                mipmaps: false,
+                minFilter: pc.FILTER_NEAREST,
+                magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+                name: 'uOpacityAnimationTexture'
+            });
+            const dst = opacityAnimTexture.lock();
+            dst.set(texData);
+            opacityAnimTexture.unlock();
+        }
+
         if (this.splatEntity?.gsplat) {
             this.setupLifetimeShader(
                 (this.splatEntity.gsplat as any).instance,
@@ -2175,7 +2225,8 @@ class Viewer {
                 rotationTexture, parsed.rotKeyframes,
                 this.duration, // #WDD 2026-01-16 Use calculated duration
                 scalesTexture,
-                parsed.bands // #WDD 2026-01-16 Pass bands
+                parsed.bands, // #WDD 2026-01-16 Pass bands
+                opacityAnimTexture
             );
         }
 
@@ -2238,9 +2289,10 @@ class Viewer {
         rotKeyframes: number = 0,
         totalFrames: number = 0,
         scalesTexture: pc.Texture | null = null,
-        bands: number = 0 // #WDD 2026-01-16
+        bands: number = 0, // #WDD 2026-01-16
+        opacityAnimTexture: pc.Texture | null = null // #WDD 2026-01-17
     ) {
-        console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands });
+        console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands, opacityAnimTexture });
 
         const material = instance.material;
         material.setParameter('uTime', 0.0);
@@ -2253,6 +2305,10 @@ class Viewer {
 
         if (totalFrames > 0) {
             material.setParameter('uGlobalTotalFrames', totalFrames);
+        }
+
+        if (opacityAnimTexture) {
+            material.setParameter('uOpacityAnimationTexture', opacityAnimTexture);
         }
 
         if (trajectoryTexture) {
@@ -2276,7 +2332,8 @@ class Viewer {
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // --- ROBUST SHADER INJECTION ---
-
+        // #WDD 2026-01-17 [Confirmation] This interceptor ensures that PlayCanvas uses our custom 
+        // splatCoreVS, splatMainVS, and splatMainPS for rendering.
         const originalGetShaderVariant = material.getShaderVariant;
 
         material.getShaderVariant = function (device: any, scene: any, defs: any, unused: any, pass: any, sortedLights: any, viewUniformFormat: any, viewBindGroupFormat: any) {
@@ -2291,20 +2348,23 @@ class Viewer {
                     // We must bypass the original generator's concatenation because it uses a broken splatCoreVS.
                     // Instead, we construct the full shader here using our FIXED core and mains.
 
-                    // 1. Prepare Defines
-                    if (!options.defines) options.defines = [];
-                    /* #WDD 2026-01-16 DEBUG: Disable 4D logic for static check
-                    if (lifetimeTexture) {
-                        console.log("[ShaderInject] Defining USE_LIFETIME_TEXTURE");
-                        if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
+                    // #WDD 2026-01-17 Enable 4D logic for trajectory and rotation
+                    if (lifetimeTexture || opacityAnimTexture) {
+                        console.log("[ShaderInject] Defining USE_LIFETIME_TEXTURE / ANIM");
+                        if (opacityAnimTexture) {
+                            if (!options.defines.includes('USE_LIFETIME_ANIM_TEXTURE')) options.defines.push('USE_LIFETIME_ANIM_TEXTURE');
+                        } else {
+                            if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
+                        }
                     }
                     if (trajectoryTexture) {
+                        console.log("[ShaderInject] Defining USE_TRAJECTORY");
                         if (!options.defines.includes('USE_TRAJECTORY')) options.defines.push('USE_TRAJECTORY');
                     }
                     if (rotationTexture) {
+                        console.log("[ShaderInject] Defining USE_ROTATION");
                         if (!options.defines.includes('USE_ROTATION')) options.defines.push('USE_ROTATION');
                     }
-                    */
 
                     // #WDD 2026-01-16 Dynamically set SH bands
                     if (bands >= 1) {

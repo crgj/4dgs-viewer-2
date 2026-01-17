@@ -243,8 +243,25 @@ export const splatMainVS = `
     }
 
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
+    uniform sampler2D uOpacityAnimationTexture; // #WDD 2026-01-17
+
     float getLifetimeOpacityTexture(uint id, float t) {
-        #ifdef USE_LIFETIME_TEXTURE
+        #ifdef USE_LIFETIME_ANIM_TEXTURE
+            // #WDD 2026-01-17: Fetch pre-calculated opacity from CPU-generated texture
+            // Ensure frame index is within [0, uGlobalTotalFrames - 1]
+            int frame = clamp(int(floor(t)), 0, int(uGlobalTotalFrames) - 1);
+            
+            // Re-calculate the 1D index: i * TotalFrames + frame
+            // Using integer math to avoid precision issues with large IDs
+            int totalF = int(uGlobalTotalFrames);
+            int index = int(id) * totalF + frame;
+            
+            int texWidth = textureSize(uOpacityAnimationTexture, 0).x;
+            ivec2 uv = ivec2(index % texWidth, index / texWidth);
+            
+            float visibility = texelFetch(uOpacityAnimationTexture, uv, 0).r;
+            return visibility;
+        #elif defined(USE_LIFETIME_TEXTURE)
             // Robust Indexing #WDD 2026-01-16
             int lWidth = textureSize(lifetimeTexture, 0).x;
             ivec2 lUV = ivec2(int(id % uint(lWidth)), int(id / uint(lWidth)));
