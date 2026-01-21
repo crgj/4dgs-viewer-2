@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DongDong Viewer</title>
-    <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
+    <title>Truesplats.ai - Metaverse Content Engine</title>
+    <link rel="icon" href="./assets/logo-B-j95H8h.ico" />
     <style>
         .sidebar-hidden {
             transform: translateX(120%);
@@ -57,8 +57,8 @@
             pointer-events: none;
         }
     </style>
-  <script type="module" crossorigin src="./assets/index-iqT6xNxs.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-C2V-An8T.css">
+  <script type="module" crossorigin src="./assets/index-Ca6pOmB-.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BJBGaOEc.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -129,13 +129,14 @@
                         d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
                 </svg>
             </button>
-            <!-- Export Button - Direct SOG4 #WDD 2026-01-19 去掉下拉列表,直接导出sog4 -->
+            <!-- Export Button - Direct SOG4 #WDD 2026-01-19 -->
             <button id="export-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
                 aria-label="Export SOG4">
                 <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                     <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                 </svg>
             </button>
+
             <!-- AR Camera Select - Second Row -->
             <div class="col-span-4 relative flex items-center bg-[#2a2b2f] rounded-lg border border-white/10 p-1">
                 <button id="start-ar" class="p-1 px-2 hover:text-white transition-colors" title="Start/Stop AR">
@@ -145,11 +146,11 @@
                     </svg>
                 </button>
                 <select id="ar-camera-select"
-                    class="bg-transparent text-xs text-gray-400 focus:outline-none max-w-[100px] cursor-pointer">
+                    class="bg-transparent text-xs text-gray-400 focus:outline-none flex-1 cursor-pointer">
                     <option value="" disabled selected>Camera</option>
                 </select>
             </div>
-            <input type="file" id="file-input" class="hidden" accept=".truesplats" />
+            <input type="file" id="file-input" class="hidden" accept=".truesplats,.sog,.sog4,.ply,.ply4" />
         </div>
 
         <aside id="sidebar"
