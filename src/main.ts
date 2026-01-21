@@ -8,6 +8,7 @@ import { PLY4Loader } from './utils/ply4-loader'; // #WDD 2026-01-21 PLY4 Suppor
 import { SelectionTool } from './ui/selection-tool';
 import { GaussianEffects } from './particle-effects';
 import { ARHandler } from './utils/ar-handler';
+import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -57,6 +58,13 @@ class Viewer {
     // --- Text Object Feature Interfaces #WDD 2026-01-15 ---
     private activeTextId: string | null = null;
     private textOverlays: Map<string, HTMLElement> = new Map();
+
+    // Mobile / Orbit Mode State
+    private isOrbitMode = false; // If true, camera orbits 0,0,0
+    private orbitDistance = 5.0; // Distance for orbit mode
+
+    private skyboxManager: SkyboxManager; // #WDD 2026-01-21
+
 
     // Camera Presets State
     private cameraPresets: CameraPreset[] = [];
@@ -137,9 +145,20 @@ class Viewer {
         // Init Selection Tool
         this.selectionTool = new SelectionTool(this.app, this);
         this.effects = new GaussianEffects(this.app);
+        this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
 
         this.setupEventListeners();
+        this.initSkyboxSelector(); // #WDD 2026-01-21
+
+        // #WDD 2026-01-21 Mobile/Orbit Mode Detection
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+        if (isMobile) {
+            this.isOrbitMode = true;
+            document.body.classList.add('mobile-mode');
+            // Ensure UI is in simple mode
+            this.toggleUIVisibility(true);
+        }
 
         this.app.start();
 
@@ -822,9 +841,21 @@ class Viewer {
                 this.yaw -= dx * 0.2;
                 this.pitch -= dy * 0.2;
                 this.pitch = Math.max(-89, Math.min(89, this.pitch));
-                this.camera.setEulerAngles(this.pitch, this.yaw, 0);
+
+                if (this.isOrbitMode) {
+                    // #WDD 2026-01-21 Orbit around origin (0,0,0)
+                    // Convert spherical to cartesian
+                    // Assuming orbitDistance is maintained
+                    // Actually, let's keep current distance or use fixed? User asked for "move on a sphere".
+                    // Let's use current distance from origin to allow zoom
+                    this.orbitCameraUpdates();
+                } else {
+                    this.camera.setEulerAngles(this.pitch, this.yaw, 0);
+                }
             } else if (isRMB) {
-                this.camera.translateLocal(-dx * 0.01, dy * 0.01, 0);
+                if (!this.isOrbitMode) {
+                    this.camera.translateLocal(-dx * 0.01, dy * 0.01, 0);
+                }
             }
             lastMousePos.set(e.x, e.y);
         });
@@ -835,8 +866,15 @@ class Viewer {
             if (this.arHandler && this.arHandler.isARRunning) return;
 
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
-            if (this.camera && !isUIInteracting && !isEditing && (!this.selectionTool || this.selectionTool.currentTool === 'none'))
-                this.camera.translateLocal(0, 0, -e.wheel * 0.5);
+            if (this.camera && !isUIInteracting && !isEditing && (!this.selectionTool || this.selectionTool.currentTool === 'none')) {
+                if (this.isOrbitMode) {
+                    this.orbitDistance -= e.wheel * 0.5;
+                    this.orbitDistance = Math.max(1.0, this.orbitDistance);
+                    this.orbitCameraUpdates();
+                } else {
+                    this.camera.translateLocal(0, 0, -e.wheel * 0.5);
+                }
+            }
         });
 
         // --- Touch Support ---
@@ -889,16 +927,28 @@ class Viewer {
                 this.yaw -= dx * 0.2;
                 this.pitch -= dy * 0.2;
                 this.pitch = Math.max(-89, Math.min(89, this.pitch));
-                this.camera.setEulerAngles(this.pitch, this.yaw, 0);
+
+                if (this.isOrbitMode) {
+                    this.orbitCameraUpdates();
+                } else {
+                    this.camera.setEulerAngles(this.pitch, this.yaw, 0);
+                }
                 lastMousePos.set(t.x, t.y);
-            } else if (e.touches.length === 2) {
+            } else if (e.touches.length === 2 && !this.isOrbitMode) { // Disable pan in Orbit Mode for now, allow Zoom
                 const t0 = e.touches[0];
                 const t1 = e.touches[1];
 
                 // Pinch to Zoom
                 const dist = Math.hypot(t0.x - t1.x, t0.y - t1.y);
                 const deltaDist = dist - lastTouchDistance;
-                this.camera.translateLocal(0, 0, -deltaDist * 0.02); // Faster zoom for touch
+
+                if (this.isOrbitMode) {
+                    this.orbitDistance -= deltaDist * 0.02;
+                    this.orbitDistance = Math.max(1.0, this.orbitDistance);
+                    this.orbitCameraUpdates();
+                } else {
+                    this.camera.translateLocal(0, 0, -deltaDist * 0.02); // Faster zoom for touch
+                }
                 lastTouchDistance = dist;
 
                 // Two-finger Pan
@@ -1577,6 +1627,25 @@ class Viewer {
             selectionToolbar?.classList.remove('tools-hidden');
             controlPanel?.classList.remove('panel-hidden');
             simplifiedPanel?.classList.add('hidden-panel');
+        }
+
+        // #WDD 2026-01-21 Sync Orbit Mode with UI state (Simple Mode = Orbit Mode)
+        // Mobile users are locked in Orbit Mode handled by initialization logic, 
+        // but if they somehow toggle UI, we enforce relation unless specifically overridden.
+        // Actually, for consistency: Simple UI -> Orbit Mode. Full UI -> Editor Mode.
+        this.isOrbitMode = shouldHide;
+
+        // #WDD 2026-01-21 Auto-hide Grid and Axes in Simple Mode
+        if (this.gridEntity) this.gridEntity.enabled = !shouldHide;
+        if (this.axesEntity) this.axesEntity.enabled = !shouldHide;
+
+        // #WDD 2026-01-21 Manage Skybox Visibility via Manager
+        if (shouldHide) {
+            // In Simple Mode, show skybox
+            this.setSkybox(this.selectedSkyboxName);
+        } else {
+            // In Editor Mode, hide skybox
+            this.skyboxManager.clearSkybox();
         }
     }
 
@@ -2441,7 +2510,12 @@ class Viewer {
         // #WDD 2026-01-18 Skip reset if AR is running to maintain alignment
         if (this.arHandler && this.arHandler.isARRunning) return;
 
-        if (this.cameraPresets.length > 0) {
+        if (this.isOrbitMode) {
+            this.orbitDistance = 5.0; // Reset distance
+            this.pitch = 0;
+            this.yaw = 0;
+            this.orbitCameraUpdates();
+        } else if (this.cameraPresets.length > 0) {
             const first = this.cameraPresets[0];
             this.camera.setPosition(first.pos);
             this.pitch = first.pitch;
@@ -2453,6 +2527,127 @@ class Viewer {
             this.pitch = 0;
             this.yaw = 0;
         }
+    }
+
+    // #WDD 2026-01-21 Orbit Camera Update Implementation
+    private orbitCameraUpdates() {
+        if (!this.camera) return;
+
+        // Calculate position on sphere
+        // PlayCanvas uses Y-up.
+        // Yaw rotates around Y. Pitch rotates X.
+        // Convert Euler (pitch/yaw) to vector direction
+        const rot = new pc.Quat().setFromEulerAngles(this.pitch, this.yaw, 0);
+        const dir = new pc.Vec3(0, 0, 1); // Forward is +Z in generic math, but check PlayCanvas camera forward
+        // PlayCanvas camera looks down -Z?
+        // Actually simplest way:
+        // 1. Create a pivot at 0,0,0
+        // 2. Rotate the pivot? No.
+        // 3. Just set rotation of camera to look at origin from distance.
+
+        // Or even simpler manual spherical coords:
+        // x = r * sin(theta) * cos(phi)
+        // y = r * sin(phi)
+        // z = r * cos(theta) * cos(phi)
+
+        // Using PlayCanvas API for robustness:
+        // Set rotation first (same as FPS look, basically)
+        // Then move BACKWARDS by orbitDistance
+        // BUT we want to Rotate around Origin.
+        // So:
+        // position = Origin - (ForwardVector * Distance)
+
+        // 1. Calculate Rotation Quaternion from Pitch/Yaw
+        const q = new pc.Quat().setFromEulerAngles(this.pitch, this.yaw, 0);
+
+        // 2. Get Back Vector (0,0,1) rotated by q => Camera Position Direction relative to origin
+        const offset = new pc.Vec3(0, 0, this.orbitDistance);
+        q.transformVector(offset, offset);
+
+        // 3. Set Position = Origin + Offset
+        this.camera.setPosition(offset);
+
+        // 4. Set Rotation: Look at Origin (0,0,0)
+        this.camera.lookAt(pc.Vec3.ZERO);
+    }
+
+    // #WDD 2026-01-21 Skybox Support
+    private skyboxes = [
+        "abandoned_tank_farm_01_2k", "adams_place_bridge_2k", "artist_workshop_2k",
+        "ballroom_2k", "circus_arena_2k", "colorful_studio", "golf_course_sunrise_2k",
+        "kloppenheim_02_2k", "lebombo_2k", "outdoor_umbrellas_2k", "paul_lobe_haus_2k",
+        "reinforced_concrete_01_2k", "rural_asphalt_road_2k", "spruit_sunrise_2k",
+        "studio_small_03_2k", "venice_sunset_1k", "vignaioli_night_2k", "wooden_motel_2k",
+        "Helipad_equi"
+    ];
+    private selectedSkyboxName: string = 'paul_lobe_haus_2k'; // Default
+
+    private initSkyboxSelector() {
+        const select = document.getElementById('skybox-select') as HTMLSelectElement;
+        const slider = document.getElementById('skybox-blur-slider') as HTMLInputElement;
+
+        if (!select) return;
+
+        // Clear existing (except first)
+        while (select.options.length > 1) select.remove(1);
+
+        this.skyboxes.forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.text = name.replace(/_/g, ' ').replace('2k', '').trim();
+            if (name === this.selectedSkyboxName) opt.selected = true;
+            select.appendChild(opt);
+        });
+
+        select.addEventListener('change', () => {
+            this.selectedSkyboxName = select.value;
+            if (this.isOrbitMode) {
+                this.setSkybox(select.value);
+            }
+        });
+
+        // #WDD 2026-01-21 Blur Slider Logic
+        if (slider) {
+            slider.addEventListener('input', () => {
+                const blurLevel = parseInt(slider.value, 10);
+                this.skyboxManager.setBlur(blurLevel);
+            });
+        }
+    }
+
+    private setSkybox(name: string) {
+        if (name === 'none') {
+            this.skyboxManager.clearSkybox();
+            return;
+        }
+
+        const getBlurLevel = () => {
+            const slider = document.getElementById('skybox-blur-slider') as HTMLInputElement;
+            return slider ? parseInt(slider.value, 10) : 4;
+        };
+
+        const applySettings = () => {
+            this.skyboxManager.setBlur(getBlurLevel());
+        };
+
+        const existing = this.app.assets.find(name);
+        if (existing) {
+            this.skyboxManager.setSkyboxAsset(existing);
+            if (existing.resource) {
+                applySettings();
+            } else {
+                existing.ready(applySettings);
+            }
+            return;
+        }
+
+        const ext = name.includes('Helipad') ? '.png' : '.hdr';
+        const url = `./skybox/${name}${ext}`;
+
+        const asset = new pc.Asset(name, 'texture', { url: url });
+        this.app.assets.add(asset);
+        this.skyboxManager.setSkyboxAsset(asset);
+        asset.ready(applySettings);
     }
 
     private updateStats(asset: pc.Asset) {

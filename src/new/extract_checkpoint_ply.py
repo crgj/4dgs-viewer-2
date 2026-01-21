@@ -346,7 +346,7 @@ def save_per_frame_ply(master_ply_path, output_dir):
     # 1. Parse Metadata from comments
     total_frames = 0
     xyz_stride = 1
-    rot_stride = 1
+    rot_stride = 1 
     
     for comment in plydata.comments:
         if "total_frames" in comment:
