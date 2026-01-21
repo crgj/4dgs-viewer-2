@@ -109,6 +109,21 @@ export class SelectionTool {
         this.updateTexture();
     }
 
+    // #WDD 2026-01-18 Restore deleted state
+    restoreDeletedIndices(indices: number[]) {
+        if (!this.selectionData || !indices) return;
+
+        for (let i = 0; i < indices.length; i++) {
+            const splatIdx = indices[i];
+            const idx = splatIdx * 4;
+            if (idx < this.selectionData.length) {
+                this.selectionData[idx] = 0;   // Clear selection
+                this.selectionData[idx + 1] = 255; // Mark Deleted
+            }
+        }
+        this.updateTexture();
+    }
+
     updateTexture() {
         if (!this.selectionTexture || !this.selectionData) return;
 
@@ -336,7 +351,10 @@ export class SelectionTool {
 
     getCachedPositions() {
         if (!this.viewer.splatEntity) return null;
-        // Ideally we cached this on load
+        // #WDD 2026-01-18: Use dynamic positions if available
+        if (typeof this.viewer.getCurrentPositions === 'function') {
+            return this.viewer.getCurrentPositions();
+        }
         return this.viewer.cachedPositions;
     }
 

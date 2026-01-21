@@ -1,98 +1,310 @@
-# 4DGS Web Viewer (PlayCanvas + Vite)
+# TrueSplats Viewer - 4D Gaussian Splatting Web Viewer
 
-一个基于 **PlayCanvas** 和 **TypeScript** 构建的高性能 **4D Gaussian Splatting (4DGS)** Web 查看器。该项目在标准 3D 高斯泼溅渲染的基础上进行了扩展，支持时间动态（随时间变化的不透明度/生命周期）。
+基于 **PlayCanvas** 和 **TypeScript** 构建的专业级 **4D Gaussian Splatting** 在线查看器,支持动态 4DGS 渲染、AR 增强现实、实时编辑等高级功能。
 
 ---
 
-## 🚀 功能特性
+## ✨ 核心功能
 
-### 1. 4D 渲染 (时间动态)
-- **时变不透明度**：支持渲染随时间淡入淡出的 4D 高斯体。
-- **生命周期逻辑**：基于 `lifetime_mu`（中心时间）、`lifetime_w`（持续时间）和 `lifetime_k`（衰减敏锐度）实现双 Sigmoid 不透明度函数逻辑。
-- **播放控制**：完整的时间轴控制，支持播放/暂停、拖放进度条、逐帧步进以及可变 FPS 速度。
+### 🎬 4D 动态渲染
+- **关键帧插值系统**
+  - 位置 (XYZ) 关键帧线性插值
+  - 旋转 (Quaternion) 球面线性插值 (SLERP)
+  - 缩放 (Scale) 关键帧插值
+  - 不透明度生命周期控制
+  
+- **实时播放控制**
+  - 播放/暂停切换
+  - 可拖拽时间轴进度条
+  - 多档 FPS 控制 (10/30/60 fps)
+  - 实时帧数显示
 
-### 2. 高级渲染引擎
-- **自定义 Shader 注入**：向 PlayCanvas 的 splat 系统注入完全自定义的 GLSL 300 ES (WebGL 2) 顶点和片元着色器。
-- **正确的椭球体渲染**：修正了 3D 协方差投影的数学实现，确保 splats 渲染为正确的椭球体 (Ellipsoids)，解决了经典渲染中可能出现的形状畸变。
-- **SH (球谐函数) 支持**：全面支持实时的球谐光照计算（最高 3 阶）。
+- **生命周期函数**
+  - 基于双 Sigmoid 函数的平滑淡入淡出
+  - 支持 `lifetime_mu` (中心时间) 和 `lifetime_w` (半宽) 参数
 
-### 3. 压缩与传输优化
-- **.gszip 格式支持**：引入高效的点云压缩格式，大幅降低文件体积（通常可压缩 5-10 倍）。
-- **浏览器端解压管线**：内置全自动解压流程，包含 `JSZip` 归档提取、WASM HEVC 解码及属性重建。
-- **HEVC 解码集成**：集成 `libde265.js` 解码器，利用浏览器 WebAssembly 高效处理高度压缩的属性位流。
+### 📱 AR 增强现实
+- **摄像头管理**
+  - 自动检测可用摄像头设备
+  - 支持前置/后置摄像头切换
+  - 实时视频流处理
 
-### 4. 编辑与导出系统
-- **选择与清理**：提供 **笔刷 (Brush)** 和 **矩形 (Rect)** 选择模式，支持实时删除噪点和无效点。
-- **智能导出**：支持将清理后的场景导出为新的标准 PLY 文件，自动过滤已删除的点。
+- **图像跟踪**
+  - 基于 MindAR 的 ArUco 标记识别
+  - 实时 6DoF 追踪
+  - 精确坐标系对齐
 
-### 5. 专业级 UI/UX
-- **实时变换工具**：提供针对模型位置、旋转的精确数值控制，支持鼠标滚轴拖动数值（Scrubbing）。
-- **多格式加载**：支持拖拽加载 `.ply`、`.splat`、`.zip` 以及专有的 `.gszip` 文件。
-- **可视化进度反馈**：细化加载阶段（提取 -> 解码 -> 重建 -> 变换），并提供动态进度条。
-- **主题切换**：内置深色模式（Matte Charcoal）与浅色模式，适配不同审美需求。
+- **摄像头控制**
+  - 亮度调节
+  - 对比度调节
+  - 曝光补偿
+
+### 🎨 点云编辑工具
+- **多模式选择**
+  - 🖌️ **笔刷模式**: 自由绘制选择区域
+  - ⬜ **矩形模式**: 拖拽框选
+  - 🔄 **反选功能**: 一键反转选择
+
+- **实时编辑**
+  - 删除选中的高斯点
+  - GPU 加速渲染更新
+  - 编辑状态保存到导出文件
+
+- **变换控制**
+  - 数值输入控制位置 (X/Y/Z)
+  - 数值输入控制旋转 (Pitch/Yaw/Roll)
+  - 鼠标拖拽调节 (Scrubbing)
+
+### 📷 相机系统
+- **预设管理**
+  - 保存当前相机位置和角度
+  - 快速切换已保存的视角
+  - 批量管理相机预设
+  - 平滑动画过渡
+
+- **快捷视角**
+  - 顶视图 (Top View)
+  - 正视图 (Front View)
+  - 侧视图 (Side View)
+
+- **相机动画**
+  - 预设切换时的平滑插值
+  - 支持自动播放暂停控制
+
+### 📝 文本标注
+- **2D 文本叠加**
+  - 在 3D 场景上添加文本标注
+  - 支持中英文和各种字符
+  
+- **丰富样式**
+  - 字体大小: 12px - 120px
+  - 自定义颜色
+  - 多种字体家族 (Inter, 系统字体, 等宽字体等)
+  - 粗体/斜体样式
+
+- **智能关联**
+  - 文本标注与相机预设自动绑定
+  - 切换预设时自动显示/隐藏对应标注
+
+### 🎭 视觉增强
+- **粒子特效**
+  - 预设切换时的动态粒子动画
+  - 可开关的过渡效果
+
+- **场景辅助**
+  - 网格 (Grid) 显示/隐藏
+  - 三轴坐标 (Axes) 显示/隐藏
+  - 支持自定义颜色和透明度
+
+- **主题切换**
+  - 深色模式 (默认)
+  - 浅色模式
+  - 一键切换
+
+### 💾 文件格式
+- **TrueSplats (.truesplats)**
+  - 专有 4DGS 二进制格式
+  - 支持完整的时间动态数据
+  - 包含元数据和扩展信息
+  
+- **SOG4 (.sog4)**
+  - 优化的压缩格式
+  - 支持完整导入导出
+  - 保留所有编辑状态
+
+### 📤 导出功能
+- **一键导出**
+  - 点击直接导出为 `.sog4` 格式
+  - 所有编辑状态自动保存
+
+- **状态保存**
+  - 模型变换 (位置/旋转/缩放)
+  - 相机预设列表
+  - 文本标注内容和样式
+  - 已删除点的索引
 
 ---
 
 ## 📂 项目结构
 
-```text
-4dgs-viewer-2/
-├── docs/               # 自动生成的静态发布目录 (GitHub Pages 根目录)
-├── public/              # 静态资源 (打包后原样复制)
-│   ├── HM/             # Linux 预编译解码工具 (离线/工具链使用)
-│   ├── gszip/          # 示例 .gszip 模型文件
-│   └── libde265.js     # WASM HEVC 解码库
+```
+4dgs-viewer-momo/
+├── public/                     # 静态资源
+│   ├── truesplats/            # 示例 .truesplats 文件
+│   ├── sog4/                  # 示例 .sog4 文件
+│   ├── marker/                # ArUco 标记图片
+│   └── samples.json           # 示例文件列表
 ├── src/
-│   ├── shaders/        # 自定义 GLSL 着色器代码
-│   ├── ui/             # UI 组件与交互逻辑 (SelectionTool 等)
-│   ├── utils/          # 核心工具 (解压管线、Node 脚本)
-│   └── main.ts         # 应用程序入口，控制 PlayCanvas 渲染循环
-├── vite.config.ts      # Vite 构建配置
-└── tsconfig.json       # TypeScript 配置
+│   ├── shaders/               # GLSL 着色器
+│   │   └── gsplat-shader.ts   # 4DGS 自定义着色器
+│   ├── ui/                    # UI 组件
+│   │   └── selection-tool.ts  # 选择工具实现
+│   ├── utils/                 # 核心工具
+│   │   ├── truesplats-loader.ts  # TrueSplats 加载器
+│   │   ├── sog4-loader.ts        # SOG4 加载器
+│   │   ├── ar-handler.ts         # AR 处理器
+│   │   └── ply-exporter.ts       # PLY 导出器
+│   ├── particle-effects.ts    # 粒子特效系统
+│   ├── main.ts                # 应用入口
+│   └── style.css              # 主样式
+├── scripts/                   # 构建脚本
+│   └── update_samples.js      # 自动更新示例列表
+├── index.html                 # 主页面
+├── vite.config.ts             # Vite 配置
+└── package.json               # 依赖配置
 ```
 
 ---
 
-## 🛠 开发与构建
+## 🚀 快速开始
 
-### 安装依赖
+### 环境要求
+- Node.js 16+
+- npm 或 yarn
+
+### 安装
 ```bash
 npm install
 ```
 
-### 本地开发
+### 开发
 ```bash
 npm run dev
 ```
+访问 `http://localhost:5173`
 
-### 打包发布 (GitHub Pages)
-编译后的文件将生成在 `docs/` 目录中，可直接上传至 GitHub 并将 Pages 根目录设置为 `/docs`。
+### 构建
 ```bash
 npm run build
 ```
+产物输出到 `docs/` 目录
 
 ---
 
-## 🔧 工具链 (CLI)
+## 🎮 使用指南
 
-项目在 `src/utils/unzip_ply.ts` 提供了一个 Node.js 脚本，用于在本地环境进行批量解压和调试。
-使用方法：
-```bash
-npx tsx src/utils/unzip_ply.ts <gszip_file_path> --out <output_dir>
-```
-*该脚本会自动调用 `public/HM/TAppDecoderStatic` 进行 HEVC 位流还原。*
+### 加载模型
+- **拖拽加载**: 直接拖入 `.truesplats` 或 `.sog4` 文件
+- **按钮加载**: 点击右上角 📁 按钮
+- **示例加载**: 点击左上角 "Samples" 下拉菜单
+
+### 基本操作
+| 操作 | 方式 |
+|------|------|
+| 旋转视角 | 左键拖拽 |
+| 平移视角 | 右键拖拽 |
+| 缩放视角 | 鼠标滚轮 |
+| 播放/暂停 | 空格键 或 点击播放按钮 |
+| 隐藏/显示 UI | **H** 键 或 双击画布 |
+
+### 编辑模式
+1. 点击右侧工具栏的选择工具图标
+2. 选择笔刷或矩形模式
+3. 在画布上绘制选择区域
+4. 点击"删除选中"移除噪点
+5. 导出时自动保存编辑状态
+
+### AR 模式
+1. 打印 ArUco 标记 (`public/marker/` 目录)
+2. 点击右上角摄像头下拉菜单
+3. 选择摄像头设备
+4. 点击 AR 图标启动
+5. 将标记对准摄像头
+
+### 导出编辑结果
+点击右上角导出按钮 ⬇️,自动保存为 `.sog4` 格式,包含所有编辑状态。
 
 ---
 
 ## 🧠 技术原理
 
 ### 4D 生命周期函数
-为了在不增加冗余几何体的情况下实现动画，我们随时间 $t$ 调制点的不透明度 $\alpha$。
-着色器为每个高斯点计算一个乘数 $M(t) \in [0, 1]$：
-$$ M(t) = \sigma(k \cdot (t - (\mu_t - \delta_t))) \cdot \sigma(-k \cdot (t - (\mu_t + \delta_t))) $$
-其中 $\mu_t$ 是中心时间，$\delta_t$ 是持续时间，$\sigma$ 是 Sigmoid 函数。这种方法使得模型可以平滑地表现出高斯体的产生、消失和演化过程。
+使用双 Sigmoid 函数实现高斯点的平滑淡入淡出:
+
+$$
+M(t) = \sigma(k \cdot (t - (\mu_t - w_t))) \cdot \sigma(-k \cdot (t - (\mu_t + w_t)))
+$$
+
+其中:
+- $\mu_t$ - 生命周期中心时间
+- $w_t$ - 生命周期半宽
+- $k = 10.0$ - 衰减敏锐度
+- $\sigma(x) = \frac{1}{1 + e^{-x}}$ - Sigmoid 函数
+
+### 关键帧插值
+- **位置**: 线性插值 (LERP)
+- **旋转**: 球面线性插值 (SLERP)
+- **缩放**: 线性插值
+- **不透明度**: 生命周期函数调制
+
+着色器在 GPU 端实时计算,确保高性能。
+
+### AR 坐标对齐
+MindAR 基于 WebAssembly 实现高性能的 ArUco 标记识别:
+1. 实时检测标记位置和姿态
+2. 计算 4x4 变换矩阵
+3. 将 PlayCanvas 世界坐标系对齐到标记中心
+4. 应用后处理矩阵校正旋转和平移
 
 ---
 
-## 📜 开源协议与说明
-本查看器基于 PlayCanvas 引擎开发。所包含的 HEVC 解码器 `libde265` 遵循其原有的开源协议。请在使用场景中保留相关署名说明。
+## 🛠 技术栈
+
+- **渲染引擎**: [PlayCanvas](https://playcanvas.com/) v1.77
+- **语言**: TypeScript 5.3
+- **构建工具**: Vite 5.4
+- **AR 库**: MindAR (基于 WebAssembly)
+- **UI 框架**: Tailwind CSS 3.4
+- **压缩**: JSZip 3.10
+
+---
+
+## 📄 文件格式规范
+
+### TrueSplats (.truesplats)
+
+**文件结构**:
+```
+[Magic Number: "TRUESPLATS"]
+[Version: uint32]
+[Metadata JSON]
+[Static Data]
+[Dynamic Data]
+[Extension Data]
+```
+
+**包含内容**:
+- 静态属性: 颜色、球谐系数、基础缩放
+- 动态数据: 位置轨迹、旋转轨迹、生命周期
+- 扩展数据: 相机预设、文本标注、删除索引
+
+### SOG4 (.sog4)
+
+优化的压缩格式,完全兼容 TrueSplats 功能,提供更好的压缩率。
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request!
+
+---
+
+## 📜 开源协议
+
+本项目基于 PlayCanvas 引擎开发。第三方库遵循各自协议:
+- PlayCanvas: MIT License
+- MindAR: MIT License
+
+---
+
+## 🙏 致谢
+
+- [PlayCanvas Engine](https://github.com/playcanvas/engine)
+- [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
+- [4D Gaussian Splatting](https://guanjunwu.github.io/4dgs/)
+- [MindAR](https://github.com/hiukim/mind-ar-js)
+
+---
+
+**Made with ❤️ for 4D Gaussian Splatting Community**

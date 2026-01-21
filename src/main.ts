@@ -3,8 +3,11 @@ import { PlyExporter } from './utils/ply-exporter';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
+import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
+import { PLY4Loader } from './utils/ply4-loader'; // #WDD 2026-01-21 PLY4 Support
 import { SelectionTool } from './ui/selection-tool';
 import { GaussianEffects } from './particle-effects';
+import { ARHandler } from './utils/ar-handler';
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -43,6 +46,7 @@ class Viewer {
     // Cache for Selection Tool
     cachedPositions: Float32Array | null = null;
     selectionTool: SelectionTool;
+    arHandler: ARHandler;
     private effects: GaussianEffects;
 
     private pitch = 0;
@@ -53,6 +57,8 @@ class Viewer {
     // --- Text Object Feature Interfaces #WDD 2026-01-15 ---
     private activeTextId: string | null = null;
     private textOverlays: Map<string, HTMLElement> = new Map();
+
+
 
     // Camera Presets State
     private cameraPresets: CameraPreset[] = [];
@@ -67,7 +73,7 @@ class Viewer {
     private animProgress = 0;
 
     // Debugging #WDD 2026-01-15
-    private swizzleMode = 0; // 0=yzwx, 1=xyzw, 2=wxyz
+    private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
 
     private is4DGS = false;
     private trajectoryData: Float32Array | null = null;
@@ -77,6 +83,13 @@ class Viewer {
     private rotKeyframes = 0;
     private rotStride = 1;
     private totalFrames = 0;
+    private lifeTexData: Float32Array | null = null;
+    private scalesTexData: Float32Array | null = null;
+    private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
+    private lastParsedData: any = null;
+    private hasLoggedSorterKeys: boolean = false;
+    private isMobile: boolean = false;
+
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
@@ -108,10 +121,10 @@ class Viewer {
                 this.app = new pc.Application(canvas, options);
             } catch (e2) {
                 console.error("Critical: WebGL not supported even with defaults.", e2);
-                document.body.innerHTML = `<div style="padding:20px; color:white; background:#222; font-family:sans-serif;">
-                    <h2>WebGL Not Supported</h2>
-                    <p>This viewer requires WebGL. Please ensure your browser supports it and hardware acceleration is enabled.</p>
-                </div>`;
+                document.body.innerHTML = `< div style = "padding:20px; color:white; background:#222; font-family:sans-serif;" >
+    <h2>WebGL Not Supported </h2>
+        < p > This viewer requires WebGL.Please ensure your browser supports it and hardware acceleration is enabled.</p>
+            </div>`;
                 throw e2;
             }
         }
@@ -128,15 +141,38 @@ class Viewer {
         // Init Selection Tool
         this.selectionTool = new SelectionTool(this.app, this);
         this.effects = new GaussianEffects(this.app);
+        this.arHandler = new ARHandler(this);
 
         this.setupEventListeners();
 
         this.app.start();
 
+        // #WDD 2026-01-21 Mobile simplified mode lock
+        // 检测手机端：UserAgent包含移动端标识 且 屏幕宽度小于800 (排除平板)
+        const isMobileUA = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        this.isMobile = isMobileUA && window.innerWidth < 800;
+
+        if (this.isMobile) {
+            console.log("[Viewer] Mobile Mode Detected: Locking to Simplified UI");
+            // Auto-enter simplified mode
+            setTimeout(() => this.toggleUIVisibility(true), 100);
+
+            // Hide the toggle buttons to prevent switching back
+            const ids = ['toggle-ui', 'simple-toggle-ui'];
+            ids.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.style.display = 'none';
+                    btn.style.pointerEvents = 'none';
+                }
+            });
+        }
+
         this.app.on('update', (dt: number) => this.onUpdate(dt));
     }
 
-    updateToggleButton(btn: HTMLElement, active: boolean) {
+    updateToggleButton(btn: HTMLElement | null, active: boolean) {
+        if (!btn) return;
         if (active) {
             btn.classList.add('active');
         } else {
@@ -234,418 +270,8 @@ class Viewer {
         this.axesEntity = entity;
     }
 
-    // exportData removed (Legacy PLY/GSZIP)
     // #WDD 2026-01-16 Restored for internal logic / verification
-    private async exportData(format: 'ply' | 'gszip') {
-        if (!this.splatEntity || !this.splatEntity.gsplat) return;
-
-        const component = this.splatEntity.gsplat as any;
-        let asset = component.asset;
-        // Resolve asset if it is an ID
-        if (typeof asset === 'number') {
-            asset = this.app.assets.get(asset);
-        } else if (typeof asset === 'string') {
-            asset = this.app.assets.find(asset);
-        }
-
-        if (!asset || !asset.resource) {
-            console.error("Export failed: GSplat Asset not found or not loaded.");
-            return;
-        }
-
-        const resource = asset.resource as pc.GSplatResource;
-        let splatData = resource.splatData; // WDD: Changed to let to allow override
-
-        if (!splatData) {
-            console.error("Export failed: No SplatData in resource.");
-            return;
-        }
-
-        // --- 4DGS CPU Reconstruction (Verification) #WDD 2026-01-15 ---
-        if (this.is4DGS && this.trajectoryData) {
-            console.log(`[Export] 4DGS Detected. Reconstructing frame at time ${this.currentTime} for verification...`);
-
-            const numSplats = splatData.numSplats;
-            const t = this.currentTime;
-
-            // 1. Reconstruct XYZ (Linear Interpolation)
-            // progress = t / (TotalFrames - 1)
-            // But here we need to map t directly to keyframes logic
-            // post_save.py:
-            // t is integer frame index 0..T-1
-            // xyz_times = linspace
-
-            // In our loader/shader:
-            // progress = uTime / max(1.0, uTotalFrames - 1.0)
-            // kFloat = progress * (uKeyframes - 1.0)
-
-            const totalFrames = this.totalFrames; // e.g. 50
-            const keyframes = this.keyframes;     // e.g. 18
-            const stride = this.xyzStride;
-
-            // XYZ Stride Logic (Verified vs post_save.py)
-            let idx = Math.floor(t / stride);
-            if (idx >= keyframes - 1) idx = keyframes - 2;
-
-            let t0 = idx * stride;
-            let t1 = (idx + 1) * stride;
-            if (idx === keyframes - 2) {
-                t1 = totalFrames - 1;
-            }
-
-            const k0 = idx;
-            const k1 = idx + 1;
-            const u = (t - t0) / (t1 - t0);
-
-            // ROT Stride Logic
-            const rotKeyframes = this.rotKeyframes;
-            const rStride = this.rotStride;
-
-            let rIdx = Math.floor(t / rStride);
-            if (rIdx >= rotKeyframes - 1) rIdx = rotKeyframes - 2;
-
-            let rt0 = rIdx * rStride;
-            let rt1 = (rIdx + 1) * rStride;
-            if (rIdx === rotKeyframes - 2) {
-                rt1 = totalFrames - 1;
-            }
-
-            const rk0 = rIdx;
-            const rk1 = rIdx + 1;
-            const ru = (t - rt0) / (rt1 - rt0);
-
-            // Allocate new temporary storage for reconstructed frame
-            const newX = new Float32Array(numSplats);
-            const newY = new Float32Array(numSplats);
-            const newZ = new Float32Array(numSplats);
-            const newRot0 = new Float32Array(numSplats);
-            const newRot1 = new Float32Array(numSplats);
-            const newRot2 = new Float32Array(numSplats);
-            const newRot3 = new Float32Array(numSplats);
-            const newOpacity = new Float32Array(numSplats);
-
-            // Helpers
-            const sigmoid = (x: number) => 1.0 / (1.0 + Math.exp(-x));
-            const q0 = new pc.Quat();
-            const q1 = new pc.Quat();
-            const qFinal = new pc.Quat();
-
-            // Get static/base data
-            const muArr = splatData.getProp('lifetime_mu');
-            const wArr = splatData.getProp('lifetime_w');
-            const kArr = splatData.getProp('lifetime_k');
-            const baseOpac = splatData.getProp('opacity'); // Logits!
-
-            // Stride info (assuming packed XYZRGB / ROTRGBA)
-            // trajectoryData is Float32Array. 
-            // Layout is typically [x,y,z, x,y,z ...] for all splats?
-            // checking parseBIN: data[baseOff + k * C + j]
-            // It is Splat-Major? parseBIN loop: for i < N ... for k < K ... data[...] 
-            // Yes, baseOff = i * K * C. So data is [Splat0_Frame0, Splat0_Frame1..., Splat1_Frame0...]
-
-            for (let i = 0; i < numSplats; i++) {
-                // XYZ
-                const xyzBase = i * keyframes * 3;
-
-                const p0x = this.trajectoryData[xyzBase + k0 * 3 + 0];
-                const p0y = this.trajectoryData[xyzBase + k0 * 3 + 1];
-                const p0z = this.trajectoryData[xyzBase + k0 * 3 + 2];
-
-                const p1x = this.trajectoryData[xyzBase + k1 * 3 + 0];
-                const p1y = this.trajectoryData[xyzBase + k1 * 3 + 1];
-                const p1z = this.trajectoryData[xyzBase + k1 * 3 + 2];
-
-                newX[i] = p0x * (1 - u) + p1x * u;
-                newY[i] = p0y * (1 - u) + p1y * u;
-                newZ[i] = p0z * (1 - u) + p1z * u;
-
-                // ROT
-                if (this.rotTrajectoryData) {
-                    const rotBase = i * rotKeyframes * 4;
-                    // Quaternion layout? parseBin: 4 floats.
-                    q0.set(
-                        this.rotTrajectoryData[rotBase + rk0 * 4 + 0],
-                        this.rotTrajectoryData[rotBase + rk0 * 4 + 1],
-                        this.rotTrajectoryData[rotBase + rk0 * 4 + 2],
-                        this.rotTrajectoryData[rotBase + rk0 * 4 + 3]
-                    );
-                    q1.set(
-                        this.rotTrajectoryData[rotBase + rk1 * 4 + 0],
-                        this.rotTrajectoryData[rotBase + rk1 * 4 + 1],
-                        this.rotTrajectoryData[rotBase + rk1 * 4 + 2],
-                        this.rotTrajectoryData[rotBase + rk1 * 4 + 3]
-                    );
-                    // Slerp
-                    qFinal.slerp(q0, q1, ru);
-                    newRot0[i] = qFinal.x;
-                    newRot1[i] = qFinal.y;
-                    newRot2[i] = qFinal.z;
-                    newRot3[i] = qFinal.w;
-                } else {
-                    // Static override? Or just fail safely
-                    newRot0[i] = 0; newRot1[i] = 0; newRot2[i] = 0; newRot3[i] = 1;
-                }
-
-                // Opacity Gating
-                // sigmoid(10 * (t - (mu - w))) * sigmoid(10 * ((mu + w) - t))
-                const mu = muArr ? muArr[i] : 0;
-                const w = wArr ? wArr[i] : 100;
-                // k logic? Loader says data.lifetime_k[i] = 10.0;
-
-                const gate = sigmoid(10.0 * (t - (mu - w))) * sigmoid(10.0 * ((mu + w) - t));
-
-                // Base opacity is logit. Converted to probability?
-                // Shader: B = exp(-A) * color.a
-                // color.a comes from texture opacity.
-                // parseSOG: data.opacity[i] = inverseSigmoid(texData...) -> Logit
-                // So original stored is logit.
-                // We need to export SIGMOID-ed opacity (0..1) for PLY usually? 
-                // Or Logit? PLY usually stores opacity as logit if standard 3DGS, OR 0-255 if .splat?
-                // Standard 3DGS .ply property 'opacity' is LOGIT.
-
-                // Wait, post_save.py:
-                // opac_active = base_opac_active * gate  <-- base_opac_active is sigmoid(logit)
-                // v_opac = logit(opac_active[mask])
-                // So we need to:
-                // 1. Sigmoid(base_logit) -> prob
-                // 2. prob * gate -> new_prob
-                // 3. Logit(new_prob) -> stored property
-                // 4. Threshold on new_prob >= 0.01
-
-                const baseLogit = baseOpac ? baseOpac[i] : 100;
-                const baseProb = sigmoid(baseLogit);
-                const activeProb = baseProb * gate;
-
-                if (activeProb < 0.01) {
-                    // Mark for deletion/filtering
-                    // We can use selectionData trick or just make a new validIndices list later
-                    newOpacity[i] = -999; // Sentinel
-                } else {
-                    // Avoid log(0)
-                    const safeProb = Math.max(1e-6, Math.min(1 - 1e-6, activeProb));
-                    newOpacity[i] = Math.log(safeProb / (1 - safeProb));
-                }
-            }
-
-            // Create a temporary "Reconstructed" GSplatData-like structure to feed into the rest of the export function
-            // We need to clone the original splatData but override X,Y,Z, Rot, Opacity
-
-            // Ideally we filter out the -999 opacity ones entirely from the index list
-            // But exportData has a logic to filter logic:
-            // "const validIndices: number[] = [];"
-
-            // Let's attach these new arrays to a temp object and use them in step 3
-            // We'll wrap accessing them.
-
-            const tempStorage: any = {
-                x: newX, y: newY, z: newZ,
-                rot_0: newRot0, rot_1: newRot1, rot_2: newRot2, rot_3: newRot3,
-                opacity: newOpacity
-            };
-
-            // Override splatData.getProp for this scope
-            const originalGetProp = splatData.getProp.bind(splatData);
-
-            // Create a proxy/shim
-            const proxySplatData = {
-                numSplats: numSplats,
-                getProp: (name: string) => {
-                    if (tempStorage[name]) return tempStorage[name];
-                    return originalGetProp(name);
-                }
-            };
-
-            splatData = proxySplatData as any; // Swap for the rest of the function
-
-            // Add custom filter for opacity
-            // We can modify the `validIndices` loop below
-        }
-
-        // 1. Identify valid indices (not deleted)
-        const validIndices: number[] = [];
-        const selectionData = this.selectionTool.selectionData;
-        const count = splatData.numSplats;
-
-        if (this.is4DGS && this.trajectoryData) {
-            // 4DGS Filter Mode: Check opacity sentinel
-            const opac = splatData.getProp('opacity'); // This gets our newOpacity array
-            for (let i = 0; i < count; i++) {
-                // Check selection tool AND our opacity threshold
-                const isSelectedDeleted = selectionData ? (selectionData[i * 4 + 1] > 0) : false;
-                const isOpacityCulling = opac && opac[i] === -999;
-
-                if (!isSelectedDeleted && !isOpacityCulling) {
-                    validIndices.push(i);
-                }
-            }
-        } else {
-            // Standard Mode
-            if (selectionData) {
-                for (let i = 0; i < count; i++) {
-                    // If G channel (index * 4 + 1) is > 0, it's deleted
-                    if (selectionData[i * 4 + 1] === 0) {
-                        validIndices.push(i);
-                    }
-                }
-            } else {
-                // No selection tool initialized? Save all.
-                for (let i = 0; i < count; i++) validIndices.push(i);
-            }
-        }
-
-        const newCount = validIndices.length;
-        if (newCount === 0) {
-            alert("No points to export!");
-            return;
-        }
-
-        console.log(`Exporting ${newCount} / ${count} splats...`);
-
-        // 2. Define Properties to Export
-        // We iterate all known potential properties.
-        const propNames = [
-            'x', 'y', 'z',
-            'f_dc_0', 'f_dc_1', 'f_dc_2',
-            'opacity',
-            'scale_0', 'scale_1', 'scale_2',
-            'rot_0', 'rot_1', 'rot_2', 'rot_3',
-            'lifetime_mu', 'lifetime_w', 'lifetime_k'
-        ];
-
-        // Add all 45 f_rest SH coeffs
-        for (let k = 0; k < 45; k++) propNames.push(`f_rest_${k}`);
-
-        // Filter to those that actually exist in splatData
-        const activeProps = propNames.filter(name => splatData.getProp(name) !== null);
-
-        // 3. Construct PLY Header
-        let header = "ply\n";
-        header += "format binary_little_endian 1.0\n";
-        header += `element vertex ${newCount}\n`;
-
-        activeProps.forEach(name => {
-            // Check type. Usually float.
-            // splatData stores as Float32Array usually.
-            header += `property float ${name}\n`;
-        });
-
-        // Add "dataFrames" comment if we tracked it (restore from header)
-        // Check if we have an explicit original frame count
-        const framesToExport = (this.originalFrames && this.originalFrames > 0) ? this.originalFrames : Math.ceil(this.duration);
-        header += `comment frames ${framesToExport}\n`;
-
-        // 3.5 Add camera presets to header
-        if (this.cameraPresets.length > 0) {
-            const camerasJson = JSON.stringify(this.cameraPresets.map(p => ({
-                name: p.name,
-                pos: [p.pos.x, p.pos.y, p.pos.z],
-                pitch: p.pitch,
-                yaw: p.yaw,
-                textObjects: p.textObjects // #WDD 2026-01-15 Save text objects
-            })));
-            header += `comment cameras ${camerasJson}\n`;
-        }
-
-        // 3.6 Add object pose (position and rotation) to header
-        if (this.splatEntity) {
-            const pos = this.splatEntity.getPosition();
-            const rot = this.splatEntity.getEulerAngles();
-            const poseJson = JSON.stringify({
-                px: pos.x.toFixed(3),
-                py: pos.y.toFixed(3),
-                pz: pos.z.toFixed(3),
-                rx: rot.x.toFixed(2),
-                ry: rot.y.toFixed(2),
-                rz: rot.z.toFixed(2)
-            });
-            header += `comment pose ${poseJson}\n`;
-        }
-
-        header += "end_header\n";
-
-        const headerBlob = new TextEncoder().encode(header);
-
-        // 4. Construct Binary Data
-        // Each vertex has all activeProps floats.
-        // Size = newCount * activeProps.length * 4 bytes
-        const rowFloats = activeProps.length;
-        const bufferSize = newCount * rowFloats * 4;
-        const dataBuffer = new ArrayBuffer(bufferSize);
-        const dataView = new DataView(dataBuffer);
-
-        // Pre-fetch source arrays to avoid getProp lookups in loop
-        const sourceArrays = activeProps.map(name => splatData.getProp(name)!);
-
-        let offset = 0;
-        for (let i = 0; i < newCount; i++) {
-            const originalIdx = validIndices[i];
-
-            for (let p = 0; p < rowFloats; p++) {
-                const val = sourceArrays[p][originalIdx];
-                dataView.setFloat32(offset, val, true); // Little Endian
-                offset += 4;
-            }
-        }
-
-        // 5. Trigger Download
-        const combinedBuffer = new Uint8Array(headerBlob.length + dataBuffer.byteLength);
-        combinedBuffer.set(headerBlob);
-        combinedBuffer.set(new Uint8Array(dataBuffer), headerBlob.length);
-
-        if (format === 'gszip') {
-            const overlay = document.getElementById('loading-overlay');
-            const status = document.getElementById('loading-status');
-            const detail = document.getElementById('loading-detail');
-            const stepProgress = document.getElementById('loading-step-progress');
-            const stepSquares = document.querySelectorAll('.step-square');
-
-            const updateProgress = (p: number, msg: string) => {
-                if (overlay) overlay.classList.remove('hidden');
-                if (status) status.innerText = "COMPRESSING";
-                if (detail) detail.innerText = msg;
-
-                // Map 0-100% to 0-9 steps
-                const stepIndex = Math.min(9, Math.floor(p / 10));
-
-                if (stepProgress) {
-                    const percentage = (stepIndex / (stepSquares.length - 1)) * 100;
-                    stepProgress.style.width = `${percentage}%`;
-                }
-
-                stepSquares.forEach((sq, idx) => {
-                    const element = sq as HTMLElement;
-                    if (idx <= stepIndex) {
-                        element.classList.add('reached');
-                    } else {
-                        element.classList.remove('reached');
-                    }
-                });
-            };
-
-            updateProgress(0, "Initializing...");
-
-            if (format === 'gszip') {
-                alert("GSZIP export is currently disabled as legacy components were removed.");
-                return;
-            }
-
-            if (format === 'ply') {
-                const blob = new Blob([combinedBuffer], { type: "application/octet-stream" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
-                a.download = `exported_scene_${timestamp}.ply`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }
-        }
-    }
-
     private setupEventListeners() {
-        // 0. Export Button is now handled by sub-buttons (ply/gszip) in the menu.
 
         // 1. Disable Right-Click Context Menu
         window.addEventListener('contextmenu', e => e.preventDefault());
@@ -653,16 +279,166 @@ class Viewer {
         const openBtn = document.getElementById('open-file');
         const fileInput = document.getElementById('file-input') as HTMLInputElement;
         const resetBtn = document.getElementById('reset-cam');
-        const exportPlyBtn = document.getElementById('export-ply');
-        const exportGszipBtn = document.getElementById('export-gszip');
+        const exportTimestampBtn = document.getElementById('export-timestamp'); // #WDD 2026-01-16
 
         openBtn?.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         resetBtn?.addEventListener('click', () => this.resetCamera());
 
-        // New Export Menu Handlers
-        exportPlyBtn?.addEventListener('click', () => this.exportData('ply'));
-        exportGszipBtn?.addEventListener('click', () => this.exportData('gszip'));
+        const startArBtn = document.getElementById('start-ar');
+        const arSelect = document.getElementById('ar-camera-select') as HTMLSelectElement;
+
+        // Populate Cameras
+        let isPopulatingCameras = false;
+        const populateCameras = async () => {
+            // Only populate if not already populated (beyond placeholder)
+            if (!arSelect || arSelect.options.length > 1) return;
+            // #WDD 2026-01-18 Fix: Prevent concurrent camera population
+            if (isPopulatingCameras) return;
+
+            isPopulatingCameras = true;
+            try {
+                const devices = await this.arHandler.getCameraDevices();
+
+                // Double check after await in case another process somehow intervened (unlikely with flag but safe)
+                // #WDD 2026-01-19: Clear existing options (keep placeholder at index 0) before populating to avoid duplicates
+                while (arSelect.options.length > 1) {
+                    arSelect.remove(1);
+                }
+
+                devices.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.text = d.label || `Camera ${i + 1}`;
+                    arSelect.appendChild(opt);
+                });
+            } finally {
+                isPopulatingCameras = false;
+            }
+        };
+
+        // Populate only on explicit interaction (click) to avoid random camera light activation
+        // startArBtn?.addEventListener('mouseenter', populateCameras);
+        // arSelect?.addEventListener('mouseenter', populateCameras);
+
+        arSelect?.addEventListener('click', populateCameras); // For mobile/touch
+
+        startArBtn?.addEventListener('click', async () => {
+            await populateCameras(); // Ensure populated before start if clicked rapidly
+
+            // #WDD 2026-01-19: Update button state AFTER AR action completes
+            if (this.arHandler.isARRunning) {
+                this.arHandler.stop();
+                this.updateToggleButton(startArBtn, false);
+            } else {
+                const deviceId = arSelect?.value;
+                // If placeholder selected, pass undefined (default)
+                await this.arHandler.start(deviceId || undefined);
+                this.updateToggleButton(startArBtn, this.arHandler.isARRunning);
+            }
+        });
+
+        // Handle Select Change
+        arSelect?.addEventListener('change', () => {
+            if (this.arHandler.isARRunning) {
+                this.arHandler.stop();
+                this.arHandler.start(arSelect.value).then(() => {
+                    this.updateToggleButton(startArBtn, true);
+                    updateSettingsUI(); // Refresh settings for new camera
+                });
+            } else {
+                this.arHandler.start(arSelect.value).then(() => {
+                    this.updateToggleButton(startArBtn, true);
+                    updateSettingsUI();
+                });
+            }
+        });
+
+        // #WDD 2026-01-18 Settings UI Logic
+        const settingsBtn = document.getElementById('ar-settings-btn');
+        const settingsPanel = document.getElementById('ar-settings-panel');
+        const closeSettingsBtn = document.getElementById('close-ar-settings');
+        const settingsContent = document.getElementById('ar-settings-content');
+
+        const updateSettingsUI = () => {
+            if (!settingsContent) return;
+            settingsContent.innerHTML = '';
+
+            if (!this.arHandler.isARRunning) {
+                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">Start AR to edit settings</div>';
+                return;
+            }
+
+            const caps = this.arHandler.getCapabilities();
+            const settings = this.arHandler.getSettings();
+
+            if (!caps || !settings) {
+                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">No capabilities available</div>';
+                return;
+            }
+
+            // Helper to create slider
+            const createSlider = (label: string, key: string, min: number, max: number, step: number, value: number) => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col mb-2';
+                div.innerHTML = `
+                    <div class="flex justify-between">
+                        <label class="text-gray-400 capitalize">${label}</label>
+                        <span class="text-gray-300 ml-2" id="val-${key}">${value}</span>
+                    </div>
+                    <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer slider-thumb">
+                `;
+                const input = div.querySelector('input')!;
+                const valSpan = div.querySelector(`#val-${key}`)!;
+
+                input.addEventListener('input', (e) => {
+                    const val = parseFloat((e.target as HTMLInputElement).value);
+                    valSpan.textContent = val.toString();
+                    this.arHandler.applyConstraints({ [key]: val });
+                });
+                return div;
+            };
+
+            // brightness
+            // @ts-ignore
+            if (caps.brightness) {
+                // @ts-ignore
+                settingsContent.appendChild(createSlider('Brightness', 'brightness', caps.brightness.min, caps.brightness.max, caps.brightness.step, settings.brightness));
+            }
+            // contrast
+            // @ts-ignore
+            if (caps.contrast) {
+                // @ts-ignore
+                settingsContent.appendChild(createSlider('Contrast', 'contrast', caps.contrast.min, caps.contrast.max, caps.contrast.step, settings.contrast));
+            }
+            // exposureCompensation
+            // @ts-ignore
+            if (caps.exposureCompensation) {
+                // @ts-ignore
+                settingsContent.appendChild(createSlider('Exposure', 'exposureCompensation', caps.exposureCompensation.min, caps.exposureCompensation.max, caps.exposureCompensation.step, settings.exposureCompensation));
+            }
+
+            if (settingsContent.children.length === 0) {
+                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">Camera supports no adjustable settings</div>';
+            }
+        };
+
+        settingsBtn?.addEventListener('click', () => {
+            settingsPanel?.classList.toggle('hidden');
+            if (!settingsPanel?.classList.contains('hidden')) {
+                updateSettingsUI();
+            }
+        });
+
+        closeSettingsBtn?.addEventListener('click', () => {
+            settingsPanel?.classList.add('hidden');
+        });
+
+        // #WDD 2026-01-19 导出按钮直接导出 SOG4 文件
+        const exportBtn = document.getElementById('export-file');
+        exportBtn?.addEventListener('click', () => {
+            this.saveAsSOG4();
+        });
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
@@ -707,7 +483,10 @@ class Viewer {
                 target.closest('#simplified-panel');
 
             if (!isUIPanel) {
-                this.toggleUIVisibility();
+                // #WDD 2026-01-21 Lock double click on mobile
+                if (!this.isMobile) {
+                    this.toggleUIVisibility();
+                }
             }
         });
 
@@ -884,7 +663,7 @@ class Viewer {
 
             // Immediate visual update
             if (this.splatEntity?.gsplat) {
-                (this.splatEntity.gsplat as any).time = this.currentTime;
+                (this.splatEntity.gsplat as any).time = Math.floor(this.currentTime);
             }
         });
 
@@ -913,7 +692,18 @@ class Viewer {
 
         // Block camera when mouse is over UI panels
         // #WDD 2026-01-15 Added 'control-panel' to the list to cover the entire right area
-        const uiPanels = ['sidebar', 'control-panel', 'time-controls', 'header-brand', 'selection-toolbar'];
+        // #WDD 2026-01-19 Added all UI panels to strictly block camera control
+        const uiPanels = [
+            'sidebar',
+            'control-panel',
+            'time-controls',
+            'header-brand',
+            'selection-toolbar',
+            'text-edit-panel',
+            'simplified-panel',
+            'samples-dropdown',
+            'loading-overlay'
+        ];
         uiPanels.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -923,6 +713,7 @@ class Viewer {
                 isHoveringUI = true; // Extra safety
                 e.stopPropagation();
             });
+            el.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false }); // #WDD 2026-01-19 Block scroll explicitly
             el.addEventListener('touchstart', (e) => {
                 isHoveringUI = true;
                 // Don't stop propagation if we want the actual touch event to reach children (like buttons)
@@ -1002,6 +793,7 @@ class Viewer {
                 e.preventDefault();
                 this.togglePlay();
             }
+            // #WDD 2026-01-16 'e' key removed
         });
 
         const handleEnd = () => {
@@ -1046,8 +838,49 @@ class Viewer {
         });
 
         this.app.mouse.on(pc.EVENT_MOUSEMOVE, (e: pc.MouseEvent) => {
+            // #WDD 2026-01-18 Lock Camera in AR
+            if (this.arHandler && this.arHandler.isARRunning) return;
+
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
             if (!this.camera || isUIInteracting || isHoveringUI || isEditing || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return; // #WDD 2026-01-15 Also check hover
+
+            // #WDD 2026-01-21 Simplified Mode: Orbit Camera (Mouse)
+            // 模式修正: 摄像机围绕原点(0,0,0)在球面上移动 (Orbit)
+            if (this.isUIHidden()) {
+                if (isLMB && this.camera) {
+                    const dx = e.x - lastMousePos.x;
+                    const dy = e.y - lastMousePos.y;
+                    const sens = 0.2;
+
+                    const pos = this.camera.getPosition();
+                    const dist = pos.length();
+
+                    // Yaw: Rotate position around World UP (Y)
+                    const qYaw = new pc.Quat().setFromAxisAngle(pc.Vec3.UP, -dx * sens);
+                    qYaw.transformVector(pos, pos);
+                    this.camera.setPosition(pos);
+                    this.camera.lookAt(pc.Vec3.ZERO); // Update orientation to refresh Right vector
+
+                    // Pitch: Rotate position around Camera Right
+                    const qPitch = new pc.Quat().setFromAxisAngle(this.camera.right, -dy * sens);
+                    qPitch.transformVector(pos, pos);
+
+                    // Re-normalize to ensure spherical surface
+                    pos.normalize();
+                    pos.mulScalar(dist);
+
+                    this.camera.setPosition(pos);
+                    this.camera.lookAt(pc.Vec3.ZERO);
+
+                    // Sync internal state to avoid jumps on mode switch
+                    const eu = this.camera.getEulerAngles();
+                    this.pitch = eu.x;
+                    this.yaw = eu.y;
+                }
+                lastMousePos.set(e.x, e.y);
+                return;
+            }
+
             const dx = e.x - lastMousePos.x;
             const dy = e.y - lastMousePos.y;
 
@@ -1064,6 +897,9 @@ class Viewer {
 
         // Zoom logic #WDD 2026-01-15
         this.app.mouse.on(pc.EVENT_MOUSEWHEEL, (e: any) => {
+            // #WDD 2026-01-18 Lock Camera in AR
+            if (this.arHandler && this.arHandler.isARRunning) return;
+
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
             if (this.camera && !isUIInteracting && !isEditing && (!this.selectionTool || this.selectionTool.currentTool === 'none'))
                 this.camera.translateLocal(0, 0, -e.wheel * 0.5);
@@ -1091,6 +927,9 @@ class Viewer {
         });
 
         this.app.touch.on(pc.EVENT_TOUCHMOVE, (e: any) => {
+            // #WDD 2026-01-18 Lock Camera in AR
+            if (this.arHandler && this.arHandler.isARRunning) return;
+
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
             if (!this.camera || isUIInteracting || isEditing || (this.selectionTool && this.selectionTool.currentTool !== 'none')) return;
             // e.event.preventDefault(); // Managed by PlayCanvas TouchDevice usually, but good for safety
@@ -1107,6 +946,54 @@ class Viewer {
                     lastTouchPos.set((t0.x + t1.x) / 2, (t0.y + t1.y) / 2);
                 }
                 return; // Skip movement this frame to avoid jumps
+            }
+
+            // #WDD 2026-01-21 Simplified Mode: Orbit Camera (Touch)
+            // 模式修正: 摄像机围绕原点(0,0,0)在球面上移动 (Orbit)
+            if (this.isUIHidden()) {
+                if (e.touches.length === 1 && this.camera) {
+                    const t = e.touches[0];
+                    const dx = t.x - lastMousePos.x;
+                    const dy = t.y - lastMousePos.y;
+                    const sens = 0.2;
+
+                    const pos = this.camera.getPosition();
+                    const dist = pos.length();
+
+                    // Yaw
+                    const qYaw = new pc.Quat().setFromAxisAngle(pc.Vec3.UP, -dx * sens);
+                    qYaw.transformVector(pos, pos);
+                    this.camera.setPosition(pos);
+                    this.camera.lookAt(pc.Vec3.ZERO);
+
+                    // Pitch
+                    const qPitch = new pc.Quat().setFromAxisAngle(this.camera.right, -dy * sens);
+                    qPitch.transformVector(pos, pos);
+
+                    pos.normalize();
+                    pos.mulScalar(dist);
+
+                    this.camera.setPosition(pos);
+                    this.camera.lookAt(pc.Vec3.ZERO);
+
+                    const eu = this.camera.getEulerAngles();
+                    this.pitch = eu.x;
+                    this.yaw = eu.y;
+
+                    lastMousePos.set(t.x, t.y);
+                } else if (e.touches.length === 2 && this.camera) {
+                    // Keep Zoom for convenience
+                    const t0 = e.touches[0];
+                    const t1 = e.touches[1];
+
+                    // Pinch to Zoom
+                    const dist = Math.hypot(t0.x - t1.x, t0.y - t1.y);
+                    const deltaDist = dist - lastTouchDistance;
+                    this.camera.translateLocal(0, 0, -deltaDist * 0.02);
+                    lastTouchDistance = dist;
+                    // Disable Pan
+                }
+                return;
             }
 
             if (e.touches.length === 1) {
@@ -1198,7 +1085,8 @@ class Viewer {
             const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
 
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
-            if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.isCameraAnimating && !isTyping) {
+            // #WDD 2026-01-18 Lock Camera in AR (Added isARRunning check)
+            if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.isCameraAnimating && !isTyping && !(this.arHandler && this.arHandler.isARRunning)) {
                 const speed = dt * 5;
                 if (keys['KeyW']) this.camera.translateLocal(0, 0, -speed);
                 if (keys['KeyS']) this.camera.translateLocal(0, 0, speed);
@@ -1235,11 +1123,10 @@ class Viewer {
                 }
                 if (timeLabel) timeLabel.innerText = `${displayFrame} / ${total}`;
 
-                // Update time uniform for custom shader
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
-                        const shaderTime = this.currentTime; // #WDD 2026-01-16: Use continuous time for smooth interpolation
+                        const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
                         material.setParameter('uTime', shaderTime);
                         material.setParameter('uGlobalTotalFrames', this.duration);
                     }
@@ -1249,7 +1136,7 @@ class Viewer {
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
-                        const shaderTime = this.currentTime; // #WDD 2026-01-16
+                        const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
                         material.setParameter('uTime', shaderTime);
                         material.setParameter('uGlobalTotalFrames', this.duration);
                     }
@@ -1344,9 +1231,14 @@ class Viewer {
             mainRow.dataset.index = index.toString();
 
             mainRow.innerHTML = `
-                <div class="flex items-center gap-2 overflow-hidden flex-1 cursor-pointer">
-                    <div class="ui-dot"></div>
-                    <span class="preset-name text-[9px] ui-text-primary font-medium truncate">${preset.name}</span>
+                <div class="flex items-center gap-2 overflow-hidden flex-1 cursor-pointer justify-between">
+                    <div class="flex items-center gap-2 overflow-hidden">
+                        <div class="ui-dot"></div>
+                        <span class="preset-name text-[9px] ui-text-primary font-medium truncate">${preset.name}</span>
+                    </div>
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current opacity-40 flex-shrink-0">
+                        <path d="M7 10l5 5 5-5z"/>
+                    </svg>
                 </div>
                 <div class="flex items-center gap-1">
                     <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text">
@@ -1779,6 +1671,8 @@ class Viewer {
     }
 
     private toggleUIVisibility(forceHidden?: boolean) {
+
+
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
@@ -1787,23 +1681,38 @@ class Viewer {
 
         const shouldHide = forceHidden !== undefined ? forceHidden : !this.isUIHidden();
 
+        // #WDD 2026-01-21 Lock UI on mobile (prevent showing)
+        if (this.isMobile && !shouldHide) {
+            return;
+        }
+
         if (shouldHide) {
             sidebar?.classList.add('sidebar-hidden');
             playbar?.classList.add('bottom-bar-hidden');
             selectionToolbar?.classList.add('tools-hidden');
             controlPanel?.classList.add('panel-hidden');
             simplifiedPanel?.classList.remove('hidden-panel');
+
+            // #WDD 2026-01-21 Hide Grid/Axes in Simplified Mode
+            if (this.gridEntity) this.gridEntity.enabled = false;
+            if (this.axesEntity) this.axesEntity.enabled = false;
         } else {
             sidebar?.classList.remove('sidebar-hidden');
             playbar?.classList.remove('bottom-bar-hidden');
             selectionToolbar?.classList.remove('tools-hidden');
             controlPanel?.classList.remove('panel-hidden');
             simplifiedPanel?.classList.add('hidden-panel');
+
+            // #WDD 2026-01-21 Restore Grid/Axes based on UI state
+            const btnGrid = document.getElementById('toggle-grid');
+            const btnAxes = document.getElementById('toggle-axes');
+            if (this.gridEntity && btnGrid) this.gridEntity.enabled = btnGrid.classList.contains('active');
+            if (this.axesEntity && btnAxes) this.axesEntity.enabled = btnAxes.classList.contains('active');
         }
     }
 
     private async loadSampleFile(url: string) {
-        const filename = url.split('/').pop() || 'sample.gszip';
+        const filename = url.split('/').pop() || 'sample.truesplats';
 
         // Initial setup for the UI through a dummy call to loadFile's initial logic
         // We'll manually trigger the overlay since loadFile happens AFTER download
@@ -1886,8 +1795,8 @@ class Viewer {
         }
 
         const name = file.name.toLowerCase();
-        if (!name.endsWith('.truesplats')) {
-            alert('Please drop a .truesplats file');
+        if (!name.endsWith('.truesplats') && !name.endsWith('.sog4') && !name.endsWith('.ply') && !name.endsWith('.ply4')) {
+            alert('Please drop a .truesplats, .sog4, .ply, or .ply4 file');
             return;
         }
 
@@ -1936,16 +1845,52 @@ class Viewer {
         try {
             setProgress(9, "READY", "Processing Asset...");
 
-            const loader = new TrueSplatsLoader(this.app);
-            const parsed = await loader.load(file, (p: number, msg: string) => {
-                setProgress(Math.floor(p / 10), "LOADING", msg);
-            });
+            let parsed;
+            let loader: any;
+            const lowerName = file.name.toLowerCase();
+
+            // #WDD 2026-01-19 Fix: Support both .sog and .sog4
+            if (lowerName.endsWith('.sog4') || lowerName.endsWith('.sog')) {
+                console.log("[Viewer] Using SOG4Loader for", file.name);
+                loader = new SOG4Loader(this.app);
+                parsed = await loader.load(file, (p: number, msg: string) => {
+                    setProgress(Math.floor(p / 10), "LOADING", msg);
+                });
+            } else if (lowerName.endsWith('.truesplats')) {
+                console.log("[Viewer] Using TrueSplatsLoader for", file.name);
+                loader = new TrueSplatsLoader(this.app);
+                parsed = await loader.load(file, (p: number, msg: string) => {
+                    setProgress(Math.floor(p / 10), "LOADING", msg);
+                });
+            } else if (lowerName.endsWith('.ply4') || lowerName.endsWith('.ply')) {
+                console.log("[Viewer] Using PLY4Loader for", file.name);
+                loader = new PLY4Loader(); // #WDD 2026-01-21 Use PLY4Loader
+                parsed = await loader.load(file, (p: number, msg: string) => {
+                    setProgress(Math.floor(p / 10), "LOADING", msg);
+                });
+            } else {
+                console.warn("[Viewer] Unknown extension, defaulting to TrueSplatsLoader:", file.name);
+                loader = new TrueSplatsLoader(this.app);
+                parsed = await loader.load(file, (p: number, msg: string) => {
+                    setProgress(Math.floor(p / 10), "LOADING", msg);
+                });
+            }
+
+            // #WDD 2026-01-16 DEBUG: Sort by Frame 20 - REMOVED
+            // We rely on updateDynamicPositions now.
+
 
             if (parsed) {
+                this.lastParsedData = parsed; // #WDD 2026-01-18 Fix: Persist loaded data
                 const count = parsed.count;
 
-                // #WDD 2026-01-16: Removed Static Frame 0 override to support full 4D logic
+                // #WDD 2026-01-16: Force Static Frame 0 for debugging
+                const forceStatic = false;
                 let elements = parsed.plyData.elements;
+                if (forceStatic) {
+                    console.log(`[Debug] Forcing Static Frame 0 Reconstruction (Verified getFrameElements Path)...`);
+                    elements = loader.getFrameElements(0);
+                }
 
                 // TrueSplatsLoader returns a ready-to-use vertexElement in plyData
                 let vertexElement = elements[0];
@@ -1964,15 +1909,87 @@ class Viewer {
 
                 const entity = new pc.Entity('GSplat');
                 entity.addComponent('gsplat', { asset: asset });
+
+                // #WDD 2026-01-18 AR Compatibility: Robust Parenting
+                let arScaleFactor = 1.0;
+
+                // 1. Always add to Root first (World Origin)
                 this.app.root.addChild(entity);
+
+                // 2. If AR is running, move to Anchor
+                if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) {
+                    console.log("[Viewer] AR Active: Reparenting new Splat to AR Anchor");
+
+                    // Reparent to Anchor.
+                    // IMPORTANT: We want it to SNAP to the Anchor's position (the Marker), 
+                    // not keep its world position (which is 0,0,0 / the Camera).
+                    // So we use addChild (keeps local transform) if we were creating fresh, 
+                    // but since we added to root, we `reparent`.
+                    // Wait, `reparent` KEEPS World Position. If World was 0, it stays 0.
+                    // We WANT it to go to the Marker. The Marker is at Anchor Pos.
+                    // So we want Local Position to be (0,0,0).
+
+                    this.arHandler.arAnchor.addChild(entity); // Start as child
+
+                    // Reset Local Transform to Snap to Marker
+                    entity.setLocalPosition(0, 0, 0);
+                    entity.setLocalRotation(new pc.Quat().setFromEulerAngles(0, 0, 0));
+
+                    // Normalize Scale Logic
+                    const pScale = this.arHandler.arAnchor.getLocalScale().x;
+                    console.log(`[Viewer] AR Anchor Scale: ${pScale}`);
+                    if (pScale !== 0) {
+                        arScaleFactor = 1.0 / pScale;
+                        // #WDD 2026-01-18 Fix: Do NOT compensate Entity Scale. 
+                        // We WANT it to inherit the 5x magnification. 
+                        // Only compensate Position so it doesn't fly away.
+                        // entity.setLocalScale(arScaleFactor, arScaleFactor, arScaleFactor); 
+                    }
+                }
+
                 this.splatEntity = entity;
+
+                // #WDD 2026-01-18: Restore Model Transform if present
+                if (parsed.model_transform) {
+                    const t = parsed.model_transform;
+                    console.log("[TrueSplats] applying model_transform with arFactor for Pos:", arScaleFactor, t);
+
+                    // Apply AR Compensation to Loaded Transform
+                    // Compensate POS (multiply by 0.2) because Parent is scaled 5x. 5 * 0.2 = 1.0 (World Units maintained)
+                    if (t.pos) entity.setLocalPosition(t.pos[0] * arScaleFactor, t.pos[1] * arScaleFactor, t.pos[2] * arScaleFactor);
+
+                    if (t.rot) entity.setLocalRotation(new pc.Quat(t.rot[0], t.rot[1], t.rot[2], t.rot[3]));
+
+                    // Do NOT compensate Scale. Let it inherit AR Scale (Magnified).
+                    if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
+                } else {
+                    console.log("[TrueSplats] No model_transform found. Using default 0,0,0 local.");
+                }
+
+                console.log("[Viewer] Final Entity World Pos:", entity.getPosition().toString());
+                console.log("[Viewer] Final Entity World Scale:", entity.getLocalScale().toString());
+
+                // #WDD 2026-01-18: Restore Camera Presets if present
+                if (parsed.cameras && Array.isArray(parsed.cameras)) {
+                    this.cameraPresets = parsed.cameras.map((c: any) => ({
+                        name: c.name,
+                        pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                        pitch: c.pitch,
+                        yaw: c.yaw,
+                        textObjects: c.textObjects
+                    }));
+                    this.renderPresets(); // Ensure UI updates
+                    console.log(`[TrueSplats] Restored \${this.cameraPresets.length} Camera Presets`);
+                }
 
                 setProgress(9, "READY", "System Update Complete");
                 setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
 
                 // Finalize
                 this.updateStats(asset);
-                this.resetObjectTransformUI();
+                this.updateStats(asset);
+                this.updateTransformUIFromEntity(); // #WDD 2026-01-18: Sync UI with restored transform
+                this.resetCamera();
                 this.resetCamera();
                 const container = document.getElementById('timeline-ticks');
                 if (container) container.innerHTML = '';
@@ -1989,21 +2006,110 @@ class Viewer {
         }
     }
 
+    // #WDD 2026-01-17: Dynamic Sorting Update
+    // #WDD 2026-01-17: Dynamic Sorting Update
+    // #WDD 2026-01-17: Dynamic Sorting Update
+    private updateDynamicPositions(time: number) {
+        if (!this.posArrays || !this.trajectoryData || !this.is4DGS) return;
+        if (!this.splatEntity || !this.splatEntity.gsplat) return;
+
+        const K = this.keyframes;
+        const stride = this.xyzStride;
+        const traj = this.trajectoryData;
+        const N = this.posArrays.x.length;
+
+        // Calculate interpolation vars
+        const idx = Math.floor(time / stride);
+        const k0 = Math.min(Math.max(0, idx), K - 2);
+        const k1 = k0 + 1;
+
+        const t0 = k0 * stride;
+        const t1 = k1 * stride;
+        const ratio = Math.max(0, Math.min(1, (time - t0) / (t1 - t0)));
+
+        const xArr = this.posArrays.x;
+        const yArr = this.posArrays.y;
+        const zArr = this.posArrays.z;
+
+        // Optimized loop
+        const origIndices = this.originalIndices;
+
+        // #WDD 2026-01-17: Sync to Sorter
+        const instance = (this.splatEntity.gsplat as any).instance;
+        const centers = instance?.sorter?.centers;
+
+        for (let i = 0; i < N; i++) {
+            // If we have original indices (sorted -> original mapping), usage it.
+            // Otherwise assume data is pre-sorted.
+            const oidx = origIndices ? Math.round(origIndices[i]) : i;
+            const base = oidx * K * 3;
+            const b0 = base + k0 * 3;
+            const b1 = base + k1 * 3;
+
+            const x0 = traj[b0 + 0], y0 = traj[b0 + 1], z0 = traj[b0 + 2];
+            const x1 = traj[b1 + 0], y1 = traj[b1 + 1], z1 = traj[b1 + 2];
+
+            const nx = x0 + (x1 - x0) * ratio;
+            const ny = y0 + (y1 - y0) * ratio;
+            const nz = z0 + (z1 - z0) * ratio;
+
+            xArr[i] = nx;
+            yArr[i] = ny;
+            zArr[i] = nz;
+
+            if (centers) {
+                centers[i * 3 + 0] = nx;
+                centers[i * 3 + 1] = ny;
+                centers[i * 3 + 2] = nz;
+            }
+        }
+
+        // #WDD 2026-01-17: Force Worker Update
+        // instance.sorter.centers is updated, but Worker has a stale copy.
+        // We must send the new centers to the worker.
+        if (centers && instance.sorter.worker) {
+            // Important: varying checks to ensure stability
+            // We MUST copy the buffer because sending it transfers ownership (detaches it),
+            // which would crash the Main Thread on the next frame access.
+            const centersCopy = new Float32Array(centers);
+            instance.sorter.worker.postMessage({
+                centers: centersCopy.buffer
+            }, [centersCopy.buffer]);
+        }
+
+        // PlayCanvas's GSplat sorter reads these arrays (referenced by GSplatData) naturally 
+        // when calculating depth, assuming it runs every frame.
+    }
+
+
+    private posArrays: { x: Float32Array, y: Float32Array, z: Float32Array } | null = null;
+
     private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
         this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
         this.totalFrames = this.duration; // #WDD 2026-01-16: Keep sync
         this.originalFrames = originalFrames;
+        this.lastParsedData = parsed;
 
         const splatData = (asset.resource as pc.GSplatResource).splatData;
         const overlay = document.getElementById('loading-overlay');
 
         console.log(`[Finalize] Splats: ${numSplats}, GSplatData Num: ${splatData.numSplats}`);
 
+        const res = asset.resource as any;
+        let width = Math.ceil(Math.sqrt(numSplats));
+        if (res?.colorTexture) width = res.colorTexture.width;
+        else if (res?.transformATexture) width = res.transformATexture.width;
+        const height = Math.ceil(numSplats / width);
+
         // --- Cache Positions for Selection ---
         const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
         if (x && y && z) {
             console.log(`[Debug] First 3 positions: (${x[0].toFixed(3)}, ${y[0].toFixed(3)}, ${z[0].toFixed(3)}), (${x[1].toFixed(3)}, ${y[1].toFixed(3)}, ${z[1].toFixed(3)}), (${x[2].toFixed(3)}, ${y[2].toFixed(3)}, ${z[2].toFixed(3)})`);
             const num = Math.min(splatData.numSplats, x.length, y.length, z.length);
+
+            // #WDD 2026-01-17: Cache for Dynamic Sorting
+            this.posArrays = { x: x as Float32Array, y: y as Float32Array, z: z as Float32Array };
+
             this.cachedPositions = new Float32Array(num * 3);
             for (let i = 0; i < num; i++) {
                 this.cachedPositions[i * 3 + 0] = x[i];
@@ -2014,6 +2120,8 @@ class Viewer {
         if (this.cachedPositions) this.selectionTool.init(this.cachedPositions.length / 3);
 
         const origIndices = splatData.getProp('original_index');
+        this.originalIndices = origIndices ? (origIndices as Float32Array) : null; // #WDD 2026-01-17
+
         if (origIndices) {
             console.log(`[Finalize] Reordering Check: First Index=${origIndices[0]}, Last Index=${origIndices[numSplats - 1]}`);
             if (origIndices[0] !== 0) {
@@ -2028,45 +2136,48 @@ class Viewer {
                 pitch: c.pitch, yaw: c.yaw, textObjects: c.textObjects
             }));
             this.renderPresets();
+            this.renderPresets();
             this.syncTextOverlays();
         }
 
+        // #WDD 2026-01-18: Restore Deleted Splats
+        if (parsed.deleted_indices && parsed.deleted_indices.length > 0) {
+            console.log(`[Finalize] Restoring ${parsed.deleted_indices.length} deleted splats...`);
+            this.selectionTool.restoreDeletedIndices(parsed.deleted_indices);
+        }
+
         // --- Lifetime Texture ---
-        const muArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_mu').storage;
-        const wArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_w').storage;
-        const kArrRaw = parsed.plyData.elements[0].properties.find((p: any) => p.name === 'lifetime_k').storage;
-        let lifeTexture: pc.Texture | null = null;
+        // #WDD 2026-01-17 Restore LifeTexData population
+        const mu = splatData.getProp('lifetime_mu');
+        const w = splatData.getProp('lifetime_w');
+        const kArr = splatData.getProp('lifetime_k');
 
-        // Use consistent dimensions with PlayCanvas internal textures
-        const res = asset.resource as any;
-        let width = Math.ceil(Math.sqrt(splatData.numSplats));
-        if (res.colorTexture) width = res.colorTexture.width;
-        else if (res.transformATexture) width = res.transformATexture.width;
-        const height = Math.ceil(splatData.numSplats / width);
-
-        if (muArrRaw && wArrRaw && kArrRaw) {
-            // #WDD 2026-01-16 Scale values to 0-255 for RGBA8 compatibility
-            const timeScale = 255.0 / (this.duration || 50);
-            console.log(`[Finalize] Encoding Lifetime Texture (Original Order) with timeScale: ${timeScale}`);
-            const texData = new Uint8Array(width * height * 4);
+        if (mu && w) {
+            this.lifeTexData = new Float32Array(width * height * 4);
             for (let i = 0; i < numSplats; i++) {
-                texData[i * 4 + 0] = Math.max(0, Math.min(255, muArrRaw[i] * timeScale));
-                texData[i * 4 + 1] = Math.max(0, Math.min(255, wArrRaw[i] * timeScale));
-                texData[i * 4 + 2] = Math.max(0, Math.min(255, (kArrRaw[i] / 20.0) * 255.0));
-                texData[i * 4 + 3] = 255;
+                this.lifeTexData[i * 4 + 0] = mu[i];
+                this.lifeTexData[i * 4 + 1] = w[i];
+                this.lifeTexData[i * 4 + 2] = kArr ? kArr[i] : 10.0;
+                this.lifeTexData[i * 4 + 3] = 0.0;
             }
+        }
+
+        let lifeTexture: pc.Texture | null = null;
+        if (this.lifeTexData) {
             lifeTexture = new pc.Texture(this.app.graphicsDevice, {
-                width, height, format: pc.PIXELFORMAT_RGBA8, mipmaps: false,
+                width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
                 minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
                 addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'lifetimeTexture'
             });
             const dst = lifeTexture.lock();
-            dst.set(texData);
+            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(this.lifeTexData);
             lifeTexture.unlock();
         }
 
-        // --- 4DGS Trajectory Texture ---
+        // --- Trajectory Texture ---
         let trajectoryTexture: pc.Texture | null = null;
+
+        // --- 4DGS Trajectory Texture ---
         if (parsed.trajectory) {
             this.is4DGS = true;
             this.trajectoryData = parsed.trajectory as Float32Array;
@@ -2080,14 +2191,21 @@ class Viewer {
             const texHeight = Math.ceil(totalPixels / texWidth);
             const texData = new Float32Array(texWidth * texHeight * 4);
 
-            // #WDD 2026-01-16: Use Original Order (Shader uses splatId)
+            // #WDD 2026-01-16: Fix - Data is ALREADY SORTED in data.bin
+            // #WDD 2026-01-17: Restore Reordering Logic if original_index exists
+            const origIndices = splatData.getProp('original_index');
+
             for (let i = 0; i < numSplats; i++) {
+                const oidx = origIndices ? Math.round(origIndices[i]) : i;
+
                 for (let k = 0; k < K; k++) {
-                    const srcOff = (i * K + k) * 3;
-                    const dstOff = (i * K + k) * 4;
+                    const srcOff = (oidx * K + k) * 3; // Source from Original Index (BIN)
+                    const dstOff = (i * K + k) * 4;    // Destination to Sorted Index (Texture)
+
                     texData[dstOff + 0] = trajData[srcOff + 0];
                     texData[dstOff + 1] = trajData[srcOff + 1];
                     texData[dstOff + 2] = trajData[srcOff + 2];
+                    texData[dstOff + 3] = 1.0;
                 }
             }
 
@@ -2116,16 +2234,45 @@ class Viewer {
             const texHeight = Math.ceil(totalPixels / texWidth);
             const texData = new Float32Array(texWidth * texHeight * 4);
 
-            // #WDD 2026-01-16: Use Original Order
+            // #WDD 2026-01-16: Standardize to [x, y, z, w] with reorder alignment
+            const origIndices = splatData.getProp('original_index');
+            if (origIndices) {
+                console.log(`[Debug] 'original_index' detected. First 5: ${origIndices.slice(0, 5).join(', ')}`);
+            } else {
+                console.log("[Debug] No 'original_index' property found. Assuming data is linear/pre-sorted.");
+            }
+
             for (let i = 0; i < numSplats; i++) {
+                // If original_index exists, use it to lookup trajectory from the RAW/Unsorted BIN
+                // If BIN was sorted same as PLY, this would not be needed.
+                // But typically 4DGS BINs are often unsorted.
+                const oidx = origIndices ? Math.round(origIndices[i]) : i;
+
                 for (let k = 0; k < Kvar; k++) {
-                    const srcOff = (i * Kvar + k) * 4;
-                    const dstOff = (i * Kvar + k) * 4;
-                    texData[dstOff + 0] = rotData[srcOff + 0];
-                    texData[dstOff + 1] = rotData[srcOff + 1];
-                    texData[dstOff + 2] = rotData[srcOff + 2];
-                    texData[dstOff + 3] = rotData[srcOff + 3];
+                    const srcOff = (oidx * Kvar + k) * 4; // Source from Original Index (BIN)
+                    const dstOff = (i * Kvar + k) * 4;    // Destination to Sorted Index (Texture)
+
+                    texData[dstOff + 0] = rotData[srcOff + 1]; // x
+                    texData[dstOff + 1] = rotData[srcOff + 2]; // y
+                    texData[dstOff + 2] = rotData[srcOff + 3]; // z
+                    texData[dstOff + 3] = rotData[srcOff + 0]; // w
                 }
+            }
+
+            // DEBUG: Compare Static vs Dynamic Rotation for Point 0
+            const r0 = splatData.getProp('rot_0');
+            const r1 = splatData.getProp('rot_1');
+            const r2 = splatData.getProp('rot_2');
+            const r3 = splatData.getProp('rot_3');
+            if (r0 && r1 && r2 && r3 && this.rotTrajectoryData) {
+                const i = 0;
+                const staticRot = [r0[i], r1[i], r2[i], r3[i]];
+                const dynRot = [this.rotTrajectoryData[0], this.rotTrajectoryData[1], this.rotTrajectoryData[2], this.rotTrajectoryData[3]];
+                const texRot = [texData[0], texData[1], texData[2], texData[3]];
+                console.log(`[Debug] Point 0 Rotation Comparison:`);
+                console.log(`  Static (PLY): [${staticRot.map(v => v.toFixed(3))}]`);
+                console.log(`  Dynamic (BIN): [${dynRot.map(v => v.toFixed(3))}]`);
+                console.log(`  Texture (XYZW): [${texRot.map(v => v.toFixed(3))}]`);
             }
 
             rotationTexture = new pc.Texture(this.app.graphicsDevice, {
@@ -2152,6 +2299,7 @@ class Viewer {
                 texData[i * 4 + 2] = s2[i];
                 texData[i * 4 + 3] = 0.0;
             }
+            this.scalesTexData = texData;
             scalesTexture = new pc.Texture(this.app.graphicsDevice, {
                 width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
                 minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
@@ -2162,61 +2310,6 @@ class Viewer {
             scalesTexture.unlock();
         }
 
-        // --- Opacity Animation Texture (CPU Calculated) #WDD 2026-01-17 ---
-        // Pre-calculating opacity gating on CPU to save GPU cycles and ensure consistency.
-        let opacityAnimTexture: pc.Texture | null = null;
-        if (this.is4DGS && muArrRaw && wArrRaw) {
-            console.log(`[Finalize] #WDD 2026-01-17 Pre-calculating Opacity Animation Texture for ${numSplats} splats and ${this.totalFrames} frames...`);
-
-            const T = Math.ceil(this.totalFrames);
-            const totalValues = numSplats * T;
-
-            // Limit texture width to something reasonable (8192 is safe on most modern GPUs)
-            const texWidth = 8192;
-            const texHeight = Math.ceil(totalValues / texWidth);
-            const texData = new Uint8Array(texWidth * texHeight);
-
-            const sigmoid = (v: number) => 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, v))));
-
-            for (let i = 0; i < numSplats; i++) {
-                const mu = muArrRaw[i];
-                const w = wArrRaw[i];
-                const k = kArrRaw ? kArrRaw[i] : 10.0;
-
-                for (let t = 0; t < T; t++) {
-                    const argLeft = k * (t - (mu - w));
-                    const left = sigmoid(argLeft);
-                    const argRight = -k * (t - (mu + w));
-                    const right = sigmoid(argRight);
-
-                    let visibility = left * right;
-
-                    // Hard cutoff for performance/leakage prevention
-                    if (t < (mu - w - 1.0) || t > (mu + w + 1.0)) {
-                        visibility = 0.0;
-                    }
-
-                    const idx = i * T + t;
-                    texData[idx] = Math.floor(visibility * 255);
-                }
-            }
-
-            opacityAnimTexture = new pc.Texture(this.app.graphicsDevice, {
-                width: texWidth,
-                height: texHeight,
-                format: pc.PIXELFORMAT_L8,
-                mipmaps: false,
-                minFilter: pc.FILTER_NEAREST,
-                magFilter: pc.FILTER_NEAREST,
-                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-                name: 'uOpacityAnimationTexture'
-            });
-            const dst = opacityAnimTexture.lock();
-            dst.set(texData);
-            opacityAnimTexture.unlock();
-        }
-
         if (this.splatEntity?.gsplat) {
             this.setupLifetimeShader(
                 (this.splatEntity.gsplat as any).instance,
@@ -2225,17 +2318,27 @@ class Viewer {
                 rotationTexture, parsed.rotKeyframes,
                 this.duration, // #WDD 2026-01-16 Use calculated duration
                 scalesTexture,
-                parsed.bands, // #WDD 2026-01-16 Pass bands
-                opacityAnimTexture
+                parsed.bands || 3 // #WDD 2026-01-16
             );
         }
 
-        this.originalFrames = originalFrames;
-        this.duration = originalFrames || parsed.maxMu || 100;
+        // #WDD 2026-01-19: Robustly persist parsed data for export
+        if (parsed) {
+            console.log("[Viewer] Persisting parsed data for export (finalize). isSOG4:", parsed.isSOG4);
+            this.lastParsedData = parsed;
+        }
+
+        this.updateToggleButton(document.getElementById('mode-default') as HTMLElement, true);
+        this.updateToggleButton(document.getElementById('mode-selection') as HTMLElement, false);
+
+        // #WDD 2026-01-17 Restore Slider Logic
         const slider = (document.getElementById('time-slider') as HTMLInputElement);
-        // #WDD 2026-01-16 Fix: Max index is duration - 1
         const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
-        if (slider) { slider.max = maxIdx.toString(); slider.step = "0.1"; slider.value = "0"; }
+        if (slider) {
+            slider.max = maxIdx.toString();
+            slider.step = "0.1";
+            slider.value = "0";
+        }
         this.updateTimelineTicks(this.duration);
         const timeLabel = document.getElementById('time-label');
         if (timeLabel) timeLabel.innerText = `0 / ${maxIdx}`;
@@ -2243,7 +2346,11 @@ class Viewer {
         setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
         this.updateStats(asset);
 
-        if (parsed.pose) {
+        if (parsed.model_transform) {
+            // #WDD 2026-01-19: Embedded transform takes precedence over cache
+            console.log("[Viewer] Finalize: Respecting embedded model_transform, skipping cache.");
+            this.updateTransformUIFromEntity();
+        } else if (parsed.pose) {
             if (this.splatEntity) {
                 this.splatEntity.setPosition(parseFloat(parsed.pose.px), parseFloat(parsed.pose.py), parseFloat(parsed.pose.pz));
                 this.splatEntity.setEulerAngles(parseFloat(parsed.pose.rx), parseFloat(parsed.pose.ry), parseFloat(parsed.pose.rz));
@@ -2257,28 +2364,17 @@ class Viewer {
         } else {
             this.resetObjectTransformUI();
         }
-        this.resetCamera();
-    }
-    // Selection Tool Support
-    private updateSelectionUniform(tex: pc.Texture) {
-        if (this.splatEntity?.gsplat) {
-            const instance = (this.splatEntity.gsplat as any).instance;
-            if (instance && instance.material) {
-                instance.material.setParameter('selectionTexture', tex);
-                instance.material.update();
-            }
-        }
     }
 
-    updateSelectionModeParams(isSelecting: boolean) {
-        if (this.splatEntity?.gsplat) {
-            const instance = (this.splatEntity.gsplat as any).instance;
-            if (instance && instance.material) {
-                instance.material.setParameter('isSelectionMode', isSelecting ? 1.0 : 0.0);
-                instance.material.update();
-            }
-        }
-    }
+
+
+
+
+
+
+
+
+
 
     private async setupLifetimeShader(
         instance: any,
@@ -2289,10 +2385,9 @@ class Viewer {
         rotKeyframes: number = 0,
         totalFrames: number = 0,
         scalesTexture: pc.Texture | null = null,
-        bands: number = 0, // #WDD 2026-01-16
-        opacityAnimTexture: pc.Texture | null = null // #WDD 2026-01-17
+        bands: number = 0 // #WDD 2026-01-16
     ) {
-        console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands, opacityAnimTexture });
+        console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands });
 
         const material = instance.material;
         material.setParameter('uTime', 0.0);
@@ -2305,10 +2400,6 @@ class Viewer {
 
         if (totalFrames > 0) {
             material.setParameter('uGlobalTotalFrames', totalFrames);
-        }
-
-        if (opacityAnimTexture) {
-            material.setParameter('uOpacityAnimationTexture', opacityAnimTexture);
         }
 
         if (trajectoryTexture) {
@@ -2332,8 +2423,7 @@ class Viewer {
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // --- ROBUST SHADER INJECTION ---
-        // #WDD 2026-01-17 [Confirmation] This interceptor ensures that PlayCanvas uses our custom 
-        // splatCoreVS, splatMainVS, and splatMainPS for rendering.
+
         const originalGetShaderVariant = material.getShaderVariant;
 
         material.getShaderVariant = function (device: any, scene: any, defs: any, unused: any, pass: any, sortedLights: any, viewUniformFormat: any, viewBindGroupFormat: any) {
@@ -2348,21 +2438,16 @@ class Viewer {
                     // We must bypass the original generator's concatenation because it uses a broken splatCoreVS.
                     // Instead, we construct the full shader here using our FIXED core and mains.
 
-                    // #WDD 2026-01-17 Enable 4D logic for trajectory and rotation
-                    if (lifetimeTexture || opacityAnimTexture) {
-                        console.log("[ShaderInject] Defining USE_LIFETIME_TEXTURE / ANIM");
-                        if (opacityAnimTexture) {
-                            if (!options.defines.includes('USE_LIFETIME_ANIM_TEXTURE')) options.defines.push('USE_LIFETIME_ANIM_TEXTURE');
-                        } else {
-                            if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
-                        }
+                    // 1. Prepare Defines
+                    if (!options.defines) options.defines = [];
+                    if (lifetimeTexture) {
+                        console.log("[ShaderInject] Defining USE_LIFETIME_TEXTURE");
+                        if (!options.defines.includes('USE_LIFETIME_TEXTURE')) options.defines.push('USE_LIFETIME_TEXTURE');
                     }
                     if (trajectoryTexture) {
-                        console.log("[ShaderInject] Defining USE_TRAJECTORY");
                         if (!options.defines.includes('USE_TRAJECTORY')) options.defines.push('USE_TRAJECTORY');
                     }
                     if (rotationTexture) {
-                        console.log("[ShaderInject] Defining USE_ROTATION");
                         if (!options.defines.includes('USE_ROTATION')) options.defines.push('USE_ROTATION');
                     }
 
@@ -2465,11 +2550,35 @@ class Viewer {
     // private createPointCloud... Removed
 
 
+    public updateSelectionUniform(tex: pc.Texture) {
+        if (this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            if (instance && instance.material) {
+                instance.material.setParameter('selectionTexture', tex);
+                instance.material.update();
+            }
+        }
+    }
+
+    public updateSelectionModeParams(isSelecting: boolean) {
+        if (this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            if (instance && instance.material) {
+                instance.material.setParameter('isSelectionMode', isSelecting ? 1.0 : 0.0);
+                instance.material.update();
+            }
+        }
+    }
+
+
 
 
 
     private resetCamera() {
         if (!this.camera) return;
+        // #WDD 2026-01-18 Skip reset if AR is running to maintain alignment
+        if (this.arHandler && this.arHandler.isARRunning) return;
+
         if (this.cameraPresets.length > 0) {
             const first = this.cameraPresets[0];
             this.camera.setPosition(first.pos);
@@ -2498,6 +2607,8 @@ class Viewer {
     }
 
     private onUpdate(dt: number) {
+        if (this.arHandler) this.arHandler.update();
+
         this.fpsCounter++;
         this.fpsTimer += dt;
         if (this.fpsTimer >= 1) {
@@ -2505,6 +2616,32 @@ class Viewer {
             if (fpsElem) fpsElem.innerText = Math.round(this.fpsCounter).toString();
             this.fpsCounter = 0;
             this.fpsTimer = 0;
+        }
+
+        // #WDD 2026-01-17: Handle Playback
+        if (this.isPlaying) {
+            this.currentTime += dt * 10.0; // 10 FPS for 4DGS usually sufficient, can tune
+            if (this.currentTime >= this.duration) {
+                this.currentTime = 0;
+            }
+
+            // Sync UI
+            const slider = document.getElementById('time-slider') as HTMLInputElement;
+            if (slider) slider.value = this.currentTime.toString();
+
+            const timeLabel = document.getElementById('time-label');
+            const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
+            if (timeLabel) timeLabel.innerText = `${Math.floor(this.currentTime)} / ${maxIdx}`;
+
+            // Sync Shader
+            if (this.splatEntity?.gsplat) {
+                (this.splatEntity.gsplat as any).time = Math.floor(this.currentTime);
+            }
+        }
+
+        // #WDD 2026-01-17: Dynamic Sorting - Update CPU positions
+        if (this.is4DGS && this.trajectoryData) {
+            this.updateDynamicPositions(this.currentTime);
         }
     }
 
@@ -2567,6 +2704,42 @@ class Viewer {
 
         const cachedKey = `transform_cache_${fileName}`;
         localStorage.setItem(cachedKey, JSON.stringify(data));
+    }
+
+    // #WDD 2026-01-18: Helper to sync UI inputs with current Entity state
+    private updateTransformUIFromEntity() {
+        if (!this.splatEntity) return;
+
+        const pos = this.splatEntity.getLocalPosition();
+        const rot = this.splatEntity.getLocalEulerAngles();
+        const scale = this.splatEntity.getLocalScale(); // Future proofing
+
+        const posX = document.getElementById('pos-x') as HTMLInputElement;
+        const posY = document.getElementById('pos-y') as HTMLInputElement;
+        const posZ = document.getElementById('pos-z') as HTMLInputElement;
+        const rotX = document.getElementById('rot-x') as HTMLInputElement;
+        const rotY = document.getElementById('rot-y') as HTMLInputElement;
+        const rotZ = document.getElementById('rot-z') as HTMLInputElement;
+
+        if (posX) posX.value = pos.x.toFixed(2);
+        if (posY) posY.value = pos.y.toFixed(2);
+        if (posZ) posZ.value = pos.z.toFixed(2);
+        if (rotX) rotX.value = rot.x.toFixed(1);
+        if (rotY) rotY.value = rot.y.toFixed(1);
+        if (rotZ) rotZ.value = rot.z.toFixed(1);
+    }
+
+    // #WDD 2026-01-18: Expose current positions for SelectionTool
+    public getCurrentPositions(): Float32Array | null {
+        // If 4DGS is active, usage the dynamic positions from the sorter
+        if (this.is4DGS && this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            if (instance?.sorter?.centers) {
+                return instance.sorter.centers;
+            }
+        }
+        // Fallback or Non-4DGS
+        return this.cachedPositions;
     }
 
     // Public method for window binding
@@ -2635,6 +2808,190 @@ class Viewer {
         const totalFrames = this.totalFrames || Math.ceil(this.duration);
 
         await PlyExporter.exportSequence(data, totalFrames, `sequence_${this.currentFileName}`);
+    }
+
+    /**
+     * Reconstructs current frame from real textures sent to GPU.
+     * #WDD 2026-01-16 Verification path requested by user.
+     */
+    private async exportCurrentFrameToPly() {
+        if (!this.lastParsedData || !this.lifeTexData || !this.scalesTexData) {
+            console.error("[Export] Cannot export: metadata or textures missing.", {
+                parsed: !!this.lastParsedData,
+                life: !!this.lifeTexData,
+                scales: !!this.scalesTexData
+            });
+            alert("No 4DGS data loaded for texture export. (Is it 4DGS?)");
+            return;
+        }
+
+        console.log(`[Export] Reconstructing frame ${this.currentTime.toFixed(2)} from textures...`);
+        const component = (this.splatEntity?.gsplat || (this as any).splatComponent) as any;
+        if (!component) {
+            console.error("[Export] No GSplatComponent found on entity.");
+            alert("No GSplatComponent found. Please ensure a splat is loaded.");
+            return;
+        }
+
+        const asset = component.asset;
+        const resource = (asset?.resource || (component as any).instance?.splatData?._resource) as any;
+        const splatData = resource?.splatData || component.instance?.splatData || (this.lastParsedData as any);
+
+        if (!splatData && !this.lastParsedData) {
+            console.error("[Export] SplatData not found.", { resource: !!resource, instance: !!component.instance });
+            alert("SplatData not found for export.");
+            return;
+        }
+
+        const numSplats = splatData.numSplats || this.lastParsedData.count;
+
+        const params = {
+            keyframes: this.keyframes,
+            xyzStride: this.xyzStride,
+            rotKeyframes: this.rotKeyframes,
+            rotStride: this.rotStride,
+            texWidth: 4096 // We use 4096 in our creation logic
+        };
+
+        const buffer = await PlyExporter.exportFrameFromTextures(
+            numSplats,
+            this.currentTime,
+            this.duration,
+            this.lifeTexData!,
+            this.trajectoryData!, // Raw trajectory keyframes
+            this.rotTrajectoryData!, // Raw rotation keyframes
+            this.scalesTexData, // Pack of scale_0,1,2,0
+            params,
+            this.lastParsedData
+        );
+
+        const filename = `gpu_reconstruct_${this.currentFileName}_f${this.currentTime.toFixed(1)}.ply`;
+        const blob = new Blob([buffer], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        console.log(`[Export] Saved: ${filename}`);
+    }
+
+
+    // #WDD 2026-01-18
+    async saveAsTrueSplats() {
+        if (!this.lastParsedData) {
+            console.error("[Export] No data loaded.");
+            return;
+        }
+
+        console.log(`[Export] Saving .truesplats...`);
+        try {
+            // #WDD 2026-01-18: Capture Model Transform & Cameras
+            const transform = {
+                pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1]
+            };
+            if (this.splatEntity) {
+                const p = this.splatEntity.getLocalPosition();
+                const r = this.splatEntity.getLocalRotation();
+                const s = this.splatEntity.getLocalScale();
+                transform.pos = [p.x, p.y, p.z];
+                transform.rot = [r.x, r.y, r.z, r.w];
+                transform.scale = [s.x, s.y, s.z];
+            }
+
+            const cameras = this.cameraPresets.map(c => ({
+                name: c.name,
+                pos: [c.pos.x, c.pos.y, c.pos.z],
+                pitch: c.pitch,
+                yaw: c.yaw,
+                textObjects: c.textObjects
+            }));
+
+            // #WDD 2026-01-18: Capture Deleted Indices
+            const deletedIndices: number[] = [];
+            if (this.selectionTool.selectionData) {
+                const selData = this.selectionTool.selectionData;
+                const numSplats = selData.length / 4;
+                for (let i = 0; i < numSplats; i++) {
+                    if (selData[i * 4 + 1] > 0) { // Green channel = Deleted
+                        deletedIndices.push(i);
+                    }
+                }
+            }
+
+            const buffer = await TrueSplatsLoader.save(this.lastParsedData, {
+                model_transform: transform,
+                cameras: cameras,
+                deleted_indices: deletedIndices // #WDD 2026-01-18
+            });
+            const filename = `saved_${this.currentFileName || 'model.truesplats'}`;
+
+            const blob = new Blob([buffer], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+            console.log(`[Export] Saved .truesplats: ${filename}`);
+        } catch (e: any) { // Explicit any for error
+            console.error("[Export] Save failed:", e);
+            alert("Save failed: " + e.message);
+        }
+    }
+    async saveAsSOG4() {
+        console.log("[Export] saveAsSOG4 called. LastParsed:", this.lastParsedData);
+        if (!this.lastParsedData || !this.lastParsedData.isSOG4) {
+            console.error("[Export] SOG4 Save Mismatch. isSOG4:", this.lastParsedData?.isSOG4);
+            alert("No SOG4 loaded or format mismatch.");
+            return;
+        }
+
+        console.log(`[Export] Saving .sog4...`);
+        try {
+            const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
+            if (this.splatEntity) {
+                const p = this.splatEntity.getLocalPosition();
+                const r = this.splatEntity.getLocalRotation();
+                const s = this.splatEntity.getLocalScale();
+                transform.pos = [p.x, p.y, p.z];
+                transform.rot = [r.x, r.y, r.z, r.w];
+                transform.scale = [s.x, s.y, s.z];
+            }
+
+            const cameras = this.cameraPresets.map(c => ({
+                name: c.name, pos: [c.pos.x, c.pos.y, c.pos.z], pitch: c.pitch, yaw: c.yaw,
+                textObjects: c.textObjects
+            }));
+
+            const deletedIndices: number[] = [];
+            if (this.selectionTool.selectionData) {
+                const selData = this.selectionTool.selectionData;
+                const numSplats = selData.length / 4;
+                for (let i = 0; i < numSplats; i++) {
+                    if (selData[i * 4 + 1] > 0) deletedIndices.push(i);
+                }
+            }
+
+            const buffer = await SOG4Loader.save(this.lastParsedData, {
+                model_transform: transform,
+                cameras: cameras,
+                deleted_indices: deletedIndices
+            });
+            const filename = `saved_${this.currentFileName || 'model.sog4'}`;
+
+            const blob = new Blob([buffer.buffer as ArrayBuffer], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+            console.log(`[Export] Saved .sog4: ${filename}`);
+        } catch (e: any) {
+            console.error("[Export] Save SOG4 failed:", e);
+            alert("Save failed: " + e.message);
+        }
     }
 }
 

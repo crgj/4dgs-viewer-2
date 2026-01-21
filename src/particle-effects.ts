@@ -7,7 +7,7 @@ import * as pc from 'playcanvas';
 export class GaussianEffects {
     private app: pc.Application;
     private factor: number = 0;
-    public isEnabled: boolean = true; // #WDD 2026-01-15
+    public isEnabled: boolean = false; // #WDD 2026-01-19 Default to disabled
 
     constructor(app: pc.Application) {
         this.app = app;
