@@ -2584,7 +2584,7 @@ class Viewer {
 
     private initSkyboxSelector() {
         const select = document.getElementById('skybox-select') as HTMLSelectElement;
-        const slider = document.getElementById('skybox-blur-slider') as HTMLInputElement;
+
 
         if (!select) return;
 
@@ -2607,12 +2607,6 @@ class Viewer {
         });
 
         // #WDD 2026-01-21 Blur Slider Logic
-        if (slider) {
-            slider.addEventListener('input', () => {
-                const blurLevel = parseInt(slider.value, 10);
-                this.skyboxManager.setBlur(blurLevel);
-            });
-        }
     }
 
     private setSkybox(name: string) {
@@ -2621,13 +2615,8 @@ class Viewer {
             return;
         }
 
-        const getBlurLevel = () => {
-            const slider = document.getElementById('skybox-blur-slider') as HTMLInputElement;
-            return slider ? parseInt(slider.value, 10) : 4;
-        };
-
         const applySettings = () => {
-            this.skyboxManager.setBlur(getBlurLevel());
+            this.skyboxManager.setBlur(1); // Default low blur
         };
 
         const existing = this.app.assets.find(name);
