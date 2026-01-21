@@ -625,7 +625,7 @@ class Viewer {
         timeSlider?.addEventListener('touchend', () => { isScrubbing = false; });
 
         // Ensure slider has fine granularity for dragging
-        if (timeSlider) timeSlider.step = "0.01";
+        if (timeSlider) timeSlider.step = "1";
 
         timeSlider?.addEventListener('input', () => {
             // When scrubbing, we explicitly set currentTime
@@ -2503,7 +2503,7 @@ class Viewer {
 
         // #WDD 2026-01-17: Dynamic Sorting - Update CPU positions
         if (this.is4DGS && this.trajectoryData) {
-            this.updateDynamicPositions(this.currentTime);
+            this.updateDynamicPositions(Math.floor(this.currentTime));
         }
     }
 
