@@ -75,6 +75,12 @@ export class SkyboxManager {
 
         // 1. Generate Skybox Cubemap (Fixes seams & projection, creates mipmaps)
         const skybox = pc.EnvLighting.generateSkyboxCubemap(source);
+
+        // #WDD 2026-01-21 Ensure correct filtering for blur
+        skybox.minFilter = pc.FILTER_LINEAR_MIPMAP_LINEAR;
+        skybox.magFilter = pc.FILTER_LINEAR;
+        skybox.mipmaps = true;
+
         this.currentSkyboxTexture = skybox;
 
         // 2. Generate Lighting (EnvAtlas) for PBR
@@ -106,6 +112,7 @@ export class SkyboxManager {
         } else {
             this.app.scene.skyboxMip = 0;
         }
+        (this.app as any).renderNextFrame = true;
     }
 
     public setExposure(ev: number) {
