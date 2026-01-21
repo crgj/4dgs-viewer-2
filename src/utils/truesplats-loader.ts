@@ -62,7 +62,13 @@ export class TrueSplatsLoader {
             rotKeyframes: trajectoryResult.rotKeyframes,
             xyzStride: trajectoryResult.xyzStride,
             rotStride: trajectoryResult.rotStride,
-            bands: staticResult.bands // #WDD 2026-01-16 Ensure bands is passed through
+            bands: staticResult.bands, // #WDD 2026-01-16 Ensure bands is passed through
+            // #WDD 2026-01-18: Meta Persistence
+            model_transform: staticResult.model_transform,
+            cameras: staticResult.cameras,
+            deleted_indices: staticResult.deleted_indices, // #WDD 2026-01-18
+            sogBuffer: sogBuffer,
+            binBuffer: binBuffer
         };
         return this.lastResult;
     }
@@ -189,8 +195,9 @@ export class TrueSplatsLoader {
         if (props.opacity || props.sh0) {
             const texData = (props.opacity || props.sh0).data;
             for (let i = 0; i < count; i++) {
-                // #WDD 2026-01-16 Store as Logit (Matches standard PLY)
-                data.opacity[i] = logit(texData[i * 4 + 3] / 255.0);
+                // #WDD 2026-01-16: Store as linear probability (0-1)
+                // This matches RGBA8 texture expectations and prevents clamping/NaN issues.
+                data.opacity[i] = texData[i * 4 + 3] / 255.0;
             }
         }
 
@@ -214,198 +221,216 @@ export class TrueSplatsLoader {
                 data.f_dc_0[i] = cb[texData[i * 4 + 0]];
                 data.f_dc_1[i] = cb[texData[i * 4 + 1]];
                 data.f_dc_2[i] = cb[texData[i * 4 + 2]];
-            }
-        }
-
-        // --- SH Bands (f_rest) ---
-        if (meta.shN && props.shN_cent && props.shN_labels) {
-            const shCfg = meta.shN;
-            const cb = shCfg.codebook;
-            const paletteSize = shCfg.count;
-            const bands = shCfg.bands || 3;
-            const numCoeffs = bands === 1 ? 9 : (bands === 2 ? 24 : 45);
-            const cpc = numCoeffs / 3;
-
-            const palette = new Float32Array(paletteSize * numCoeffs);
-            const centTex = props.shN_cent.data;
-            const cWidth = props.shN_cent.width;
-
-            for (let i = 0; i < paletteSize; i++) {
-                const row = Math.floor(i / 64);
-                const colBase = (i % 64) * cpc;
-                for (let j = 0; j < cpc; j++) {
-                    const pxIdx = row * cWidth + colBase + j;
-                    if (pxIdx * 4 < centTex.length) {
-                        palette[i * numCoeffs + cpc * 0 + j] = cb[centTex[pxIdx * 4 + 0]];
-                        palette[i * numCoeffs + cpc * 1 + j] = cb[centTex[pxIdx * 4 + 1]];
-                        palette[i * numCoeffs + cpc * 2 + j] = cb[centTex[pxIdx * 4 + 2]];
-                    }
+                // Handle opacity if present in SH0 codebook (Case-specific)
+                if (texData[i * 4 + 3] !== undefined) {
+                    // #WDD 2026-01-17: User requested explicit sigmoid on loaded value
+                    const rawVal = texData[i * 4 + 3] / 255.0;
+                    // #WDD 2026-01-17: User requested explicit Inverse Sigmoid (Logit) on loaded value
+                    // Clamp to safe range [0.000001, 0.999999] for logit calculation
+                    const p = Math.max(1e-6, Math.min(0.999999, rawVal));
+                    data.opacity[i] = Math.log(p / (1.0 - p));
                 }
             }
 
-            const labelsTex = props.shN_labels.data;
-            for (let i = 0; i < count; i++) {
-                const label = labelsTex[i * 4 + 0] | (labelsTex[i * 4 + 1] << 8);
-                const base = label * numCoeffs;
-                if (base + numCoeffs <= palette.length) {
-                    for (let j = 0; j < numCoeffs; j++) {
-                        data[`f_rest_${j}`][i] = palette[base + j];
-                    }
-                }
-            }
-        }
 
-        // Initialize defaults for visibility
-        data.t_start.fill(0);
-        data.duration.fill(9999);
+            // --- SH Bands (f_rest) ---
+            if (meta.shN && props.shN_cent && props.shN_labels) {
+                const shCfg = meta.shN;
+                const cb = shCfg.codebook;
+                const paletteSize = shCfg.count;
+                const bands = shCfg.bands || 3;
+                const numCoeffs = bands === 1 ? 9 : (bands === 2 ? 24 : 45);
+                const cpc = numCoeffs / 3;
 
-        console.log("[Debug] meta.params:", meta.params);
-        console.log("[Debug] props.params valid:", !!props.params);
+                const palette = new Float32Array(paletteSize * numCoeffs);
+                const centTex = props.shN_cent.data;
+                const cWidth = props.shN_cent.width;
 
-        // --- Lifetime (mu, w) ---
-        // Priority 1: Clustered Params (New Python Script Format)
-        if (props.params && meta.params) {
-            console.log("[TrueSplats] Params Block Entered (Clustered Lifetime)");
-            console.log("[Debug] meta.params keys:", Object.keys(meta.params));
-            const pCfg = meta.params;
-            const cbMu = pCfg.codebook_mu || pCfg.codebook_mu_list || pCfg.codebook; // Fallback attempts?
-            const cbW = pCfg.codebook_w || pCfg.codebook_w_list || pCfg.codebook;
-
-            if (!cbMu || !cbW) {
-                console.error("[TrueSplats] Missing codebook_mu or codebook_w in meta.params!", pCfg);
-            } else {
-
-                // const cbP = pCfg.codebook_is_param; // Unused for now
-
-                const texData = props.params.data;
-                let minMu = Infinity, maxMu = -Infinity;
-
-                const isVQ = Array.isArray(cbMu[0]);
-                if (isVQ) console.log("[TrueSplats] Detected Vector Quantized (VQ) Codebook. Len:", cbMu.length);
-                else console.log(`[TrueSplats] Detected Scalar Codebooks. MuLen: ${cbMu.length}, WLen: ${cbW.length}`);
-
-                console.log(`[TrueSplats] Sample Indices from params.webp (R,G,B):`, texData[0], texData[1], texData[2]);
-
-                for (let i = 0; i < count; i++) {
-                    // R -> mu index (or VQ index), G -> w index (unused if VQ?)
-                    const muIdx = texData[i * 4 + 0];
-                    const wIdx = texData[i * 4 + 1];
-
-                    let mu = 0, w = 100;
-
-                    if (isVQ) {
-                        // Combined Codebook: entries are [mu, w]
-                        // We use muIdx as the cluster index
-                        const entry = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
-                        if (Array.isArray(entry) && entry.length >= 2) {
-                            mu = entry[0];
-                            w = entry[1];
-                        } else {
-                            mu = entry; // Fallback? weird
-                            w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
+                for (let i = 0; i < paletteSize; i++) {
+                    const row = Math.floor(i / 64);
+                    const colBase = (i % 64) * cpc;
+                    for (let j = 0; j < cpc; j++) {
+                        const pxIdx = row * cWidth + colBase + j;
+                        if (pxIdx * 4 < centTex.length) {
+                            palette[i * numCoeffs + cpc * 0 + j] = cb[centTex[pxIdx * 4 + 0]];
+                            palette[i * numCoeffs + cpc * 1 + j] = cb[centTex[pxIdx * 4 + 1]];
+                            palette[i * numCoeffs + cpc * 2 + j] = cb[centTex[pxIdx * 4 + 2]];
                         }
-                    } else {
-                        // Scalar Codebooks (Separable)
-                        mu = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
-                        w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
                     }
+                }
 
+                const labelsTex = props.shN_labels.data;
+                for (let i = 0; i < count; i++) {
+                    const label = labelsTex[i * 4 + 0] | (labelsTex[i * 4 + 1] << 8);
+                    const base = label * numCoeffs;
+                    if (base + numCoeffs <= palette.length) {
+                        for (let j = 0; j < numCoeffs; j++) {
+                            data[`f_rest_${j}`][i] = palette[base + j];
+                        }
+                    }
+                }
+            }
+
+            // Initialize defaults for visibility
+            data.t_start.fill(0);
+            data.duration.fill(9999);
+
+            console.log("[Debug] meta.params:", meta.params);
+            console.log("[Debug] props.params valid:", !!props.params);
+
+            // --- Lifetime (mu, w) ---
+            // Priority 1: Linear Normalized Lifetime (Old Format / Fallback)
+            // Matches Python script `reconstruct_params` priority
+            if (props.lifetime && meta.lifetime) {
+                console.log("[TrueSplats] Lifetime Block Entered (Linear)");
+                const texData = props.lifetime.data;
+                const minMu = meta.lifetime.mins?.[0] ?? 0;
+                const maxMu = meta.lifetime.maxs?.[0] ?? 100;
+                const minW = meta.lifetime.mins?.[1] ?? 0;
+                const maxW = meta.lifetime.maxs?.[1] ?? 10;
+                console.log(`[Reconstruct] mu range: [${minMu}, ${maxMu}], w range: [${minW}, ${maxW}]`);
+                for (let i = 0; i < count; i++) {
+                    const mu = (texData[i * 4 + 0] / 255.0) * (maxMu - minMu) + minMu;
+                    const w = (texData[i * 4 + 1] / 255.0) * (maxW - minW) + minW;
                     data.lifetime_mu[i] = mu;
                     data.lifetime_w[i] = w;
                     data.lifetime_k[i] = 10.0;
                     data.t_start[i] = mu - w;
                     data.duration[i] = 2.0 * w;
-
-                    if (mu < minMu) minMu = mu;
-                    if (mu > maxMu) maxMu = mu;
                 }
-                console.log(`[Reconstruct] Clustered Params - mu range: [${minMu.toFixed(2)}, ${maxMu.toFixed(2)}]`);
+                console.log(`[Debug] First 3 mu/w: (${data.lifetime_mu[0].toFixed(2)}, ${data.lifetime_w[0].toFixed(2)}), (${data.lifetime_mu[1].toFixed(2)}, ${data.lifetime_w[1].toFixed(2)}), (${data.lifetime_mu[2].toFixed(2)}, ${data.lifetime_w[2].toFixed(2)})`);
+            }
+            // Priority 2: Clustered Params (New Python Script Format)
+            else if (props.params && meta.params) {
+                console.log("[TrueSplats] Params Block Entered (Clustered Lifetime)");
+                console.log("[Debug] meta.params keys:", Object.keys(meta.params));
+                const pCfg = meta.params;
+                const cbMu = pCfg.codebook_mu || pCfg.codebook_mu_list || pCfg.codebook; // Fallback attempts?
+                const cbW = pCfg.codebook_w || pCfg.codebook_w_list || pCfg.codebook;
 
-                // #WDD 2026-01-16 Debug 50 points
-                console.log("[Debug] First 50 mu/w:");
-                for (let k = 0; k < 50 && k < count; k++) {
-                    console.log(`Pt ${k}: (${data.lifetime_mu[k].toFixed(2)}, ${data.lifetime_w[k].toFixed(2)})`);
+                if (!cbMu || !cbW) {
+                    console.error("[TrueSplats] Missing codebook_mu or codebook_w in meta.params!", pCfg);
+                } else {
+
+                    // const cbP = pCfg.codebook_is_param; // Unused for now
+
+                    const texData = props.params.data;
+                    let minMu = Infinity, maxMu = -Infinity;
+
+                    const isVQ = Array.isArray(cbMu[0]);
+                    if (isVQ) console.log("[TrueSplats] Detected Vector Quantized (VQ) Codebook. Len:", cbMu.length);
+                    else console.log(`[TrueSplats] Detected Scalar Codebooks. MuLen: ${cbMu.length}, WLen: ${cbW.length}`);
+
+                    console.log(`[TrueSplats] Sample Indices from params.webp (R,G,B):`, texData[0], texData[1], texData[2]);
+
+                    for (let i = 0; i < count; i++) {
+                        // R -> mu index (or VQ index), G -> w index (unused if VQ?)
+                        const muIdx = texData[i * 4 + 0];
+                        const wIdx = texData[i * 4 + 1];
+
+                        let mu = 0, w = 100;
+
+                        // if (isVQ) {
+                        //     // Combined Codebook: entries are [mu, w]
+                        //     // We use muIdx as the cluster index
+                        //     const entry = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
+                        //     if (Array.isArray(entry) && entry.length >= 2) {
+                        //         mu = entry[0];
+                        //         w = entry[1];
+                        //     } else {
+                        //         mu = entry; // Fallback? weird
+                        //         w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
+                        //     }
+                        // } else {
+                        //     // Scalar Codebooks (Separable)
+                        //     mu = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
+                        //     w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
+                        // }
+                        mu = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
+                        w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
+
+                        data.lifetime_mu[i] = mu;
+                        data.lifetime_w[i] = w;
+                        data.lifetime_k[i] = 10.0;
+                        data.t_start[i] = mu - w;
+                        data.duration[i] = 2.0 * w;
+
+                        if (mu < minMu) minMu = mu;
+                        if (mu > maxMu) maxMu = mu;
+                    }
+                    console.log(`[Reconstruct] Clustered Params - mu range: [${minMu.toFixed(2)}, ${maxMu.toFixed(2)}]`);
+
+                    // #WDD 2026-01-16 Debug 50 points
+                    // console.log("[Debug] First 50 mu/w:");
+                    for (let k = 0; k < 50 && k < count; k++) {
+                        // console.log(`Pt ${k}: (${data.lifetime_mu[k].toFixed(2)}, ${data.lifetime_w[k].toFixed(2)})`);
+                    }
+                }
+            } else {
+                console.warn("[TrueSplats] No lifetime data found, using defaults (visible).");
+                // Set defaults to ensure visibility
+                const midMu = (meta.lifetime?.maxs?.[0] ?? 100) / 2.0;
+                const maxW = (meta.lifetime?.maxs?.[1] ?? 100);
+                for (let i = 0; i < count; i++) {
+                    data.lifetime_mu[i] = midMu;
+                    data.lifetime_w[i] = maxW * 2.0;
+                    data.lifetime_k[i] = 10.0;
+                    data.t_start[i] = 0;
+                    data.duration[i] = 20000; // Wide enough
                 }
             }
-        }
-        // Priority 2: Linear Normalized Lifetime (Old Format / Fallback)
-        else if (props.lifetime && meta.lifetime) {
-            console.log("[TrueSplats] Lifetime Block Entered (Linear)");
-            const texData = props.lifetime.data;
-            const minMu = meta.lifetime.mins?.[0] ?? 0;
-            const maxMu = meta.lifetime.maxs?.[0] ?? 100;
-            const minW = meta.lifetime.mins?.[1] ?? 0;
-            const maxW = meta.lifetime.maxs?.[1] ?? 10;
-            console.log(`[Reconstruct] mu range: [${minMu}, ${maxMu}], w range: [${minW}, ${maxW}]`);
+
             for (let i = 0; i < count; i++) {
-                const mu = (texData[i * 4 + 0] / 255.0) * (maxMu - minMu) + minMu;
-                const w = (texData[i * 4 + 1] / 255.0) * (maxW - minW) + minW;
-                data.lifetime_mu[i] = mu;
-                data.lifetime_w[i] = w;
-                data.lifetime_k[i] = 10.0;
-                data.t_start[i] = mu - w;
-                data.duration[i] = 2.0 * w;
+                data.original_index[i] = i;
             }
-            console.log(`[Debug] First 3 mu/w: (${data.lifetime_mu[0].toFixed(2)}, ${data.lifetime_w[0].toFixed(2)}), (${data.lifetime_mu[1].toFixed(2)}, ${data.lifetime_w[1].toFixed(2)}), (${data.lifetime_mu[2].toFixed(2)}, ${data.lifetime_w[2].toFixed(2)})`);
-        } else {
-            console.warn("[TrueSplats] No lifetime data found, using defaults (visible).");
-            // Set defaults to ensure visibility
-            const midMu = (meta.lifetime?.maxs?.[0] ?? 100) / 2.0;
-            const maxW = (meta.lifetime?.maxs?.[1] ?? 100);
-            for (let i = 0; i < count; i++) {
-                data.lifetime_mu[i] = midMu;
-                data.lifetime_w[i] = maxW * 2.0; // Wide enough to cover everything
-                data.lifetime_k[i] = 10.0; // Sharp edges (though w is wide so it doesn't matter)
-                data.t_start[i] = 0;
-                data.duration[i] = 9999;
+
+            const properties: any[] = [
+                { name: 'x', type: 'float', storage: data.x },
+                { name: 'y', type: 'float', storage: data.y },
+                { name: 'z', type: 'float', storage: data.z },
+                { name: 'nx', type: 'float', storage: new Float32Array(count) },
+                { name: 'ny', type: 'float', storage: new Float32Array(count) },
+                { name: 'nz', type: 'float', storage: new Float32Array(count) },
+                { name: 'opacity', type: 'float', storage: data.opacity },
+                { name: 'scale_0', type: 'float', storage: data.scale_0 },
+                { name: 'scale_1', type: 'float', storage: data.scale_1 },
+                { name: 'scale_2', type: 'float', storage: data.scale_2 },
+                { name: 'rot_0', type: 'float', storage: data.rot_0 },
+                { name: 'rot_1', type: 'float', storage: data.rot_1 },
+                { name: 'rot_2', type: 'float', storage: data.rot_2 },
+                { name: 'rot_3', type: 'float', storage: data.rot_3 },
+                { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
+                { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
+                { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
+                { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
+                { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
+                { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
+                { name: 'original_index', type: 'float', storage: data.original_index }, // #WDD 2026-01-16: Track reordering
+            ];
+            for (let i = 0; i < 45; i++) {
+                if (data[`f_rest_${i}`]) {
+                    properties.push({
+                        name: `f_rest_${i}`, type: 'float', storage: data[`f_rest_${i}`]
+                    });
+                }
             }
+            return {
+                ...data,
+                plyData: { elements: [{ name: 'vertex', count, properties }] },
+                count,
+                is4DGS: true,
+                maxMu: meta.lifetime?.maxs?.[0] ?? meta.maxMu ?? meta.maxs?.mu ?? 100, // #WDD 2026-01-16 Unified maxMu lookup
+                bands, // #WDD 2026-01-16
+                // #WDD 2026-01-18: Meta Persistence
+                model_transform: meta.model_transform,
+                cameras: meta.cameras,
+                deleted_indices: meta.deleted_indices
+            };
         }
 
-        for (let i = 0; i < count; i++) {
-            data.original_index[i] = i;
-        }
-
-        const properties: any[] = [
-            { name: 'x', type: 'float', storage: data.x },
-            { name: 'y', type: 'float', storage: data.y },
-            { name: 'z', type: 'float', storage: data.z },
-            { name: 'nx', type: 'float', storage: new Float32Array(count) },
-            { name: 'ny', type: 'float', storage: new Float32Array(count) },
-            { name: 'nz', type: 'float', storage: new Float32Array(count) },
-            { name: 'opacity', type: 'float', storage: data.opacity },
-            { name: 'scale_0', type: 'float', storage: data.scale_0 },
-            { name: 'scale_1', type: 'float', storage: data.scale_1 },
-            { name: 'scale_2', type: 'float', storage: data.scale_2 },
-            { name: 'rot_0', type: 'float', storage: data.rot_0 },
-            { name: 'rot_1', type: 'float', storage: data.rot_1 },
-            { name: 'rot_2', type: 'float', storage: data.rot_2 },
-            { name: 'rot_3', type: 'float', storage: data.rot_3 },
-            { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
-            { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
-            { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
-            { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
-            { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
-            { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
-            { name: 'original_index', type: 'float', storage: data.original_index }, // #WDD 2026-01-16: Track reordering
-        ];
-        for (let i = 0; i < 45; i++) {
-            if (data[`f_rest_${i}`]) {
-                properties.push({
-                    name: `f_rest_${i}`, type: 'float', storage: data[`f_rest_${i}`]
-                });
-            }
-        }
-        return {
-            ...data,
-            plyData: { elements: [{ name: 'vertex', count, properties }] },
-            count,
-            is4DGS: true,
-            maxMu: meta.lifetime?.maxs?.[0] ?? meta.maxMu ?? meta.maxs?.mu ?? 100, // #WDD 2026-01-16 Unified maxMu lookup
-            bands // #WDD 2026-01-16
-        };
     }
 
-    private async parseBIN(buffer: ArrayBuffer, count: number, onProgress: (p: number, msg: string) => void) {
+    private async parseBIN(buffer: ArrayBuffer, numSplats: number, onProgress: (p: number, msg: string) => void) {
         onProgress(0, "Reading Header");
         const dv = new DataView(buffer);
         const magic = dv.getUint32(0, true);
@@ -564,8 +589,8 @@ export class TrueSplatsLoader {
             // Opacity
             const mu = muArr ? muArr[i] : 25, w = wArr ? wArr[i] : 100;
             const gate = sigmoid(10.0 * (t - (mu - w))) * sigmoid(10.0 * ((mu + w) - t));
-            // opacity[i] is already LOGIT from SOG
-            const finalP = (opacity ? sigmoid(opacity[i]) : 1.0) * gate;
+            // opacity[i] is now LINEAR probability
+            const finalP = (opacity ? opacity[i] : 1.0) * gate;
             outOpac[i] = finalP >= 0.01 ? logit(finalP) : -10.0;
         }
 
@@ -580,6 +605,46 @@ export class TrueSplatsLoader {
         props.find((p: any) => p.name === 'rot_3').storage = outR3;
         props.find((p: any) => p.name === 'opacity').storage = outOpac;
         return elements;
+    }
+
+    // #WDD 2026-01-18: Save as .truesplats with Updated Meta
+    public static async save(data: any, overrides?: { model_transform?: any, cameras?: any, deleted_indices?: number[] }): Promise<ArrayBuffer> {
+        if (!data || !data.sogBuffer || !data.binBuffer) {
+            throw new Error("Cannot save: Original .truesplats buffers not found.");
+        }
+
+        const zip = new JSZip();
+
+        // 1. Process SOG to update meta.json
+        const sogZip = new JSZip();
+        await sogZip.loadAsync(data.sogBuffer);
+        const metaFile = sogZip.file('meta.json');
+
+        if (metaFile && overrides) {
+            try {
+                const metaStr = await metaFile.async('string');
+                const meta = JSON.parse(metaStr);
+
+                // Update fields
+                if (overrides.model_transform) meta.model_transform = overrides.model_transform;
+                if (overrides.cameras) meta.cameras = overrides.cameras;
+                if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
+
+                // Write back to SOG
+                sogZip.file('meta.json', JSON.stringify(meta));
+                console.log("[TrueSplats] Updated meta.json in saved SOG", overrides);
+            } catch (e) {
+                console.warn("[TrueSplats] Failed to update meta.json", e);
+            }
+        }
+
+        // Re-generate SOG buffer
+        const newSog = await sogZip.generateAsync({ type: 'arraybuffer' });
+
+        zip.file('static.sog', newSog);
+        zip.file('data.bin', data.binBuffer);
+
+        return await zip.generateAsync({ type: 'arraybuffer' });
     }
 
     public async exportFrame(t: number): Promise<ArrayBuffer> {

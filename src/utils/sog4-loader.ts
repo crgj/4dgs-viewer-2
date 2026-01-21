@@ -1,0 +1,472 @@
+import JSZip from 'jszip';
+import * as pc from 'playcanvas';
+
+// Helper to sigmoid (matches Python/Shader)
+const sigmoid = (v: number) => 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, v))));
+const logit = (v: number) => {
+    const p = Math.max(1e-7, Math.min(1.0 - 1e-7, v));
+    return Math.log(p / (1.0 - p));
+};
+
+export interface IImageDecoder {
+    decode(blob: Blob | ArrayBuffer): Promise<{ data: Uint8Array, width: number, height: number }>;
+}
+
+/**
+ * SOG4Loader
+ * Handles .sog4 (Native SOG) files where temporal data is embedded as textures.
+ */
+export class SOG4Loader {
+    private app?: pc.Application;
+    private decoder?: IImageDecoder;
+    private lastResult: any = null;
+
+    constructor(app?: pc.Application, decoder?: IImageDecoder) {
+        this.app = app;
+        this.decoder = decoder;
+    }
+
+    async load(file: File | ArrayBuffer, progressCallback?: (progress: number, message: string) => void): Promise<any> {
+        const buffer = file instanceof File ? await file.arrayBuffer() : file;
+        const zip = new JSZip();
+
+        progressCallback?.(0, "Parsing SOG4 Zip");
+        await zip.loadAsync(buffer);
+
+        const metaFile = zip.file('meta.json');
+        if (!metaFile) throw new Error("Invalid .sog4 format: missing meta.json");
+        const meta = JSON.parse(await metaFile.async('string'));
+
+        console.log("[SOG4] Meta:", meta);
+        const count = meta.count;
+
+        // --- 1. Load Static Textures ---
+        progressCallback?.(10, "Decoding Static Textures");
+        const props: any = {};
+
+        const loadTexture = async (fileName: string) => {
+            const file = zip.file(fileName);
+            if (!file) return null;
+            const buffer = await file.async('arraybuffer');
+
+            if (this.decoder) {
+                return await this.decoder.decode(buffer);
+            }
+
+            // Browser default
+            const blob = new Blob([buffer]);
+            const bitmap = await createImageBitmap(blob, {
+                premultiplyAlpha: 'none',
+                colorSpaceConversion: 'none',
+                resizeQuality: 'pixelated'
+            });
+            const { width, height } = bitmap;
+            const canvas = new OffscreenCanvas(width, height);
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return null;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(bitmap, 0, 0);
+            const data = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer);
+            bitmap.close();
+            return { data, width, height };
+        };
+
+        if (meta.means?.files) {
+            props.means_L = await loadTexture(meta.means.files[0]);
+            props.means_U = await loadTexture(meta.means.files[1]);
+        }
+        if (meta.quats?.files) props.rotation = await loadTexture(meta.quats.files[0]);
+        if (meta.scales?.files) props.scales = await loadTexture(meta.scales.files[0]);
+        if (meta.sh0?.files) props.sh0 = await loadTexture(meta.sh0.files[0]);
+        if (meta.shN?.files) {
+            props.shN_cent = await loadTexture(meta.shN.files[0]);
+            props.shN_labels = await loadTexture(meta.shN.files[1]);
+        }
+        if (meta.opacity?.files) props.opacity = await loadTexture(meta.opacity.files[0]);
+        if (meta.lifetime?.files) props.lifetime = await loadTexture(meta.lifetime.files[0]);
+        if (meta.params?.files) props.params = await loadTexture(meta.params.files[0]);
+
+        // --- 2. Decode Static Attributes ---
+        progressCallback?.(30, "Reconstructing Static Attributes");
+
+        const inverseLogTransform = (v: number) => Math.sign(v) * (Math.exp(Math.abs(v)) - 1);
+
+        const data: any = {
+            x: new Float32Array(count), y: new Float32Array(count), z: new Float32Array(count),
+            rot_0: new Float32Array(count), rot_1: new Float32Array(count), rot_2: new Float32Array(count), rot_3: new Float32Array(count),
+            scale_0: new Float32Array(count), scale_1: new Float32Array(count), scale_2: new Float32Array(count),
+            opacity: new Float32Array(count),
+            f_dc_0: new Float32Array(count), f_dc_1: new Float32Array(count), f_dc_2: new Float32Array(count),
+            // Lifetime
+            lifetime_mu: new Float32Array(count), lifetime_w: new Float32Array(count), lifetime_k: new Float32Array(count),
+            t_start: new Float32Array(count), duration: new Float32Array(count),
+            // 4DGS Params
+            vx: new Float32Array(count), vy: new Float32Array(count), vz: new Float32Array(count),
+            original_index: new Float32Array(count)
+        };
+        for (let i = 0; i < 45; i++) data[`f_rest_${i}`] = new Float32Array(count);
+        for (let i = 0; i < count; i++) data.original_index[i] = i;
+
+        // Reuse Logic from TrueSplatsLoader for Static (Means, Quats, Scales, SH, Opacity, Lifetime)
+        // ... (This part is identical to TrueSplatsLoader, logic included inline for completeness)
+
+        // Means
+        if (props.means_U && props.means_L && meta.means) {
+            const mins = meta.means.mins, maxs = meta.means.maxs;
+            const dataU = props.means_U.data, dataL = props.means_L.data;
+            for (let i = 0; i < count; i++) {
+                const nx = (dataU[i * 4 + 0] << 8) | dataL[i * 4 + 0];
+                const ny = (dataU[i * 4 + 1] << 8) | dataL[i * 4 + 1];
+                const nz = (dataU[i * 4 + 2] << 8) | dataL[i * 4 + 2];
+                data.x[i] = inverseLogTransform((nx / 65535.0) * (maxs[0] - mins[0]) + mins[0]);
+                data.y[i] = inverseLogTransform((ny / 65535.0) * (maxs[1] - mins[1]) + mins[1]);
+                data.z[i] = inverseLogTransform((nz / 65535.0) * (maxs[2] - mins[2]) + mins[2]);
+            }
+        }
+
+        // Rotations
+        if (props.rotation) {
+            const sqrt2 = Math.sqrt(2);
+            const texData = props.rotation.data;
+            for (let i = 0; i < count; i++) {
+                const r = texData[i * 4], g = texData[i * 4 + 1], b = texData[i * 4 + 2], a = texData[i * 4 + 3];
+                const k = a - 252;
+                const qvals = [r, g, b].map(v => (v / 255.0 * 2.0 - 1.0) / sqrt2);
+                const q = [0, 0, 0, 0];
+                let qIdx = 0, sumSq = 0;
+                for (let j = 0; j < 4; j++) {
+                    if (j === k) continue;
+                    q[j] = qvals[qIdx++];
+                    sumSq += q[j] * q[j];
+                }
+                q[k] = Math.sqrt(Math.max(0, 1.0 - sumSq));
+                data.rot_0[i] = q[0]; data.rot_1[i] = q[1]; data.rot_2[i] = q[2]; data.rot_3[i] = q[3];
+            }
+        }
+
+        // Opacity
+        if (props.opacity || props.sh0) {
+            const texData = (props.opacity || props.sh0).data;
+            for (let i = 0; i < count; i++) {
+                data.opacity[i] = texData[i * 4 + 3] / 255.0;
+            }
+        }
+
+        // Scales
+        if (props.scales && meta.scales && meta.scales.codebook) {
+            const cb = meta.scales.codebook;
+            const texData = props.scales.data;
+            for (let i = 0; i < count; i++) {
+                data.scale_0[i] = cb[texData[i * 4 + 0]];
+                data.scale_1[i] = cb[texData[i * 4 + 1]];
+                data.scale_2[i] = cb[texData[i * 4 + 2]];
+            }
+        }
+
+        // SH0
+        if (props.sh0 && meta.sh0 && meta.sh0.codebook) {
+            const cb = meta.sh0.codebook;
+            const texData = props.sh0.data;
+            for (let i = 0; i < count; i++) {
+                data.f_dc_0[i] = cb[texData[i * 4 + 0]];
+                data.f_dc_1[i] = cb[texData[i * 4 + 1]];
+                data.f_dc_2[i] = cb[texData[i * 4 + 2]];
+                if (texData[i * 4 + 3] !== undefined) {
+                    const rawVal = texData[i * 4 + 3] / 255.0;
+                    const p = Math.max(1e-6, Math.min(0.999999, rawVal));
+                    data.opacity[i] = Math.log(p / (1.0 - p));
+                }
+            }
+        }
+
+        // SH Bands
+        if (meta.shN && props.shN_cent && props.shN_labels) {
+            const shCfg = meta.shN;
+            const cb = shCfg.codebook;
+            const paletteSize = shCfg.count;
+            const bands = shCfg.bands || 3;
+            const numCoeffs = bands === 1 ? 9 : (bands === 2 ? 24 : 45);
+            const cpc = numCoeffs / 3;
+            const palette = new Float32Array(paletteSize * numCoeffs);
+            const centTex = props.shN_cent.data;
+            const cWidth = props.shN_cent.width;
+
+            for (let i = 0; i < paletteSize; i++) {
+                const row = Math.floor(i / 64);
+                const colBase = (i % 64) * cpc;
+                for (let j = 0; j < cpc; j++) {
+                    const pxIdx = row * cWidth + colBase + j;
+                    if (pxIdx * 4 < centTex.length) {
+                        palette[i * numCoeffs + cpc * 0 + j] = cb[centTex[pxIdx * 4 + 0]];
+                        palette[i * numCoeffs + cpc * 1 + j] = cb[centTex[pxIdx * 4 + 1]];
+                        palette[i * numCoeffs + cpc * 2 + j] = cb[centTex[pxIdx * 4 + 2]];
+                    }
+                }
+            }
+
+            const labelsTex = props.shN_labels.data;
+            for (let i = 0; i < count; i++) {
+                const label = labelsTex[i * 4 + 0] | (labelsTex[i * 4 + 1] << 8);
+                const base = label * numCoeffs;
+                if (base + numCoeffs <= palette.length) {
+                    for (let j = 0; j < numCoeffs; j++) data[`f_rest_${j}`][i] = palette[base + j];
+                }
+            }
+        }
+
+        // Params (Lifetime)
+        data.t_start.fill(0);
+        data.duration.fill(9999);
+        if (props.params && meta.params) {
+            const pCfg = meta.params;
+            const cbMu = pCfg.codebook_mu || pCfg.codebook_mu_list || pCfg.codebook;
+            const cbW = pCfg.codebook_w || pCfg.codebook_w_list || pCfg.codebook;
+            const texData = props.params.data;
+            if (cbMu && cbW) {
+                for (let i = 0; i < count; i++) {
+                    const muIdx = texData[i * 4 + 0];
+                    const wIdx = texData[i * 4 + 1];
+                    const mu = (muIdx < cbMu.length) ? cbMu[muIdx] : cbMu[0];
+                    const w = (wIdx < cbW.length) ? cbW[wIdx] : cbW[0];
+                    data.lifetime_mu[i] = mu;
+                    data.lifetime_w[i] = w;
+                    data.lifetime_k[i] = 10.0;
+                    data.t_start[i] = mu - w;
+                    data.duration[i] = 2.0 * w;
+                }
+            }
+        } else if (props.lifetime && meta.lifetime) {
+            const texData = props.lifetime.data;
+            const minMu = meta.lifetime.mins?.[0] ?? 0;
+            const maxMu = meta.lifetime.maxs?.[0] ?? 100;
+            const minW = meta.lifetime.mins?.[1] ?? 0;
+            const maxW = meta.lifetime.maxs?.[1] ?? 10;
+            for (let i = 0; i < count; i++) {
+                const mu = (texData[i * 4 + 0] / 255.0) * (maxMu - minMu) + minMu;
+                const w = (texData[i * 4 + 1] / 255.0) * (maxW - minW) + minW;
+                data.lifetime_mu[i] = mu;
+                data.lifetime_w[i] = w;
+                data.lifetime_k[i] = 10.0;
+                data.t_start[i] = mu - w;
+                data.duration[i] = 2.0 * w;
+            }
+        } else {
+            // Fallback
+            const midMu = (meta.lifetime?.maxs?.[0] ?? 100) / 2.0;
+            const maxW = (meta.lifetime?.maxs?.[1] ?? 100);
+            for (let i = 0; i < count; i++) {
+                data.lifetime_mu[i] = midMu;
+                data.lifetime_w[i] = maxW * 2.0;
+                data.lifetime_k[i] = 10.0;
+                data.duration[i] = 20000;
+            }
+        }
+
+        // --- 3. Process Temporal Banks ---
+        progressCallback?.(60, "Decoding Temporal Banks");
+
+        // XYZ Banks
+        let xyzData: Float32Array | null = null;
+        let K_xyz = 0;
+        let xyzStride = 0;
+
+        if (meta.xyz_bank && Array.isArray(meta.xyz_bank)) {
+            K_xyz = meta.xyz_bank.length;
+            // Assuming strict bank order 0..K-1.
+            // Result needs to be (N * K * 3).
+            // Interleaved: Point 0 [Frames 0..K-1], Point 1 [Frames 0..K-1]...
+            // Shader Layout: Each frame is an array.
+            // Wait, TrueSplats `decodeBank` result is:
+            // "base = i * K * C" -> data[base + k]
+            // So it IS Interleaved! P0_K0, P0_K1,... P1_K0...
+
+            xyzData = new Float32Array(count * K_xyz * 3);
+            // #WDD 2026-01-18 Parse stride from custom metadata
+            if (meta.custom && meta.custom.xyz_bank_keyframe_stride) {
+                xyzStride = parseInt(meta.custom.xyz_bank_keyframe_stride);
+            } else {
+                xyzStride = meta.xyz_bank_stride || 1;
+            }
+
+            for (let k = 0; k < K_xyz; k++) {
+                const bankMeta = meta.xyz_bank[k];
+                if (!bankMeta) continue;
+
+                // Decode this bank frame for ALL points
+                // Reusing means decode logic
+                let bankL_tex, bankU_tex;
+
+                if (bankMeta.files) {
+                    bankL_tex = await loadTexture(bankMeta.files[0]);
+                    bankU_tex = await loadTexture(bankMeta.files[1]);
+                }
+
+                if (bankL_tex && bankU_tex) {
+                    const mins = bankMeta.mins, maxs = bankMeta.maxs;
+                    const bL = bankL_tex.data, bU = bankU_tex.data;
+
+                    for (let i = 0; i < count; i++) {
+                        const nx = (bU[i * 4 + 0] << 8) | bL[i * 4 + 0];
+                        const ny = (bU[i * 4 + 1] << 8) | bL[i * 4 + 1];
+                        const nz = (bU[i * 4 + 2] << 8) | bL[i * 4 + 2];
+
+                        const x = inverseLogTransform((nx / 65535.0) * (maxs[0] - mins[0]) + mins[0]);
+                        const y = inverseLogTransform((ny / 65535.0) * (maxs[1] - mins[1]) + mins[1]);
+                        const z = inverseLogTransform((nz / 65535.0) * (maxs[2] - mins[2]) + mins[2]);
+
+                        // Write to monolithic array
+                        // Striding: i * (K * 3) + k * 3 + component
+                        const base = i * K_xyz * 3 + k * 3;
+                        xyzData[base + 0] = x;
+                        xyzData[base + 1] = y;
+                        xyzData[base + 2] = z;
+                    }
+                }
+                progressCallback?.(60 + (k / K_xyz) * 20, `Decoding XYZ Bank ${k}`);
+            }
+        }
+
+        // ROT Banks
+        let rotData: Float32Array | null = null;
+        let K_rot = 0;
+        let rotStride = 0;
+
+        if (meta.rot_bank && Array.isArray(meta.rot_bank)) {
+            K_rot = meta.rot_bank.length;
+            rotData = new Float32Array(count * K_rot * 4);
+            // #WDD 2026-01-18 Parse stride from custom metadata
+            if (meta.custom && meta.custom.rot_bank_keyframe_stride) {
+                rotStride = parseInt(meta.custom.rot_bank_keyframe_stride);
+            } else {
+                rotStride = meta.rot_bank_stride || xyzStride || 1;
+            }
+
+            for (let k = 0; k < K_rot; k++) {
+                const bankMeta = meta.rot_bank[k];
+                if (!bankMeta) continue;
+
+                let bankTex;
+                if (bankMeta.files) bankTex = await loadTexture(bankMeta.files[0]);
+
+                if (bankTex) {
+                    const sqrt2 = Math.sqrt(2);
+                    const texData = bankTex.data;
+
+                    for (let i = 0; i < count; i++) {
+                        // Reuse Quats logic
+                        const r = texData[i * 4], g = texData[i * 4 + 1], b = texData[i * 4 + 2], a = texData[i * 4 + 3];
+                        const key = a - 252;
+                        const qvals = [r, g, b].map(v => (v / 255.0 * 2.0 - 1.0) / sqrt2);
+                        const q = [0, 0, 0, 0];
+                        let qIdx = 0, sumSq = 0;
+                        for (let j = 0; j < 4; j++) {
+                            if (j === key) continue;
+                            q[j] = qvals[qIdx++];
+                            sumSq += q[j] * q[j];
+                        }
+                        q[key] = Math.sqrt(Math.max(0, 1.0 - sumSq));
+
+                        const base = i * K_rot * 4 + k * 4;
+                        rotData[base + 0] = q[0];
+                        rotData[base + 1] = q[1];
+                        rotData[base + 2] = q[2];
+                        rotData[base + 3] = q[3];
+                    }
+                }
+            }
+        }
+
+        // --- 4. Final Data Assembly ---
+        const plyProperties: any[] = [
+            { name: 'x', type: 'float', storage: data.x },
+            { name: 'y', type: 'float', storage: data.y },
+            { name: 'z', type: 'float', storage: data.z },
+            { name: 'rot_0', type: 'float', storage: data.rot_0 },
+            { name: 'rot_1', type: 'float', storage: data.rot_1 },
+            { name: 'rot_2', type: 'float', storage: data.rot_2 },
+            { name: 'rot_3', type: 'float', storage: data.rot_3 },
+            { name: 'scale_0', type: 'float', storage: data.scale_0 },
+            { name: 'scale_1', type: 'float', storage: data.scale_1 },
+            { name: 'scale_2', type: 'float', storage: data.scale_2 },
+            { name: 'opacity', type: 'float', storage: data.opacity },
+            { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
+            { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
+            { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
+            { name: 'original_index', type: 'float', storage: data.original_index },
+            // Lifetime
+            { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
+            { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
+            { name: 't_start', type: 'float', storage: data.t_start },
+            { name: 'duration', type: 'float', storage: data.duration },
+        ];
+
+        for (let i = 0; i < 45; i++) {
+            if (data[`f_rest_${i}`]) {
+                plyProperties.push({ name: `f_rest_${i}`, type: 'float', storage: data[`f_rest_${i}`] });
+            }
+        }
+
+        const plyData = {
+            elements: [{
+                name: 'vertex',
+                count: count,
+                properties: plyProperties
+            }]
+        };
+
+        this.lastResult = {
+            count: count,
+            plyData: plyData,
+            // 4D / Temporal
+            // #WDD 2026-01-18 Parse total_frames from custom metadata
+            frames: (meta.custom && meta.custom.total_frames) ? parseInt(meta.custom.total_frames) :
+                (meta.total_frames || ((K_xyz > 1 ? (K_xyz - 1) * xyzStride + 1 : 1))),
+            // Usually it's implied or in meta. Let's look for 'frames' or 'timeline' in meta? 
+            // If not present, we assume K_xyz * xyzStride? 
+            // Actually TrueSplats bin had T_total. meta.json might have it?
+            // Fallback:
+            trajectory: xyzData,
+            rotTrajectory: rotData,
+            keyframes: K_xyz,
+            rotKeyframes: K_rot,
+            xyzStride: xyzStride,
+            rotStride: rotStride,
+
+            bands: meta.shN?.bands || 0,
+            model_transform: meta.model_transform,
+            cameras: meta.cameras,
+
+            // Buffers for saving
+            sogBuffer: buffer, // The single zip is the source
+            isSOG4: true
+        };
+
+        console.log("[SOG4] Load Complete", this.lastResult);
+        return this.lastResult;
+    }
+
+    static async save(data: any, overrides: any = {}): Promise<Uint8Array> {
+        if (!data.sogBuffer) throw new Error("Missing source SOG buffer for saving");
+
+        const zip = new JSZip();
+        await zip.loadAsync(data.sogBuffer);
+
+        const metaFile = zip.file('meta.json');
+        if (!metaFile) throw new Error("Invalid source SOG: missing meta.json");
+
+        const meta = JSON.parse(await metaFile.async('string'));
+
+        // Apply overrides
+        if (overrides.model_transform) meta.model_transform = overrides.model_transform;
+        if (overrides.cameras) meta.cameras = overrides.cameras;
+        // SOG4 doesn't support 'deleted_indices' in parsing yet, but we can store it
+        if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
+
+        // Write back meta
+        zip.file('meta.json', JSON.stringify(meta, null, 2));
+
+        // Generate new zip
+        console.log("[SOG4] Re-zipping with updated metadata...");
+        return await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
+    }
+}

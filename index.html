@@ -128,32 +128,27 @@
                         d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
                 </svg>
             </button>
-            <!-- Export Button Wrapper -->
-            <div class="relative group/export flex justify-center">
-                <button id="export-file" class="ui-btn p-1.5 rounded-lg w-full flex justify-center has-tooltip"
-                    aria-label="Export Menu">
+            <!-- Export Button - Direct SOG4 #WDD 2026-01-19 去掉下拉列表,直接导出sog4 -->
+            <button id="export-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
+                aria-label="Export SOG4">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                </svg>
+            </button>
+            <!-- AR Camera Select - Second Row -->
+            <div class="col-span-4 relative flex items-center bg-[#2a2b2f] rounded-lg border border-white/10 p-1">
+                <button id="start-ar" class="p-1 px-2 hover:text-white transition-colors" title="Start/Stop AR">
                     <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                        <path
+                            d="M3 5c0-1.1.9-2 2-2h4v2H5v4H3V5zm0 14c0 1.1.9 2 2 2h4v-2H5v-4H3v4zm16 2c1.1 0 2-.9 2-2v-4h-2v4h-4v2h4zm0-16v4h-2V5h-4V3h4c1.1 0 2 .9 2 2z" />
                     </svg>
                 </button>
-                <!-- Bridge to prevent hover loss -->
-                <div class="hidden group-hover/export:block absolute inset-x-0 top-full h-2 z-[9998]"></div>
-                <!-- Floating Export Menu (Highest Layer) -->
-                <div
-                    class="hidden group-hover/export:flex !absolute right-0 top-full mt-2 flex-col gap-1 p-1.5 glass-blue rounded-xl z-[9999] shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 min-w-[100px] pointer-events-auto">
-                    <button id="export-ply"
-                        class="px-3 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-emerald-500/20 hover:text-emerald-400 rounded-lg transition-all text-left flex items-center gap-2">
-                        <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                        .PLY
-                    </button>
-                    <button id="export-gszip"
-                        class="px-3 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-emerald-500/20 hover:text-emerald-400 rounded-lg transition-all text-left flex items-center gap-2">
-                        <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                        .GSZIP
-                    </button>
-                </div>
+                <select id="ar-camera-select"
+                    class="bg-transparent text-xs text-gray-400 focus:outline-none max-w-[100px] cursor-pointer">
+                    <option value="" disabled selected>Camera</option>
+                </select>
             </div>
-            <input type="file" id="file-input" class="hidden" accept=".ply,.splat,.zip,.gszip,.truesplats" />
+            <input type="file" id="file-input" class="hidden" accept=".truesplats" />
         </div>
 
         <aside id="sidebar"
@@ -557,7 +552,6 @@
 
     <button id="playButton">Play / Pause</button>
     <button id="exportButton" onclick="window.exportPlySequence()">Export PLY Sequence</button>
-    <script src="/libde265.js"></script>
     <script type="module" src="./src/main.ts"></script>
 </body>
 

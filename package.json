@@ -9,18 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@playcanvas/pcui": "^5.4.1",
-    "@tensorflow/tfjs": "^4.22.0",
-    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "clsx": "^2.1.1",
-    "hs265": "^1.0.0",
     "jszip": "^3.10.1",
-    "lucide-react": "^0.562.0",
-    "playcanvas": "^1.77.0",
-    "tailwind-merge": "^3.4.0"
+    "mind-ar": "^1.2.5",
+    "playcanvas": "^1.77.0"
   },
   "devDependencies": {
-    "@tensorflow/tfjs-node": "^4.22.0",
     "adm-zip": "^0.5.16",
     "autoprefixer": "^10.4.18",
     "commander": "^14.0.2",

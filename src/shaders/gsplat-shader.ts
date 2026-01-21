@@ -243,34 +243,17 @@ export const splatMainVS = `
     }
 
     // Calculate 4D Opacity Scaling (Sigmoid-based window)
-    uniform sampler2D uOpacityAnimationTexture; // #WDD 2026-01-17
-
     float getLifetimeOpacityTexture(uint id, float t) {
-        #ifdef USE_LIFETIME_ANIM_TEXTURE
-            // #WDD 2026-01-17: Fetch pre-calculated opacity from CPU-generated texture
-            // Ensure frame index is within [0, uGlobalTotalFrames - 1]
-            int frame = clamp(int(floor(t)), 0, int(uGlobalTotalFrames) - 1);
-            
-            // Re-calculate the 1D index: i * TotalFrames + frame
-            // Using integer math to avoid precision issues with large IDs
-            int totalF = int(uGlobalTotalFrames);
-            int index = int(id) * totalF + frame;
-            
-            int texWidth = textureSize(uOpacityAnimationTexture, 0).x;
-            ivec2 uv = ivec2(index % texWidth, index / texWidth);
-            
-            float visibility = texelFetch(uOpacityAnimationTexture, uv, 0).r;
-            return visibility;
-        #elif defined(USE_LIFETIME_TEXTURE)
+        #ifdef USE_LIFETIME_TEXTURE
             // Robust Indexing #WDD 2026-01-16
             int lWidth = textureSize(lifetimeTexture, 0).x;
             ivec2 lUV = ivec2(int(id % uint(lWidth)), int(id / uint(lWidth)));
             vec4 val = texelFetch(lifetimeTexture, lUV, 0);
             
-            float safeTotal = max(uGlobalTotalFrames, 50.0);
-            float mu = val.r * safeTotal;
-            float w = val.g * safeTotal;     
-            float k = val.b * 20.0;
+            // Mu and W are now RAW frame values (no scaling needed) #WDD 2026-01-16
+            float mu = val.r;
+            float w = val.g;     
+            float k = val.b;
 
             float argLeft = k * (t - (mu - w));
             float left = 1.0 / (1.0 + exp(-argLeft));
@@ -281,7 +264,6 @@ export const splatMainVS = `
             float visibility = left * right;
 
             // #WDD 2026-01-16: HARD CUTOFF
-            // Ensure points completely outside the window are 0.0
             if (t < (mu - w) || t > (mu + w)) {
                 visibility = 0.0;
             }
@@ -296,7 +278,6 @@ export const splatMainVS = `
     void main(void)
     {
         bool debugLifetime = false; 
-        splatId = uint(gl_InstanceID);
         if (!calcSplatUV()) {
             gl_Position = discardVec;
             return;
@@ -318,11 +299,6 @@ export const splatMainVS = `
 
             float t0 = float(idx) * uXYZStride;
             float t1 = float(idx + 1) * uXYZStride;
-            
-            // Handle last interval
-            if (idx == int(uKeyframes) - 2) {
-                t1 = max(uGlobalTotalFrames, 50.0) - 1.0;
-            }
 
             int k0 = idx;
             int k1 = idx + 1;
@@ -356,10 +332,6 @@ export const splatMainVS = `
 
             float rt0 = float(rIdx) * uRotStride;
             float rt1 = float(rIdx + 1) * uRotStride;
-
-            if (rIdx == int(uRotKeyframes) - 2) {
-                rt1 = max(uGlobalTotalFrames, 50.0) - 1.0;
-            }
 
             int rk0 = rIdx;
             int rk1 = rIdx + 1;
@@ -401,8 +373,9 @@ export const splatMainVS = `
                 // Mode 1: No Swizzle (Data is already XYZW)
                 q = finalRot; 
             } else {
-                // Mode 0: Default (Data is WXYZ -> Needs .yzwx to become XYZW)
-                q = finalRot.yzwx; 
+                // Mode 0: Also Identity (Data is already XYZW from loader)
+                // Previously assumed WXYZ input -> .yzwx, but loader now reorders to XYZW.
+                q = finalRot; 
             }
             
             mat3 R = quatToMat3(q);
@@ -516,9 +489,14 @@ export const splatMainVS = `
         float alphaMult = getLifetimeOpacityTexture(splatId, uTime); // Passing splatId instead of UV
         float activeAlpha = baseColor.a * alphaMult;
 
-        // #WDD 2026-01-15 Early Discard to match Python 
+        // #WDD 2026-01-17 Debug: Combined Highlights
+        bool forcedVisible = false;
+
+
+
+        // #WDD 2026-01-15 Early Discard (Modified)
         float uAlphaDiscard = 0.01; 
-        if (!debugLifetime && activeAlpha < uAlphaDiscard) {
+        if (!debugLifetime && !forcedVisible && activeAlpha < uAlphaDiscard) {
              gl_Position = discardVec;
              return;
         }
@@ -568,14 +546,37 @@ export const splatMainVS = `
         }
 
         if (selectionVal > 0.0) {
+            color.rgb = vec3(1.0, 1.0, 0.0); // Yellow
             color.a = 1.0; 
         }
+
+        // // 1. Priority: Yellow if W < 1.0 (Short duration)
+        // #ifdef USE_LIFETIME_TEXTURE
+        //     {
+        //         int lWidth_chk = textureSize(lifetimeTexture, 0).x;
+        //         ivec2 lUV_chk = ivec2(int(splatId % uint(lWidth_chk)), int(splatId / uint(lWidth_chk)));
+        //         vec4 valChk = texelFetch(lifetimeTexture, lUV_chk, 0);
+        //         float wVal = valChk.g; // Raw W
+        //         if (wVal <1.0) {
+        //             color.rgb = vec3(1.0, 1.0, 0.0); // Yellow
+        //             color.a = 1.0; 
+        //             forcedVisible = true;
+        //         }
+        //     }
+        // #endif
+
+        // // 2. Red if effective opacity is practically zero (and not already Yellow)
+        // if (baseColor.a < 0.1) {
+        //     color.rgb = vec3(1.0, 0.0, 0.0); // Red
+        //     color.a = 1.0; // Semi-transparent to avoid occlusion
+        //     forcedVisible = true;
+        // }
 
         // --- Deletion check ---
         float deletedVal = texelFetch(selectionTexture, splatUV, 0).g;
         if (deletedVal > 0.0) {
-            gl_Position = discardVec;
-            return;
+             gl_Position = discardVec;
+             return;
         }
         
  
@@ -596,8 +597,9 @@ export const splatMainVS = `
                 vec4 val = texelFetch(lifetimeTexture, lUV_dbg, 0);
                 
                 float safe_total_dbg = max(uGlobalTotalFrames, 50.0);
-                float mu = val.r * safe_total_dbg;
-                float w = val.g * safe_total_dbg;
+                // Texture stores RAW floats now (RGBA32F), so val.r IS mu
+                float mu = val.r; 
+                float w = val.g;
                 float t = uTime;
                 
                 // --- DIAGNOSTIC COLORS ---

@@ -1,0 +1,26 @@
+
+    // Basic static save function for SOG4
+    static async save(data: any, overrides: any = {}): Promise<Uint8Array> {
+        if (!data.sogBuffer) throw new Error("Missing source SOG buffer for saving");
+
+        const zip = new JSZip();
+        await zip.loadAsync(data.sogBuffer);
+
+        const metaFile = zip.file('meta.json');
+        if (!metaFile) throw new Error("Invalid source SOG: missing meta.json");
+        
+        const meta = JSON.parse(await metaFile.async('string'));
+
+        // Apply overrides
+        if (overrides.model_transform) meta.model_transform = overrides.model_transform;
+        if (overrides.cameras) meta.cameras = overrides.cameras;
+        // SOG4 doesn't support 'deleted_indices' in parsing yet, but we can store it
+        if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
+        
+        // Write back meta
+        zip.file('meta.json', JSON.stringify(meta, null, 2));
+
+        // Generate new zip
+        console.log("[SOG4] Re-zipping with updated metadata...");
+        return await zip.generateAsync({ type: 'uint8array', compression: 'STORE' }); // Fast save
+    }

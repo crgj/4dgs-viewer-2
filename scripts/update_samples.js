@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const gszipDir = path.resolve(__dirname, '../public/gszip');
+const gszipDir = path.resolve(__dirname, '../public/sog4');
 const outputFile = path.resolve(__dirname, '../public/samples.json');
 
 function scanFiles() {
@@ -20,10 +20,10 @@ function scanFiles() {
     files.sort();
 
     const samples = files
-        .filter(file => file.endsWith('.gszip') || file.endsWith('.ply') || file.endsWith('.truesplats'))
+        .filter(file => file.endsWith('.sog4'))
         .map(file => ({
             name: file,
-            url: `./gszip/${file}`
+            url: `./sog4/${file}`
         }));
 
     fs.writeFileSync(outputFile, JSON.stringify(samples, null, 2));
