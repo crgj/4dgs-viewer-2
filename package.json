@@ -4,8 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/update_samples.js && vite",
-    "build": "node scripts/update_samples.js && tsc && vite build",
+    "dev-local": "node scripts/update_samples.js && vite",
+    "build-local": "node scripts/update_samples.js && tsc && vite build",
+    "dev": "vite",
+    "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

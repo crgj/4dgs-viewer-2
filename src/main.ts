@@ -1100,23 +1100,31 @@ class Viewer {
         const initSamples = async () => {
             if (!samplesDropdown) return;
             try {
+                // 1. Fetch config first
                 const response = await fetch('./samples.json');
                 if (!response.ok) return;
-                const samples = await response.json() as { name: string, url: string }[];
+                const samples = await response.json() as { name: string, url: string, mirror?: string }[];
+
+
 
                 // Clear existing
                 samplesDropdown.innerHTML = '';
 
                 samples.forEach(sample => {
+                    const pUrl = sample.url;
+                    const mode = "Local";
+
                     const btn = document.createElement('button');
                     btn.className = 'sample-item ui-item group';
-                    btn.dataset.url = sample.url;
+                    btn.dataset.url = pUrl;
+                    btn.title = `Source: ${mode}`;
                     btn.innerHTML = `
-                        <div class="ui-dot"></div>
+                        <div class="ui-dot bg-blue-400"></div>
                         <span class="text-[10px] ui-text-primary font-medium">${sample.name}</span>
                     `;
                     btn.addEventListener('click', () => {
-                        this.loadSampleFile(sample.url);
+                        console.log(`[SmartLoader] Loading ${sample.name} via ${mode}: ${pUrl}`);
+                        this.loadSampleFile(pUrl);
                         samplesDropdown?.classList.add('hidden');
                         toggleSamples?.classList.remove('open');
                     });
@@ -1649,81 +1657,183 @@ class Viewer {
         }
     }
 
-    private async loadSampleFile(url: string) {
-        const filename = url.split('/').pop() || 'sample.truesplats';
+    // #WDD 2026-01-22: Concurrent Chunk Downloader
+    private async downloadFileConcurrent(url: string, onProgress: (loaded: number, total: number) => void): Promise<Blob> {
+        // 1. Head Request to get size and support
+        const headRes = await fetch(url, { method: 'HEAD' });
+        if (!headRes.ok) throw new Error(`Failed to fetch headers: ${headRes.status}`);
 
-        // Initial setup for the UI through a dummy call to loadFile's initial logic
-        // We'll manually trigger the overlay since loadFile happens AFTER download
-        const overlay = document.getElementById('loading-overlay');
-        const status = document.getElementById('loading-status');
-        const detail = document.getElementById('loading-detail');
-        const stepProgress = document.getElementById('loading-step-progress');
-        const stepSquares = document.querySelectorAll('.step-square');
+        const contentLength = headRes.headers.get('content-length');
+        const acceptRanges = headRes.headers.get('accept-ranges');
+        const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
 
-        const updateDownloadProgress = (p: number, s: string, d?: string) => {
-            if (overlay) overlay.classList.remove('hidden');
-            if (status) status.innerText = s;
-            if (detail && d) detail.innerText = d;
+        // Fallback to single stream if no size or no range support
+        if (totalSize === 0 || acceptRanges === 'none') {
+            console.log("[SmartLoader] Range not supported or size unknown. Falling back to single stream.");
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
 
-            if (stepProgress) {
-                // Map 0-100% download to the first segment (Step 0 to Step 1)
-                const percentage = (p / 100) * (1 / (stepSquares.length - 1)) * 100;
-                stepProgress.style.width = `${percentage}%`;
-            }
-
-            stepSquares.forEach((sq, idx) => {
-                if (idx === 0) (sq as HTMLElement).classList.add('reached');
-            });
-        };
-
-        try {
-            updateDownloadProgress(0, "DOWNLOADING", filename);
-
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`Failed to fetch ${url}`);
-
-            const contentLength = response.headers.get('content-length');
-            const total = contentLength ? parseInt(contentLength, 10) : 0;
-
-            if (total === 0) {
-                // Fallback if no content-length
-                const blob = await response.blob();
-                const file = new File([blob], filename, { type: 'application/octet-stream' });
-                this.loadFile(file);
-                return;
-            }
-
-            const reader = response.body!.getReader();
+            const reader = res.body!.getReader();
             let loaded = 0;
             const chunks: Uint8Array[] = [];
-
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-
                 chunks.push(value);
                 loaded += value.length;
+                onProgress(loaded, totalSize || loaded);
+            }
+            return new Blob(chunks as any[]);
+        }
 
-                const percent = Math.round((loaded / total) * 100);
-                const sizeMB = (loaded / (1024 * 1024)).toFixed(1);
-                const totalMB = (total / (1024 * 1024)).toFixed(1);
-                updateDownloadProgress(percent, "DOWNLOADING", `${filename} (${sizeMB}MB / ${totalMB}MB)`);
+        // 2. Chunking Setup
+        const CHUNK_SIZE = 1024 * 1024 * 4; // 4MB chunks
+        const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+        const blobs: Blob[] = new Array(totalChunks);
+        let activeWorkers = 0;
+        let nextChunkIdx = 0;
+        let totalLoaded = 0;
+        const MAX_WORKERS = 4;
+
+        console.log(`[SmartLoader] Starting Concurrent Download: ${totalSize} bytes in ${totalChunks} chunks using ${MAX_WORKERS} workers.`);
+
+        return new Promise((resolve, reject) => {
+            const startWorker = async (workerId: number) => {
+                while (nextChunkIdx < totalChunks) {
+                    const chunkIdx = nextChunkIdx++;
+                    const startInfo = chunkIdx * CHUNK_SIZE;
+                    const endInfo = Math.min((chunkIdx + 1) * CHUNK_SIZE - 1, totalSize - 1);
+
+                    try {
+                        // console.log(`[Worker ${workerId}] Fetching chunk ${chunkIdx}: ${startInfo}-${endInfo}`);
+                        const res = await fetch(url, {
+                            headers: { 'Range': `bytes=${startInfo}-${endInfo}` }
+                        });
+                        if (!res.ok) throw new Error(`Chunk ${chunkIdx} failed: ${res.status}`);
+
+                        const blob = await res.blob();
+                        blobs[chunkIdx] = blob;
+                        totalLoaded += blob.size;
+                        onProgress(totalLoaded, totalSize);
+                    } catch (e) {
+                        console.error(`[Worker ${workerId}] Error on chunk ${chunkIdx}`, e);
+                        reject(e);
+                        return;
+                    }
+                }
+                activeWorkers--;
+                if (activeWorkers === 0) {
+                    resolve(new Blob(blobs));
+                }
+            };
+
+            // Start workers
+            for (let i = 0; i < Math.min(MAX_WORKERS, totalChunks); i++) {
+                activeWorkers++;
+                startWorker(i);
+            }
+        });
+    }
+
+    private async loadSampleFile(url: string) {
+        // #WDD 2026-01-22: Sanitize filename (remove query params and decode)
+        let filename = url.split('/').pop() || 'sample.truesplats';
+        filename = decodeURIComponent(filename.split('?')[0]);
+
+        // Get New Download UI Elements
+        const dlOverlay = document.getElementById('download-overlay');
+        const dlPercent = document.getElementById('download-percent');
+        const dlBar = document.getElementById('download-progress-bar');
+        const dlFilename = document.getElementById('download-filename');
+        const dlSize = document.getElementById('download-size');
+
+        // Get Old Loading UI Elements (for parsing phase)
+        const loadOverlay = document.getElementById('loading-overlay');
+        const loadStatus = document.getElementById('loading-status');
+        const stepSquares = document.querySelectorAll('.step-square');
+
+        const updateDownloadUI = (percent: number, loadedObj: { loaded: number, total: number }) => {
+            if (dlOverlay && dlOverlay.classList.contains('hidden')) dlOverlay.classList.remove('hidden');
+
+            if (dlPercent) dlPercent.innerText = `${Math.round(percent)}%`;
+            if (dlBar) dlBar.style.width = `${percent}%`;
+
+            if (dlFilename) dlFilename.innerText = filename;
+            if (dlSize) {
+                const sizeMB = (loadedObj.loaded / (1024 * 1024)).toFixed(1);
+                const totalMB = (loadedObj.total / (1024 * 1024)).toFixed(1);
+                dlSize.innerText = `${sizeMB} MB / ${totalMB} MB`;
+            }
+        };
+
+        try {
+            // SHOW UI IMMEDIATELY
+            if (dlOverlay) dlOverlay.classList.remove('hidden');
+            if (dlFilename) dlFilename.innerText = filename;
+            if (dlPercent) dlPercent.innerText = "0%";
+            if (dlSize) dlSize.innerText = "Initializing...";
+
+            // Ensure old overlay is hidden
+            if (loadOverlay) loadOverlay.classList.add('hidden');
+
+            // Fetch Blob using Concurrent Downloader
+            const blob = await this.downloadFileConcurrent(url, (loaded, total) => {
+                const percent = total > 0 ? (loaded / total) * 100 : 0;
+                updateDownloadUI(percent, { loaded, total });
+            });
+
+            // #WDD 2026-01-22: Validate content is not HTML
+            const headerHelper = new Uint8Array(await blob.slice(0, 100).arrayBuffer());
+            const headerStr = new TextDecoder().decode(headerHelper);
+            if (headerStr.trim().startsWith('<') || headerStr.includes('<!DOCTYPE html') || headerStr.includes('<html')) {
+                throw new Error("The downloaded file appears to be an HTML page (likely a 404 or Proxy Error), not a valid model file.");
             }
 
-            const blob = new Blob(chunks as any[]);
-            const file = new File([blob], filename, { type: 'application/octet-stream' });
+            // Switch to Parsing UI (Download Complete)
+            if (dlOverlay) dlOverlay.classList.add('hidden');
+            if (loadOverlay) {
+                loadOverlay.classList.remove('hidden');
+                if (loadStatus) loadStatus.innerText = "PARSING";
+                // Reset step progress for parsing
+                stepSquares.forEach((sq, idx) => {
+                    if (idx === 0) (sq as HTMLElement).classList.add('reached');
+                    else (sq as HTMLElement).classList.remove('reached');
+                });
+            }
 
+            const file = new File([blob], filename, { type: 'application/octet-stream' });
             this.loadFile(file);
+
         } catch (error) {
             console.error('Error loading sample file:', error);
             alert('Failed to load sample file.');
-            if (overlay) overlay.classList.add('hidden');
+            if (dlOverlay) dlOverlay.classList.add('hidden');
+            if (loadOverlay) loadOverlay.classList.add('hidden');
         }
     }
 
     private handleFileSelect(e: Event) {
         const input = e.target as HTMLInputElement;
         if (input.files && input.files.length > 0) this.loadFile(input.files[0]);
+    }
+
+    // #WDD 2026-01-22: Connectivity Check Helper
+    private async checkConnectivity(url: string, timeout: number = 2000): Promise<boolean> {
+        return new Promise(resolve => {
+            const controller = new AbortController();
+            const signal = controller.signal;
+            const timer = setTimeout(() => controller.abort(), timeout);
+
+            fetch(url, { method: 'HEAD', mode: 'no-cors', signal })
+                .then(() => {
+                    clearTimeout(timer);
+                    resolve(true); // Connected (even opaque response means reachable)
+                })
+                .catch(() => {
+                    clearTimeout(timer);
+                    resolve(false); // Failed or Timed out
+                });
+        });
     }
 
     private async loadFile(file: File) {
@@ -1935,6 +2045,12 @@ class Viewer {
                 // Call legacy finalize to setup shaders
                 // #WDD 2026-01-16
                 this.finalizeGSplatLoad(asset, count, null, parsed.frames || parsed.maxMu || 100, parsed);
+
+                // #WDD 2026-01-22: Auto-Play and Switch to Play Mode
+                console.log("[Viewer] Auto-starting playback and switching to Play Mode");
+                this.toggleUIVisibility(true); // Switch to Simplified UI
+                if (!this.isPlaying) this.togglePlay(); // Start Animation
+
                 return;
             }
         } catch (e) {

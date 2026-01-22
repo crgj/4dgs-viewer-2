@@ -145,10 +145,17 @@ export class SOG4Loader {
         }
 
         // Opacity
+        // #WDD 2026-01-22: Parse Deleted Indices Set for fast lookup
+        const deletedSet = new Set(meta.deleted_indices || []);
+
         if (props.opacity || props.sh0) {
             const texData = (props.opacity || props.sh0).data;
             for (let i = 0; i < count; i++) {
-                data.opacity[i] = texData[i * 4 + 3] / 255.0;
+                if (deletedSet.has(i)) {
+                    data.opacity[i] = 0; // Force hidden
+                } else {
+                    data.opacity[i] = texData[i * 4 + 3] / 255.0;
+                }
             }
         }
 
@@ -171,7 +178,10 @@ export class SOG4Loader {
                 data.f_dc_0[i] = cb[texData[i * 4 + 0]];
                 data.f_dc_1[i] = cb[texData[i * 4 + 1]];
                 data.f_dc_2[i] = cb[texData[i * 4 + 2]];
-                if (texData[i * 4 + 3] !== undefined) {
+
+                if (deletedSet.has(i)) {
+                    data.opacity[i] = -10.0; // Force hidden (logit space)
+                } else if (texData[i * 4 + 3] !== undefined) {
                     const rawVal = texData[i * 4 + 3] / 255.0;
                     const p = Math.max(1e-6, Math.min(0.999999, rawVal));
                     data.opacity[i] = Math.log(p / (1.0 - p));

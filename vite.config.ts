@@ -18,5 +18,41 @@ export default defineConfig({
             'Cross-Origin-Opener-Policy': 'same-origin',
             'Cross-Origin-Embedder-Policy': 'require-corp',
         },
+        proxy: {
+            '/hf-direct': {
+                target: 'https://huggingface.co',
+                changeOrigin: true,
+                secure: false,
+                headers: {
+                    'Referer': 'https://huggingface.co'
+                },
+                rewrite: (path) => path.replace(/^\/hf-direct/, ''),
+                configure: (proxy, _options) => {
+                    proxy.on('error', (err, _req, _res) => {
+                        console.log('proxy error (direct)', err);
+                    });
+                },
+            },
+            '/hf-mirror': {
+                target: 'https://hf-mirror.com',
+                changeOrigin: true,
+                secure: false,
+                headers: {
+                    'Referer': 'https://hf-mirror.com'
+                },
+                rewrite: (path) => path.replace(/^\/hf-mirror/, ''),
+                configure: (proxy, _options) => {
+                    proxy.on('error', (err, _req, _res) => {
+                        console.log('proxy error', err);
+                    });
+                    proxy.on('proxyReq', (proxyReq, req, _res) => {
+                        console.log('Sending Request to the Target:', req.method, req.url);
+                    });
+                    proxy.on('proxyRes', (proxyRes, req, _res) => {
+                        console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
+                    });
+                },
+            },
+        },
     },
 });
