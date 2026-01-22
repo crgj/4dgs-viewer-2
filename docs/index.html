@@ -57,8 +57,8 @@
             pointer-events: none;
         }
     </style>
-  <script type="module" crossorigin src="./assets/index-De201e3K.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BEPdNrz0.css">
+  <script type="module" crossorigin src="./assets/index-qDJwzUc3.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BoxrQg91.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -398,6 +398,36 @@
     </div>
 
 
+
+    <!-- Dedicated Large Download Overlay #WDD 2026-01-22 -->
+    <div id="download-overlay"
+        class="hidden fixed inset-0 flex items-center justify-center bg-black/90 z-[101] backdrop-blur-md transition-opacity duration-300">
+        <div class="flex flex-col items-center gap-6 w-96 transform scale-100">
+            <!-- Large Percentage -->
+            <div class="relative flex items-center justify-center">
+                <span id="download-percent"
+                    class="text-6xl font-black ui-text-highlight tabular-nums tracking-tighter">0%</span>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden relative">
+                <div id="download-progress-bar"
+                    class="absolute top-0 left-0 h-full bg-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.8)] transition-all duration-100 ease-out"
+                    style="width: 0%"></div>
+            </div>
+
+            <!-- Details -->
+            <div class="flex flex-col items-center gap-1">
+                <div id="download-filename"
+                    class="text-xs font-bold uppercase tracking-[0.2em] ui-text-primary opacity-80">Filename</div>
+                <div id="download-size" class="text-[10px] font-mono uppercase ui-text-secondary opacity-60">0.0 MB /
+                    0.0 MB</div>
+            </div>
+
+            <div class="text-[9px] font-bold text-emerald-500/50 uppercase tracking-widest animate-pulse mt-4">
+                Downloading Content</div>
+        </div>
+    </div>
 
     <!-- Minimalist Loading Overlay -->
     <div id="loading-overlay"
