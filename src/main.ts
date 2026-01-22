@@ -1658,81 +1658,30 @@ class Viewer {
     }
 
     // #WDD 2026-01-22: Concurrent Chunk Downloader
+    // #WDD 2026-01-22: Simplified Single Stream Downloader (with Progress)
     private async downloadFileConcurrent(url: string, onProgress: (loaded: number, total: number) => void): Promise<Blob> {
-        // 1. Head Request to get size and support
-        const headRes = await fetch(url, { method: 'HEAD' });
-        if (!headRes.ok) throw new Error(`Failed to fetch headers: ${headRes.status}`);
+        console.log("[SmartLoader] Starting Direct Download...");
 
-        const contentLength = headRes.headers.get('content-length');
-        const acceptRanges = headRes.headers.get('accept-ranges');
+        // 1. Start Fetch
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
+
+        const contentLength = res.headers.get('content-length');
         const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
 
-        // Fallback to single stream if no size or no range support
-        if (totalSize === 0 || acceptRanges === 'none') {
-            console.log("[SmartLoader] Range not supported or size unknown. Falling back to single stream.");
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
+        const reader = res.body!.getReader();
+        let loaded = 0;
+        const chunks: Uint8Array[] = [];
 
-            const reader = res.body!.getReader();
-            let loaded = 0;
-            const chunks: Uint8Array[] = [];
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(value);
-                loaded += value.length;
-                onProgress(loaded, totalSize || loaded);
-            }
-            return new Blob(chunks as any[]);
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            loaded += value.length;
+            onProgress(loaded, totalSize || loaded);
         }
 
-        // 2. Chunking Setup
-        const CHUNK_SIZE = 1024 * 1024 * 4; // 4MB chunks
-        const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-        const blobs: Blob[] = new Array(totalChunks);
-        let activeWorkers = 0;
-        let nextChunkIdx = 0;
-        let totalLoaded = 0;
-        const MAX_WORKERS = 4;
-
-        console.log(`[SmartLoader] Starting Concurrent Download: ${totalSize} bytes in ${totalChunks} chunks using ${MAX_WORKERS} workers.`);
-
-        return new Promise((resolve, reject) => {
-            const startWorker = async (workerId: number) => {
-                while (nextChunkIdx < totalChunks) {
-                    const chunkIdx = nextChunkIdx++;
-                    const startInfo = chunkIdx * CHUNK_SIZE;
-                    const endInfo = Math.min((chunkIdx + 1) * CHUNK_SIZE - 1, totalSize - 1);
-
-                    try {
-                        // console.log(`[Worker ${workerId}] Fetching chunk ${chunkIdx}: ${startInfo}-${endInfo}`);
-                        const res = await fetch(url, {
-                            headers: { 'Range': `bytes=${startInfo}-${endInfo}` }
-                        });
-                        if (!res.ok) throw new Error(`Chunk ${chunkIdx} failed: ${res.status}`);
-
-                        const blob = await res.blob();
-                        blobs[chunkIdx] = blob;
-                        totalLoaded += blob.size;
-                        onProgress(totalLoaded, totalSize);
-                    } catch (e) {
-                        console.error(`[Worker ${workerId}] Error on chunk ${chunkIdx}`, e);
-                        reject(e);
-                        return;
-                    }
-                }
-                activeWorkers--;
-                if (activeWorkers === 0) {
-                    resolve(new Blob(blobs));
-                }
-            };
-
-            // Start workers
-            for (let i = 0; i < Math.min(MAX_WORKERS, totalChunks); i++) {
-                activeWorkers++;
-                startWorker(i);
-            }
-        });
+        return new Blob(chunks as any[]);
     }
 
     private async loadSampleFile(url: string) {
