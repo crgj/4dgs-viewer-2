@@ -112,14 +112,81 @@ class Viewer {
     private sequenceRequestId = 0;
     private sequenceDesiredFrameIndex = -1;
     private sequencePrefetchCount = 3; // number of frames to prebuild around the current frame
+    private sequencePreloadAllMaxFrames = 200;
+    private sequenceSwapWarmupRafCount = 2; // for very large frames, 1 RAF may still "blink" on first draw
     private sequenceEntityPool: pc.Entity[] = [];
     private sequenceFrameToEntity: Map<number, pc.Entity> = new Map();
     private sequenceEntityToFrame: Map<pc.Entity, number> = new Map();
     private sequencePrefetchInFlight: Set<number> = new Set();
+    // Large splats can take multiple frames to become render-ready; reserve pool entities while building
+    // so we don't reuse the same entity concurrently (which causes flicker/incorrect swaps).
+    private sequenceReservedEntities: Set<pc.Entity> = new Set();
+    private sequenceEntityBuildTarget: WeakMap<pc.Entity, number> = new WeakMap();
     private sequenceActiveEntity: pc.Entity | null = null;
     private sequenceSwapRaf: number | null = null;
     private sequencePendingSwapFrame: number | null = null;
     private sequencePendingSwapEntity: pc.Entity | null = null;
+
+    private getSequenceParentEntity(): pc.Entity {
+        if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) return this.arHandler.arAnchor;
+        return this.app.root;
+    }
+
+    // Called by ARHandler after the AR anchor is created and the current splat is reparented.
+    public onARStartedForSequence() {
+        if (!this.isSequenceMode) return;
+        if (!this.arHandler?.arAnchor) return;
+        const anchor = this.arHandler.arAnchor;
+
+        // Keep local placement identical across frames: copy from the current visible entity.
+        const base = this.splatEntity;
+        const basePos = base ? base.getLocalPosition().clone() : new pc.Vec3();
+        const baseRot = base ? base.getLocalRotation().clone() : new pc.Quat();
+        const baseScale = base ? base.getLocalScale().clone() : new pc.Vec3(1, 1, 1);
+
+        for (const ent of this.sequenceEntityPool) {
+            if (!ent) continue;
+            // Move under anchor so it tracks the marker in AR.
+            if (ent.parent !== anchor) ent.reparent(anchor);
+            ent.setLocalPosition(basePos);
+            ent.setLocalRotation(baseRot);
+            ent.setLocalScale(baseScale);
+        }
+    }
+
+    // Called by ARHandler before destroying the AR anchor so we don't lose hidden sequence entities.
+    public onARStoppingForSequence(targetParent: pc.Entity) {
+        if (!this.isSequenceMode) return;
+        for (const ent of this.sequenceEntityPool) {
+            if (!ent) continue;
+            if (ent.parent !== targetParent) ent.reparent(targetParent);
+        }
+    }
+
+    private shouldPreloadAllSequenceFrames(totalFrames: number): boolean {
+        // Optional override: localStorage.setItem('sequence_preload_all', '1' | '0')
+        const v = localStorage.getItem('sequence_preload_all');
+        if (v === '1') return true;
+        if (v === '0') return false;
+        return totalFrames > 0 && totalFrames <= this.sequencePreloadAllMaxFrames;
+    }
+
+    private async waitForSequenceGsplatMaterial(ent: pc.Entity, timeoutMs: number = 15000): Promise<any | null> {
+        const start = performance.now();
+        while (performance.now() - start < timeoutMs) {
+            if (!this.isSequenceMode) return null;
+            const inst = (ent.gsplat as any)?.instance;
+            if (inst?.material) return inst;
+            await new Promise((r) => setTimeout(r, 16));
+        }
+        return null;
+    }
+
+    private async waitRafs(count: number): Promise<void> {
+        for (let i = 0; i < count; i++) {
+            await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+        }
+    }
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
@@ -2117,6 +2184,8 @@ class Viewer {
         this.sequenceFrameToEntity.clear();
         this.sequenceEntityToFrame.clear();
         this.sequencePrefetchInFlight.clear();
+        this.sequenceReservedEntities.clear();
+        this.sequenceEntityBuildTarget = new WeakMap();
         this.sequenceActiveEntity = null;
         if (this.sequenceSwapRaf !== null) {
             window.cancelAnimationFrame(this.sequenceSwapRaf);
@@ -2335,6 +2404,7 @@ class Viewer {
         if (evictFrame === null) return;
         const ent = this.sequenceFrameToEntity.get(evictFrame);
         if (!ent) return;
+        if (ent === this.sequenceActiveEntity || ent === this.sequencePendingSwapEntity || this.sequenceReservedEntities.has(ent)) return;
         this.sequenceFrameToEntity.delete(evictFrame);
         this.sequenceEntityToFrame.delete(ent);
         ent.enabled = false;
@@ -2347,13 +2417,18 @@ class Viewer {
         if (this.sequencePrefetchInFlight.has(frameIndex)) return;
 
         this.sequencePrefetchInFlight.add(frameIndex);
+        let ent: pc.Entity | null = null;
         try {
             this.evictSequenceCacheIfNeeded(this.sequenceDesiredFrameIndex >= 0 ? this.sequenceDesiredFrameIndex : frameIndex);
 
             // Find a free entity in the pool.
-            let ent: pc.Entity | null = null;
             for (const e of this.sequenceEntityPool) {
-                if (!this.sequenceEntityToFrame.has(e) && e !== this.sequenceActiveEntity) {
+                if (
+                    !this.sequenceEntityToFrame.has(e) &&
+                    !this.sequenceReservedEntities.has(e) &&
+                    e !== this.sequenceActiveEntity &&
+                    e !== this.sequencePendingSwapEntity
+                ) {
                     ent = e;
                     break;
                 }
@@ -2372,7 +2447,15 @@ class Viewer {
                     }
                 }
                 if (evictFrame !== null) {
-                    ent = this.sequenceFrameToEntity.get(evictFrame) || null;
+                    const candidate = this.sequenceFrameToEntity.get(evictFrame) || null;
+                    if (
+                        candidate &&
+                        candidate !== this.sequenceActiveEntity &&
+                        candidate !== this.sequencePendingSwapEntity &&
+                        !this.sequenceReservedEntities.has(candidate)
+                    ) {
+                        ent = candidate;
+                    }
                     if (ent) {
                         this.sequenceFrameToEntity.delete(evictFrame);
                         this.sequenceEntityToFrame.delete(ent);
@@ -2383,6 +2466,9 @@ class Viewer {
 
             if (!ent) return;
 
+            this.sequenceReservedEntities.add(ent);
+            this.sequenceEntityBuildTarget.set(ent, frameIndex);
+
             const asset = this.sequenceAssets[frameIndex];
             (ent.gsplat as any).asset = asset;
 
@@ -2390,17 +2476,22 @@ class Viewer {
             const triesMax = 120;
             for (let tries = 0; tries < triesMax; tries++) {
                 if (!this.isSequenceMode) return;
+                if (this.sequenceEntityBuildTarget.get(ent) !== frameIndex) return;
                 const inst = (ent.gsplat as any)?.instance;
                 if (inst?.material) {
                     this.setupSequenceShader(inst, this.sequenceBands);
                     this.sequenceFrameToEntity.set(frameIndex, ent);
                     this.sequenceEntityToFrame.set(ent, frameIndex);
+                    this.sequenceReservedEntities.delete(ent);
                     return;
                 }
                 await new Promise((r) => setTimeout(r, 16));
             }
         } finally {
             this.sequencePrefetchInFlight.delete(frameIndex);
+            if (ent && this.sequenceEntityBuildTarget.get(ent) === frameIndex) {
+                this.sequenceReservedEntities.delete(ent);
+            }
         }
     }
 
@@ -2446,41 +2537,51 @@ class Viewer {
         this.sequencePendingSwapEntity = next;
 
         // Two-phase swap to avoid both-frames-visible "ghosting":
-        // Phase A: render next invisibly for 1 frame to warm up GPU/shader.
+        // Phase A: render next invisibly for N frames to warm up GPU/shader.
         // Phase B (next RAF): hide prev and show next, with no frame where both are visible.
         next.enabled = true;
         this.setSequenceOpacity(next, 0.0);
         this.setSequenceOpacity(prev, 1.0);
 
         const requestId = this.sequenceRequestId;
-        this.sequenceSwapRaf = window.requestAnimationFrame(() => {
-            this.sequenceSwapRaf = null;
-            // Abort if a newer request arrived.
-            if (requestId !== this.sequenceRequestId || this.sequenceDesiredFrameIndex !== frameIndex) {
-                // Only clear if this callback still corresponds to the currently pending swap.
+        const warmupRafs = Math.max(1, this.sequenceSwapWarmupRafCount | 0);
+        const tick = (remaining: number) => {
+            this.sequenceSwapRaf = window.requestAnimationFrame(() => {
+                this.sequenceSwapRaf = null;
+
+                // Abort if a newer request arrived.
+                if (requestId !== this.sequenceRequestId || this.sequenceDesiredFrameIndex !== frameIndex) {
+                    // Only clear if this callback still corresponds to the currently pending swap.
+                    if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
+                        this.sequencePendingSwapFrame = null;
+                        this.sequencePendingSwapEntity = null;
+                    }
+                    return;
+                }
+
+                if (remaining > 1) {
+                    tick(remaining - 1);
+                    return;
+                }
+
+                this.setSequenceOpacity(prev, 0.0);
+                this.setSequenceOpacity(next, 1.0);
+                if (prev) prev.enabled = false;
+
+                // Reset opacity on the old entity for future reuse.
+                this.setSequenceOpacity(prev, 1.0);
+
+                this.sequenceActiveEntity = next;
+                this.splatEntity = next;
+                this.sequenceFrameIndex = frameIndex;
+
                 if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
                     this.sequencePendingSwapFrame = null;
                     this.sequencePendingSwapEntity = null;
                 }
-                return;
-            }
-
-            this.setSequenceOpacity(prev, 0.0);
-            this.setSequenceOpacity(next, 1.0);
-            if (prev) prev.enabled = false;
-
-            // Reset opacity on the old entity for future reuse.
-            this.setSequenceOpacity(prev, 1.0);
-
-            this.sequenceActiveEntity = next;
-            this.splatEntity = next;
-            this.sequenceFrameIndex = frameIndex;
-
-            if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
-                this.sequencePendingSwapFrame = null;
-                this.sequencePendingSwapEntity = null;
-            }
-        });
+            });
+        };
+        tick(warmupRafs);
     }
 
     private async requestSequenceFrame(frameIndex: number) {
@@ -2560,46 +2661,134 @@ class Viewer {
         this.totalFrames = assets.length;
         this.currentTime = 0;
 
-        // Pre-create a small pool of hidden GSplat entities and pre-build nearby frames into them.
-        // This avoids "blank" time when rapidly seeking / switching frames.
-        const poolSize = Math.min(assets.length, Math.max(2, this.sequencePrefetchCount * 2 + 3));
-        this.sequenceEntityPool = [];
-        for (let i = 0; i < poolSize; i++) {
-            const ent = new pc.Entity(`GSplatSeq_${i}`);
-            ent.addComponent('gsplat', { asset: assets[0] });
-            ent.enabled = i === 0;
-            this.app.root.addChild(ent);
-            this.sequenceEntityPool.push(ent);
-        }
+        const preloadAll = this.shouldPreloadAllSequenceFrames(assets.length);
+        if (preloadAll) {
+            progress(1, 'LOADING', `Preloading ${assets.length} frames to GPU (may take a while)`);
 
-        this.sequenceActiveEntity = this.sequenceEntityPool[0];
-        this.splatEntity = this.sequenceActiveEntity;
+            const parent = this.getSequenceParentEntity();
+            this.sequenceEntityPool = [];
+            this.sequenceFrameToEntity.clear();
+            this.sequenceEntityToFrame.clear();
+            this.sequencePrefetchInFlight.clear();
+            this.sequenceReservedEntities.clear();
+            this.sequenceEntityBuildTarget = new WeakMap();
 
-        // Restore per-sequence transform (including scale) if available.
-        if (this.currentTransformCacheKey) {
-            this.loadCachedTransform(this.currentTransformCacheKey);
-        } else {
-            this.resetObjectTransformUI();
-        }
-
-        // Ensure the active entity is fully ready + shader injected, then cache it as frame 0.
-        this.sequenceDesiredFrameIndex = 0;
-        this.sequenceFrameIndex = -1;
-        await this.buildSequenceEntityForFrame(0);
-        const cached0 = this.sequenceFrameToEntity.get(0);
-        if (cached0) {
-            // Apply cached/UI transform to the first visible frame before starting playback.
-            // Without this, frame 0 can briefly render at the default transform.
-            const active = this.sequenceActiveEntity;
-            if (active && active !== cached0) {
-                cached0.setLocalPosition(active.getLocalPosition());
-                cached0.setLocalRotation(active.getLocalRotation());
-                cached0.setLocalScale(active.getLocalScale());
+            for (let i = 0; i < assets.length; i++) {
+                const ent = new pc.Entity(`GSplatSeq_${i}`);
+                ent.addComponent('gsplat', { asset: assets[i] });
+                ent.enabled = i === 0;
+                parent.addChild(ent);
+                this.sequenceEntityPool.push(ent);
+                this.sequenceFrameToEntity.set(i, ent);
+                this.sequenceEntityToFrame.set(ent, i);
             }
-            this.swapSequenceActiveEntity(cached0, 0);
-        }
 
-        void this.prefetchSequenceAround(0);
+            this.sequenceActiveEntity = this.sequenceEntityPool[0];
+            this.splatEntity = this.sequenceActiveEntity;
+
+            // Restore per-sequence transform (including scale) if available.
+            if (this.currentTransformCacheKey) {
+                this.loadCachedTransform(this.currentTransformCacheKey);
+            } else {
+                this.resetObjectTransformUI();
+            }
+
+            // Ensure every frame's instance exists + sequence shader is injected.
+            for (let i = 0; i < assets.length; i++) {
+                if (!this.isSequenceMode) return;
+                const ent = this.sequenceFrameToEntity.get(i);
+                if (!ent) continue;
+                // Temporarily enable to force instance/material creation in some cases.
+                const wasEnabled = ent.enabled;
+                if (!wasEnabled) ent.enabled = true;
+                const inst = await this.waitForSequenceGsplatMaterial(ent);
+                if (inst?.material) {
+                    this.setupSequenceShader(inst, this.sequenceBands);
+                    // Keep non-active entities hidden after shader injection.
+                    if (i !== 0) {
+                        this.setSequenceOpacity(ent, 0.0);
+                        ent.enabled = false;
+                    } else {
+                        this.setSequenceOpacity(ent, 1.0);
+                    }
+                }
+                if (!wasEnabled && i !== 0) ent.enabled = false;
+
+                if (i % 10 === 0) {
+                    const step = Math.min(8, 1 + Math.floor((i / Math.max(1, assets.length - 1)) * 7));
+                    progress(step, 'LOADING', `Preparing frame ${i + 1} / ${assets.length}`);
+                }
+            }
+
+            // Make sure all entities share the same transform (pos/rot/scale).
+            const base = this.sequenceActiveEntity;
+            if (base) {
+                for (let i = 1; i < assets.length; i++) {
+                    const ent = this.sequenceFrameToEntity.get(i);
+                    if (!ent) continue;
+                    ent.setLocalPosition(base.getLocalPosition());
+                    ent.setLocalRotation(base.getLocalRotation());
+                    ent.setLocalScale(base.getLocalScale());
+                }
+            }
+
+            // Optional GPU warmup pass: draw each frame invisibly once so fast switching is stutter-free.
+            for (let i = 1; i < assets.length; i++) {
+                if (!this.isSequenceMode) return;
+                const ent = this.sequenceFrameToEntity.get(i);
+                if (!ent) continue;
+                ent.enabled = true;
+                this.setSequenceOpacity(ent, 0.0);
+                await this.waitRafs(this.sequenceSwapWarmupRafCount);
+                ent.enabled = false;
+                this.setSequenceOpacity(ent, 1.0);
+            }
+
+            this.sequenceDesiredFrameIndex = 0;
+            this.sequenceFrameIndex = 0;
+        } else {
+            // Streaming mode: pre-create a small pool of hidden GSplat entities and pre-build nearby frames into them.
+            // This avoids "blank" time when rapidly seeking / switching frames.
+            const poolSize = Math.min(assets.length, Math.max(2, this.sequencePrefetchCount * 2 + 3));
+            const parent = this.getSequenceParentEntity();
+            this.sequenceEntityPool = [];
+            for (let i = 0; i < poolSize; i++) {
+                const ent = new pc.Entity(`GSplatSeq_${i}`);
+                ent.addComponent('gsplat', { asset: assets[0] });
+                ent.enabled = i === 0;
+                parent.addChild(ent);
+                this.sequenceEntityPool.push(ent);
+            }
+
+            this.sequenceActiveEntity = this.sequenceEntityPool[0];
+            this.splatEntity = this.sequenceActiveEntity;
+
+            // Restore per-sequence transform (including scale) if available.
+            if (this.currentTransformCacheKey) {
+                this.loadCachedTransform(this.currentTransformCacheKey);
+            } else {
+                this.resetObjectTransformUI();
+            }
+
+            // Ensure the active entity is fully ready + shader injected, then cache it as frame 0.
+            this.sequenceDesiredFrameIndex = 0;
+            this.sequenceFrameIndex = -1;
+            await this.buildSequenceEntityForFrame(0);
+            const cached0 = this.sequenceFrameToEntity.get(0);
+            if (cached0) {
+                // Apply cached/UI transform to the first visible frame before starting playback.
+                // Without this, frame 0 can briefly render at the default transform.
+                const active = this.sequenceActiveEntity;
+                if (active && active !== cached0) {
+                    cached0.setLocalPosition(active.getLocalPosition());
+                    cached0.setLocalRotation(active.getLocalRotation());
+                    cached0.setLocalScale(active.getLocalScale());
+                }
+                this.swapSequenceActiveEntity(cached0, 0);
+            }
+
+            void this.prefetchSequenceAround(0);
+        }
 
         // UI
         const container = document.getElementById('timeline-ticks');

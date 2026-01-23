@@ -217,6 +217,11 @@ export class ARHandler {
 
         const btn = document.getElementById('start-ar');
         if (btn && this.viewer.updateToggleButton) this.viewer.updateToggleButton(btn, true);
+
+        // If a sequence is active, make sure all frames follow the AR anchor too.
+        if (this.viewer && typeof this.viewer.onARStartedForSequence === 'function') {
+            this.viewer.onARStartedForSequence();
+        }
     }
 
     setupBackgroundPlane() {
@@ -352,6 +357,11 @@ export class ARHandler {
         if (this.viewer.axesEntity && this.originalAxesParent) {
             this.viewer.axesEntity.reparent(this.originalAxesParent);
             this.viewer.axesEntity.enabled = true;
+        }
+
+        // Ensure any hidden sequence entities are moved out of the anchor before destroying it.
+        if (this.viewer && typeof this.viewer.onARStoppingForSequence === 'function') {
+            this.viewer.onARStoppingForSequence(this.originalParent || this.app.root);
         }
 
         if (this.arAnchor) {
