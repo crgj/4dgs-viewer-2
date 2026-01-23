@@ -59,6 +59,28 @@ export class SelectionTool {
         this.clearSelection();
     }
 
+    // Sequence mode can require matching the gsplat internal texture dimensions (width/height),
+    // as the shader indexes selectionTexture using the same splatUV as transform textures.
+    initWithSize(numSplats: number, width: number, height: number) {
+        console.log(`[Selection] InitWithSize for ${numSplats} splats. Texture: ${width}x${height}`);
+
+        this.selectionData = new Uint8Array(width * height * 4); // RGBA8
+
+        this.selectionTexture = new pc.Texture(this.app.graphicsDevice, {
+            width: width,
+            height: height,
+            format: pc.PIXELFORMAT_R8_G8_B8_A8,
+            mipmaps: false,
+            minFilter: pc.FILTER_NEAREST,
+            magFilter: pc.FILTER_NEAREST,
+            addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+            addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+            name: 'selectionTexture'
+        });
+
+        this.clearSelection();
+    }
+
     clearSelection() {
         if (!this.selectionData || !this.selectionTexture) return;
 

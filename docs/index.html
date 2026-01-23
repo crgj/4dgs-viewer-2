@@ -57,7 +57,7 @@
             pointer-events: none;
         }
     </style>
-  <script type="module" crossorigin src="./assets/index-CMuUVwsS.js"></script>
+  <script type="module" crossorigin src="./assets/index-DBgJBCaz.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/index-GqWmqasl.css">
 </head>
 
@@ -198,6 +198,17 @@
                             <input type="number" id="rot-z" step="1" value="0"
                                 class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
+                    </div>
+                </div>
+
+                <!-- Object Scale -->
+                <div class="space-y-1">
+                    <span
+                        class="text-[7px] uppercase ui-text-secondary opacity-60 tracking-widest font-bold">Scale</span>
+                    <div class="flex items-center gap-1 ui-input px-1.5 font-mono">
+                        <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">S</span>
+                        <input type="number" id="scale-uniform" step="0.1" value="1.0"
+                            class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                     </div>
                 </div>
 
@@ -366,8 +377,10 @@
                 <!-- FPS Segmented Control -->
                 <div class="flex items-center px-1   ">
                     <div class="flex gap-1 p-0.5">
-                        <button data-value="10"
-                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">10</button>
+                        <button data-value="12"
+                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">12</button>
+                        <button data-value="24"
+                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">24</button>
                         <button data-value="30"
                             class="fps-item  px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary  hover:opacity-100 leading-none active">30</button>
                         <button data-value="60"

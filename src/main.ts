@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
 import { PlyExporter } from './utils/ply-exporter';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
+import { sequenceSplatCoreVS, sequenceSplatMainVS, sequenceSplatMainPS } from './shaders/gsplat-sequence-shader';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
@@ -29,6 +30,12 @@ interface CameraPreset {
     }[];
 }
 
+interface SequenceFrameData {
+    count: number;
+    propertyNames: string[];
+    propertyValues: Record<string, Float32Array>;
+}
+
 class Viewer {
     app: pc.Application;
     camera: pc.Entity | null = null;
@@ -39,6 +46,7 @@ class Viewer {
     duration = 1.0;
     fps = 30; // Default playback fps
     currentFileName: string | null = null;
+    private currentTransformCacheKey: string | null = null;
     originalFrames: number | null = null;
     private isPlaying = false;
     private currentTime = 0;
@@ -94,6 +102,24 @@ class Viewer {
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
     private hasLoggedSorterKeys: boolean = false;
+
+    // --- Sequence Playback (static-per-frame) ---
+    private isSequenceMode = false;
+    private sequenceAssets: pc.Asset[] = [];
+    private sequenceFrameIndex = -1;
+    private sequenceBands = 0;
+    private sequenceApplyTimer: number | null = null;
+    private sequenceRequestId = 0;
+    private sequenceDesiredFrameIndex = -1;
+    private sequencePrefetchCount = 3; // number of frames to prebuild around the current frame
+    private sequenceEntityPool: pc.Entity[] = [];
+    private sequenceFrameToEntity: Map<number, pc.Entity> = new Map();
+    private sequenceEntityToFrame: Map<pc.Entity, number> = new Map();
+    private sequencePrefetchInFlight: Set<number> = new Set();
+    private sequenceActiveEntity: pc.Entity | null = null;
+    private sequenceSwapRaf: number | null = null;
+    private sequencePendingSwapFrame: number | null = null;
+    private sequencePendingSwapEntity: pc.Entity | null = null;
 
     constructor() {
         const canvas = document.getElementById('application-canvas') as HTMLCanvasElement;
@@ -511,13 +537,17 @@ class Viewer {
             dropZone?.classList.remove('active');
             if (dropMsg) dropMsg.style.opacity = '0.1';
         });
-        window.addEventListener('drop', (e) => {
+        window.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropZone?.classList.remove('active');
             if (dropMsg) dropMsg.style.opacity = '0.1';
-            const files = e.dataTransfer?.files;
-            if (files && files.length > 0) this.loadFile(files[0]);
+
+            const files = await this.collectDroppedFiles(e);
+            if (files.length > 0) {
+                await this.handleDroppedFiles(files);
+            }
         });
+
 
         const updateObjectTransform = () => {
             if (!this.splatEntity) return;
@@ -527,13 +557,15 @@ class Viewer {
             const rx = parseFloat((document.getElementById('rot-x') as HTMLInputElement).value) || 0;
             const ry = parseFloat((document.getElementById('rot-y') as HTMLInputElement).value) || 0;
             const rz = parseFloat((document.getElementById('rot-z') as HTMLInputElement).value) || 0;
+            const s = parseFloat((document.getElementById('scale-uniform') as HTMLInputElement | null)?.value || '1') || 1;
 
             this.splatEntity.setPosition(px, py, pz);
             this.splatEntity.setEulerAngles(rx, ry, rz);
+            this.splatEntity.setLocalScale(s, s, s);
 
             // Save to cache on every update (manual input or scrub)
-            if (this.currentFileName) {
-                this.saveTransformToCache(this.currentFileName);
+            if (this.currentTransformCacheKey) {
+                this.saveTransformToCache(this.currentTransformCacheKey);
             }
         };
 
@@ -725,7 +757,7 @@ class Viewer {
         let scrubStartX = 0;
         let scrubStartVal = 0;
 
-        ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z'].forEach(id => {
+        ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z', 'scale-uniform'].forEach(id => {
             const input = document.getElementById(id) as HTMLInputElement;
             if (!input) return;
 
@@ -755,12 +787,16 @@ class Viewer {
             if (!activeScrubInput) return;
             isUIInteracting = true;
             const delta = clientX - scrubStartX;
-            const step = activeScrubInput.id.startsWith('rot') ? 1 : 0.05;
+            const step = activeScrubInput.id.startsWith('rot') ? 1 : (activeScrubInput.id === 'scale-uniform' ? 0.02 : 0.05);
             const newVal = scrubStartVal + delta * step;
 
-            activeScrubInput.value = activeScrubInput.id.startsWith('rot')
-                ? Math.round(newVal).toString()
-                : newVal.toFixed(2);
+            if (activeScrubInput.id.startsWith('rot')) {
+                activeScrubInput.value = Math.round(newVal).toString();
+            } else if (activeScrubInput.id === 'scale-uniform') {
+                activeScrubInput.value = Math.max(0.0001, newVal).toFixed(3);
+            } else {
+                activeScrubInput.value = newVal.toFixed(2);
+            }
 
             updateObjectTransform();
         };
@@ -843,6 +879,10 @@ class Viewer {
                 this.pitch = Math.max(-89, Math.min(89, this.pitch));
 
                 if (this.isOrbitMode) {
+                    // Keep orbit distance consistent with any manual camera moves (e.g. WASD translate).
+                    // Otherwise the next orbit update snaps back to the old stored orbitDistance.
+                    this.orbitDistance = Math.max(1.0, this.camera.getPosition().length());
+
                     // #WDD 2026-01-21 Orbit around origin (0,0,0)
                     // Convert spherical to cartesian
                     // Assuming orbitDistance is maintained
@@ -1024,15 +1064,25 @@ class Viewer {
             // #WDD 2026-01-18 Lock Camera in AR (Added isARRunning check)
             if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.isCameraAnimating && !isTyping && !(this.arHandler && this.arHandler.isARRunning)) {
                 const speed = dt * 5;
-                if (keys['KeyW']) this.camera.translateLocal(0, 0, -speed);
-                if (keys['KeyS']) this.camera.translateLocal(0, 0, speed);
-                if (keys['KeyA']) this.camera.translateLocal(-speed, 0, 0);
-                if (keys['KeyD']) this.camera.translateLocal(speed, 0, 0);
+                if (this.isOrbitMode) {
+                    // In orbit mode, WASD should behave like zoom (W/S) and not break the orbit constraints.
+                    let changed = false;
+                    if (keys['KeyW']) { this.orbitDistance = Math.max(1.0, this.orbitDistance - speed); changed = true; }
+                    if (keys['KeyS']) { this.orbitDistance = Math.max(1.0, this.orbitDistance + speed); changed = true; }
+                    if (changed) this.orbitCameraUpdates();
+                } else {
+                    if (keys['KeyW']) this.camera.translateLocal(0, 0, -speed);
+                    if (keys['KeyS']) this.camera.translateLocal(0, 0, speed);
+                    if (keys['KeyA']) this.camera.translateLocal(-speed, 0, 0);
+                    if (keys['KeyD']) this.camera.translateLocal(speed, 0, 0);
+                }
                 if (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD']) {
                     // Sync overlays on manual move too? Maybe not every frame, but proximity needs it.
                 }
-                if (keys['KeyQ']) this.camera.translateLocal(0, -speed, 0);
-                if (keys['KeyE']) this.camera.translateLocal(0, speed, 0);
+                if (!this.isOrbitMode) {
+                    if (keys['KeyQ']) this.camera.translateLocal(0, -speed, 0);
+                    if (keys['KeyE']) this.camera.translateLocal(0, speed, 0);
+                }
             }
 
             if (this.isPlaying) {
@@ -1059,6 +1109,11 @@ class Viewer {
                 }
                 if (timeLabel) timeLabel.innerText = `${displayFrame} / ${total}`;
 
+                // Sequence mode switches whole gsplat assets per frame (static-per-frame playback).
+                if (this.isSequenceMode) {
+                    void this.applySequenceFrame(displayFrame);
+                }
+
                 if (this.splatEntity?.gsplat) {
                     const material = (this.splatEntity.gsplat as any).instance.material;
                     if (material) {
@@ -1076,6 +1131,10 @@ class Viewer {
                         material.setParameter('uTime', shaderTime);
                         material.setParameter('uGlobalTotalFrames', this.duration);
                     }
+                }
+
+                if (this.isSequenceMode) {
+                    void this.applySequenceFrame(Math.floor(this.currentTime));
                 }
             }
         });
@@ -1831,10 +1890,15 @@ class Viewer {
 
         // Update filename for caching
         this.currentFileName = file.name;
+        this.currentTransformCacheKey = file.name;
 
         if (this.splatEntity) this.splatEntity.destroy();
         this.cameraPresets = [];
         this.renderPresets();
+        this.isSequenceMode = false;
+        this.sequenceAssets = [];
+        this.sequenceFrameIndex = -1;
+        this.sequenceBands = 0;
 
         const scElem = document.getElementById('splat-count');
         if (scElem) scElem.innerText = "--";
@@ -2007,6 +2071,700 @@ class Viewer {
             alert("Error loading file: " + (e instanceof Error ? e.message : String(e)));
             if (overlay) overlay.classList.add('hidden');
         }
+    }
+
+    private createSequenceProgressUpdater() {
+        const overlay = document.getElementById('loading-overlay');
+        const statusEl = document.getElementById('loading-status');
+        const detailEl = document.getElementById('loading-detail');
+        const bar = document.getElementById('loading-step-progress');
+        const squares = Array.from(document.querySelectorAll('.step-square'));
+        return (step: number, status: string, detail?: string) => {
+            overlay?.classList.remove('hidden');
+            if (statusEl) statusEl.innerText = status;
+            if (detailEl) detailEl.innerText = detail || '';
+            if (bar) {
+                const maxIndex = Math.max(squares.length - 1, 1);
+                const pct = Math.min(Math.max((step / maxIndex) * 100, 0), 100);
+                bar.style.width = `${pct}%`;
+            }
+            squares.forEach((square, idx) => {
+                if (idx <= step) square.classList.add('reached');
+                else square.classList.remove('reached');
+            });
+        };
+    }
+
+    private activeLoadingSequenceCleanup() {
+        if (this.splatEntity) {
+            this.splatEntity.destroy();
+            this.splatEntity = null;
+        }
+        this.cameraPresets = [];
+        this.renderPresets();
+        this.isSequenceMode = false;
+        this.sequenceAssets = [];
+        this.sequenceFrameIndex = -1;
+        this.sequenceBands = 0;
+        this.sequenceRequestId = 0;
+        this.sequenceDesiredFrameIndex = -1;
+        if (this.sequenceApplyTimer !== null) {
+            window.clearInterval(this.sequenceApplyTimer);
+            this.sequenceApplyTimer = null;
+        }
+        this.sequenceEntityPool.forEach((e) => e.destroy());
+        this.sequenceEntityPool = [];
+        this.sequenceFrameToEntity.clear();
+        this.sequenceEntityToFrame.clear();
+        this.sequencePrefetchInFlight.clear();
+        this.sequenceActiveEntity = null;
+        if (this.sequenceSwapRaf !== null) {
+            window.cancelAnimationFrame(this.sequenceSwapRaf);
+            this.sequenceSwapRaf = null;
+        }
+    }
+
+    private async parsePlyFrame(file: File): Promise<SequenceFrameData> {
+        const buffer = await file.arrayBuffer();
+        const text = new TextDecoder('ascii').decode(buffer);
+        const headerEndIndex = text.indexOf('end_header');
+        if (headerEndIndex === -1) throw new Error('PLY missing end_header.');
+        const headerText = text.slice(0, headerEndIndex);
+        const lines = headerText.split(/\r?\n/);
+        let vertexCount = 0;
+        let currentElement = '';
+        let isLittleEndian = true;
+        const propertyDefs: {
+            name: string;
+            size: number;
+            reader: (view: DataView, offset: number, littleEndian: boolean) => number;
+        }[] = [];
+
+        const typeReaders: Record<string, { size: number; reader: (view: DataView, offset: number, littleEndian: boolean) => number }> = {
+            'char': { size: 1, reader: (view, offset) => view.getInt8(offset) },
+            'int8': { size: 1, reader: (view, offset) => view.getInt8(offset) },
+            'uchar': { size: 1, reader: (view, offset) => view.getUint8(offset) },
+            'uint8': { size: 1, reader: (view, offset) => view.getUint8(offset) },
+            'short': { size: 2, reader: (view, offset, le) => view.getInt16(offset, le) },
+            'int16': { size: 2, reader: (view, offset, le) => view.getInt16(offset, le) },
+            'ushort': { size: 2, reader: (view, offset, le) => view.getUint16(offset, le) },
+            'uint16': { size: 2, reader: (view, offset, le) => view.getUint16(offset, le) },
+            'int': { size: 4, reader: (view, offset, le) => view.getInt32(offset, le) },
+            'int32': { size: 4, reader: (view, offset, le) => view.getInt32(offset, le) },
+            'uint': { size: 4, reader: (view, offset, le) => view.getUint32(offset, le) },
+            'uint32': { size: 4, reader: (view, offset, le) => view.getUint32(offset, le) },
+            'float': { size: 4, reader: (view, offset, le) => view.getFloat32(offset, le) },
+            'float32': { size: 4, reader: (view, offset, le) => view.getFloat32(offset, le) },
+            'double': { size: 8, reader: (view, offset, le) => view.getFloat64(offset, le) },
+            'float64': { size: 8, reader: (view, offset, le) => view.getFloat64(offset, le) }
+        };
+
+        for (const lineRaw of lines) {
+            const line = lineRaw.trim();
+            if (!line) continue;
+            const parts = line.split(/\s+/);
+            if (parts[0] === 'format') {
+                const fmt = parts[1];
+                if (fmt === 'binary_big_endian') {
+                    isLittleEndian = false;
+                } else if (fmt !== 'binary_little_endian') {
+                    throw new Error('Only binary PLY sequences are supported.');
+                }
+            } else if (parts[0] === 'element') {
+                currentElement = parts[1];
+                if (currentElement === 'vertex') {
+                    vertexCount = parseInt(parts[2], 10);
+                }
+            } else if (parts[0] === 'property' && currentElement === 'vertex') {
+                if (parts[1] === 'list') continue;
+                const type = parts[1].toLowerCase();
+                const name = parts[2];
+                const typeInfo = typeReaders[type];
+                if (!typeInfo) {
+                    throw new Error(`Unsupported property type in PLY sequence: ${type}`);
+                }
+                propertyDefs.push({ name, size: typeInfo.size, reader: typeInfo.reader });
+            }
+        }
+
+        const newlineIndex = text.indexOf('\n', headerEndIndex);
+        const bodyStart = newlineIndex === -1 ? text.length : newlineIndex + 1;
+        const view = new DataView(buffer);
+        const rowSize = propertyDefs.reduce((sum, def) => sum + def.size, 0);
+        const propertyArrays: Record<string, Float32Array> = {};
+        propertyDefs.forEach((def) => {
+            propertyArrays[def.name] = new Float32Array(vertexCount);
+        });
+
+        for (let i = 0; i < vertexCount; i++) {
+            let offset = bodyStart + i * rowSize;
+            for (const def of propertyDefs) {
+                const value = def.reader(view, offset, isLittleEndian);
+                propertyArrays[def.name][i] = value;
+                offset += def.size;
+            }
+        }
+
+        return {
+            count: vertexCount,
+            propertyNames: propertyDefs.map((def) => def.name),
+            propertyValues: propertyArrays
+        };
+    }
+
+    private createGsplatAssetFromVertexElement(assetName: string, vertexElement: any): pc.Asset {
+        const splatData = new (pc.GSplatData as any)([vertexElement]);
+        const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
+        const asset = new pc.Asset(assetName, 'gsplat', { url: '' });
+        asset.resource = resource;
+        asset.loaded = true;
+        this.app.assets.add(asset);
+        return asset;
+    }
+
+    private setupSequenceShader(instance: any, bands: number) {
+        const material = instance.material;
+        material.setParameter('uTime', 0.0);
+        material.setParameter('uTransitionFactor', 0.0);
+        material.setParameter('uSwizzleMode', this.swizzleMode);
+        material.setParameter('uGlobalTotalFrames', this.duration);
+        material.setParameter('uSequenceOpacity', 1.0);
+        if (this.selectionTool?.selectionTexture) {
+            material.setParameter('selectionTexture', this.selectionTool.selectionTexture);
+        }
+        material.setParameter('isSelectionMode', 0.0);
+
+        if ((material as any).__sequenceShaderInjected) {
+            material.update();
+            return;
+        }
+        (material as any).__sequenceShaderInjected = true;
+
+        const originalGetShaderVariant = material.getShaderVariant;
+
+        material.getShaderVariant = function (device: any, scene: any, defs: any, unused: any, pass: any, sortedLights: any, viewUniformFormat: any, viewBindGroupFormat: any) {
+            const library = device.getProgramLibrary();
+            const originalGetProgram = library.getProgram;
+
+            library.getProgram = function (name: string, options: any, processingOptions: any) {
+                if (name === 'splat') {
+                    if (!options.defines) options.defines = [];
+
+                    // For sequence we intentionally do NOT enable 4D/lifetime defines.
+                    if (bands >= 1 && !options.defines.includes('USE_SH1')) options.defines.push('USE_SH1');
+                    if (bands >= 2 && !options.defines.includes('USE_SH2')) options.defines.push('USE_SH2');
+                    if (bands >= 3 && !options.defines.includes('USE_SH3')) options.defines.push('USE_SH3');
+
+                    const defines = options.defines.map((d: string) => `#define ${d}`).join('\n') + '\n';
+                    const version = "#version 300 es\n";
+
+                    const vsCode = version + defines + sequenceSplatCoreVS + sequenceSplatMainVS;
+                    const fsCode = version + defines + "precision mediump float;\n" + sequenceSplatMainPS;
+
+                    const shaderDefinition = {
+                        attributes: {
+                            vertex_position: pc.SEMANTIC_POSITION,
+                            vertex_id_attrib: pc.SEMANTIC_ATTR13
+                        },
+                        vshader: vsCode,
+                        fshader: fsCode
+                    };
+                    return new pc.Shader(device, shaderDefinition);
+                }
+                return originalGetProgram.call(this, name, options, processingOptions);
+            };
+
+            const result = originalGetShaderVariant.apply(this, arguments);
+            library.getProgram = originalGetProgram;
+            return result;
+        };
+
+        if ((material as any).clearVariants) {
+            (material as any).clearVariants();
+        }
+        material.update();
+    }
+
+    private ensureSequenceSelectionTextureForAsset(asset: pc.Asset) {
+        try {
+            const resource = asset.resource as pc.GSplatResource;
+            const splatData = resource.splatData;
+            const numSplats = splatData.numSplats;
+
+            const resAny = asset.resource as any;
+            const texWidth = (resAny?.colorTexture?.width || resAny?.transformATexture?.width || Math.ceil(Math.sqrt(numSplats))) as number;
+            const texHeight = Math.ceil(numSplats / texWidth);
+
+            const existing = this.selectionTool?.selectionTexture;
+            const needsRecreate = !existing || existing.width !== texWidth || existing.height !== texHeight;
+            if (needsRecreate) {
+                // Match the gsplat UV addressing to avoid undefined texelFetch results.
+                (this.selectionTool as any).initWithSize(numSplats, texWidth, texHeight);
+            }
+        } catch (e) {
+            console.warn('[Sequence] ensureSequenceSelectionTextureForAsset failed:', e);
+        }
+    }
+
+    private getSequenceFrameRangeToPrefetch(centerFrame: number): number[] {
+        const targets: number[] = [];
+        const maxFrame = this.sequenceAssets.length - 1;
+        for (let d = 1; d <= this.sequencePrefetchCount; d++) {
+            const fwd = centerFrame + d;
+            const back = centerFrame - d;
+            if (fwd <= maxFrame) targets.push(fwd);
+            if (back >= 0) targets.push(back);
+        }
+        return targets;
+    }
+
+    private evictSequenceCacheIfNeeded(keepAroundFrame: number) {
+        const maxCached = Math.max(2, this.sequencePrefetchCount * 2 + 1);
+        if (this.sequenceFrameToEntity.size <= maxCached) return;
+
+        // Evict the frame farthest from current desired frame.
+        let evictFrame: number | null = null;
+        let bestDist = -1;
+        for (const frame of this.sequenceFrameToEntity.keys()) {
+            const dist = Math.abs(frame - keepAroundFrame);
+            if (dist > bestDist) {
+                bestDist = dist;
+                evictFrame = frame;
+            }
+        }
+        if (evictFrame === null) return;
+        const ent = this.sequenceFrameToEntity.get(evictFrame);
+        if (!ent) return;
+        this.sequenceFrameToEntity.delete(evictFrame);
+        this.sequenceEntityToFrame.delete(ent);
+        ent.enabled = false;
+    }
+
+    private async buildSequenceEntityForFrame(frameIndex: number): Promise<void> {
+        if (!this.isSequenceMode) return;
+        if (frameIndex < 0 || frameIndex >= this.sequenceAssets.length) return;
+        if (this.sequenceFrameToEntity.has(frameIndex)) return;
+        if (this.sequencePrefetchInFlight.has(frameIndex)) return;
+
+        this.sequencePrefetchInFlight.add(frameIndex);
+        try {
+            this.evictSequenceCacheIfNeeded(this.sequenceDesiredFrameIndex >= 0 ? this.sequenceDesiredFrameIndex : frameIndex);
+
+            // Find a free entity in the pool.
+            let ent: pc.Entity | null = null;
+            for (const e of this.sequenceEntityPool) {
+                if (!this.sequenceEntityToFrame.has(e) && e !== this.sequenceActiveEntity) {
+                    ent = e;
+                    break;
+                }
+            }
+
+            // If none free, evict an existing cached entry.
+            if (!ent) {
+                let evictFrame: number | null = null;
+                let bestDist = -1;
+                const around = this.sequenceDesiredFrameIndex >= 0 ? this.sequenceDesiredFrameIndex : frameIndex;
+                for (const f of this.sequenceFrameToEntity.keys()) {
+                    const dist = Math.abs(f - around);
+                    if (dist > bestDist) {
+                        bestDist = dist;
+                        evictFrame = f;
+                    }
+                }
+                if (evictFrame !== null) {
+                    ent = this.sequenceFrameToEntity.get(evictFrame) || null;
+                    if (ent) {
+                        this.sequenceFrameToEntity.delete(evictFrame);
+                        this.sequenceEntityToFrame.delete(ent);
+                        ent.enabled = false;
+                    }
+                }
+            }
+
+            if (!ent) return;
+
+            const asset = this.sequenceAssets[frameIndex];
+            (ent.gsplat as any).asset = asset;
+
+            // Wait until instance exists so we can inject the sequence shader upfront (hidden preload).
+            const triesMax = 120;
+            for (let tries = 0; tries < triesMax; tries++) {
+                if (!this.isSequenceMode) return;
+                const inst = (ent.gsplat as any)?.instance;
+                if (inst?.material) {
+                    this.setupSequenceShader(inst, this.sequenceBands);
+                    this.sequenceFrameToEntity.set(frameIndex, ent);
+                    this.sequenceEntityToFrame.set(ent, frameIndex);
+                    return;
+                }
+                await new Promise((r) => setTimeout(r, 16));
+            }
+        } finally {
+            this.sequencePrefetchInFlight.delete(frameIndex);
+        }
+    }
+
+    private async prefetchSequenceAround(frameIndex: number) {
+        const targets = this.getSequenceFrameRangeToPrefetch(frameIndex);
+        for (const f of targets) {
+            // Fire-and-forget; limiting concurrency keeps the UI responsive.
+            void this.buildSequenceEntityForFrame(f);
+        }
+    }
+
+    private setSequenceOpacity(ent: pc.Entity | null, opacity: number) {
+        if (!ent?.gsplat) return;
+        const inst = (ent.gsplat as any).instance;
+        if (inst?.material) {
+            inst.material.setParameter('uSequenceOpacity', opacity);
+            inst.material.update();
+        }
+    }
+
+    private swapSequenceActiveEntity(next: pc.Entity, frameIndex: number) {
+        const prev = this.sequenceActiveEntity;
+        if (prev === next) return;
+
+        // If the exact same swap is already pending, don't keep canceling/rescheduling it.
+        // Doing so can starve the RAF callback and make playback appear "stuck".
+        if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) return;
+
+        if (this.sequenceSwapRaf !== null) {
+            window.cancelAnimationFrame(this.sequenceSwapRaf);
+            this.sequenceSwapRaf = null;
+        }
+
+        // If we had a previously-prepared "next" entity (enabled with opacity 0), clean it up.
+        // This prevents stray entities from lingering enabled when the target frame changes.
+        const oldPendingEnt = this.sequencePendingSwapEntity;
+        if (oldPendingEnt && oldPendingEnt !== prev && oldPendingEnt !== next) {
+            this.setSequenceOpacity(oldPendingEnt, 1.0);
+            oldPendingEnt.enabled = false;
+        }
+
+        this.sequencePendingSwapFrame = frameIndex;
+        this.sequencePendingSwapEntity = next;
+
+        // Two-phase swap to avoid both-frames-visible "ghosting":
+        // Phase A: render next invisibly for 1 frame to warm up GPU/shader.
+        // Phase B (next RAF): hide prev and show next, with no frame where both are visible.
+        next.enabled = true;
+        this.setSequenceOpacity(next, 0.0);
+        this.setSequenceOpacity(prev, 1.0);
+
+        const requestId = this.sequenceRequestId;
+        this.sequenceSwapRaf = window.requestAnimationFrame(() => {
+            this.sequenceSwapRaf = null;
+            // Abort if a newer request arrived.
+            if (requestId !== this.sequenceRequestId || this.sequenceDesiredFrameIndex !== frameIndex) {
+                // Only clear if this callback still corresponds to the currently pending swap.
+                if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
+                    this.sequencePendingSwapFrame = null;
+                    this.sequencePendingSwapEntity = null;
+                }
+                return;
+            }
+
+            this.setSequenceOpacity(prev, 0.0);
+            this.setSequenceOpacity(next, 1.0);
+            if (prev) prev.enabled = false;
+
+            // Reset opacity on the old entity for future reuse.
+            this.setSequenceOpacity(prev, 1.0);
+
+            this.sequenceActiveEntity = next;
+            this.splatEntity = next;
+            this.sequenceFrameIndex = frameIndex;
+
+            if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
+                this.sequencePendingSwapFrame = null;
+                this.sequencePendingSwapEntity = null;
+            }
+        });
+    }
+
+    private async requestSequenceFrame(frameIndex: number) {
+        if (!this.isSequenceMode) return;
+        if (frameIndex < 0 || frameIndex >= this.sequenceAssets.length) return;
+
+        // Avoid spamming swaps for the same target; the playback loop calls this every tick.
+        if (frameIndex === this.sequenceFrameIndex) return;
+        if (this.sequencePendingSwapFrame === frameIndex) return;
+
+        this.sequenceDesiredFrameIndex = frameIndex;
+        void this.prefetchSequenceAround(frameIndex);
+
+        // If already cached and ready, swap instantly.
+        const cached = this.sequenceFrameToEntity.get(frameIndex);
+        if (cached && cached.gsplat) {
+            const active = this.sequenceActiveEntity;
+            if (active && active !== cached) {
+                cached.setLocalPosition(active.getLocalPosition());
+                cached.setLocalRotation(active.getLocalRotation());
+                cached.setLocalScale(active.getLocalScale());
+            }
+            this.swapSequenceActiveEntity(cached, frameIndex);
+            this.updateStats(this.sequenceAssets[frameIndex]);
+            return;
+        }
+
+        // Not ready yet: build a pool entity for it, then swap when ready (keeps current visible).
+        await this.buildSequenceEntityForFrame(frameIndex);
+        // If user/auto-play requested a different frame while we were building, don't swap to an old one.
+        if (this.sequenceDesiredFrameIndex !== frameIndex) return;
+        const ready = this.sequenceFrameToEntity.get(frameIndex);
+        if (ready) {
+            const active = this.sequenceActiveEntity;
+            if (active && active !== ready) {
+                ready.setLocalPosition(active.getLocalPosition());
+                ready.setLocalRotation(active.getLocalRotation());
+                ready.setLocalScale(active.getLocalScale());
+            }
+            this.swapSequenceActiveEntity(ready, frameIndex);
+            this.updateStats(this.sequenceAssets[frameIndex]);
+        }
+    }
+
+    private async applySequenceFrame(frameIndex: number) {
+        // Backwards-compatible wrapper used by the playback loop.
+        await this.requestSequenceFrame(frameIndex);
+    }
+
+    private async startSequencePlayback(assets: pc.Asset[], label: string, bands: number, progress: (step: number, status: string, detail?: string) => void) {
+        if (!assets.length) throw new Error('No sequence frames to play.');
+
+        // Do not auto-play sequences on load.
+        if (this.isPlaying) this.togglePlay();
+
+        this.activeLoadingSequenceCleanup();
+
+        this.isSequenceMode = true;
+        this.is4DGS = false;
+        this.trajectoryData = null;
+        this.keyframes = 0;
+        this.xyzStride = 1;
+        this.rotTrajectoryData = null;
+        this.rotKeyframes = 0;
+        this.rotStride = 1;
+
+        this.sequenceAssets = assets;
+        this.sequenceBands = bands;
+        this.sequenceFrameIndex = -1;
+
+        this.currentFileName = label;
+        // Keep transform caching stable per dropped sequence, not shared across all sequences of the same type.
+        const first = assets[0]?.name || 'frame0';
+        const last = assets[assets.length - 1]?.name || 'frameN';
+        this.currentTransformCacheKey = `seq_${label}_${assets.length}_${first}_${last}`;
+        this.duration = assets.length;
+        this.totalFrames = assets.length;
+        this.currentTime = 0;
+
+        // Pre-create a small pool of hidden GSplat entities and pre-build nearby frames into them.
+        // This avoids "blank" time when rapidly seeking / switching frames.
+        const poolSize = Math.min(assets.length, Math.max(2, this.sequencePrefetchCount * 2 + 3));
+        this.sequenceEntityPool = [];
+        for (let i = 0; i < poolSize; i++) {
+            const ent = new pc.Entity(`GSplatSeq_${i}`);
+            ent.addComponent('gsplat', { asset: assets[0] });
+            ent.enabled = i === 0;
+            this.app.root.addChild(ent);
+            this.sequenceEntityPool.push(ent);
+        }
+
+        this.sequenceActiveEntity = this.sequenceEntityPool[0];
+        this.splatEntity = this.sequenceActiveEntity;
+
+        // Restore per-sequence transform (including scale) if available.
+        if (this.currentTransformCacheKey) {
+            this.loadCachedTransform(this.currentTransformCacheKey);
+        } else {
+            this.resetObjectTransformUI();
+        }
+
+        // Ensure the active entity is fully ready + shader injected, then cache it as frame 0.
+        this.sequenceDesiredFrameIndex = 0;
+        this.sequenceFrameIndex = -1;
+        await this.buildSequenceEntityForFrame(0);
+        const cached0 = this.sequenceFrameToEntity.get(0);
+        if (cached0) {
+            // Apply cached/UI transform to the first visible frame before starting playback.
+            // Without this, frame 0 can briefly render at the default transform.
+            const active = this.sequenceActiveEntity;
+            if (active && active !== cached0) {
+                cached0.setLocalPosition(active.getLocalPosition());
+                cached0.setLocalRotation(active.getLocalRotation());
+                cached0.setLocalScale(active.getLocalScale());
+            }
+            this.swapSequenceActiveEntity(cached0, 0);
+        }
+
+        void this.prefetchSequenceAround(0);
+
+        // UI
+        const container = document.getElementById('timeline-ticks');
+        if (container) container.innerHTML = '';
+        this.updateTimelineTicks(this.duration);
+
+        const timeSlider = document.getElementById('time-slider') as HTMLInputElement | null;
+        if (timeSlider) {
+            timeSlider.max = Math.max(0, this.duration - 1).toString();
+            timeSlider.step = '1';
+            timeSlider.value = '0';
+        }
+        const timeLabel = document.getElementById('time-label');
+        if (timeLabel) {
+            const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
+            timeLabel.innerText = `0 / ${maxIdx}`;
+        }
+
+        progress(9, 'READY', 'System Update Complete');
+        window.setTimeout(() => { document.getElementById('loading-overlay')?.classList.add('hidden'); }, 600);
+        // Sequences should not force "simplified mode" on load.
+        this.toggleUIVisibility(false);
+
+        // Inject shader on the initial active instance when it exists
+        await this.applySequenceFrame(0);
+    }
+
+    private async loadPlySequence(files: File[]): Promise<void> {
+        const overlay = document.getElementById('loading-overlay');
+        const progress = this.createSequenceProgressUpdater();
+        progress(0, 'PREPARING', `Parsing ${files.length} PLY frames`);
+        let succeeded = false;
+        try {
+            const assets: pc.Asset[] = [];
+            for (let i = 0; i < files.length; i++) {
+                const frame = await this.parsePlyFrame(files[i]);
+                const vertexElement = {
+                    name: 'vertex',
+                    count: frame.count,
+                    properties: frame.propertyNames.map((name) => ({ name, type: 'float', storage: frame.propertyValues[name] }))
+                };
+                assets.push(this.createGsplatAssetFromVertexElement(files[i].name, vertexElement));
+                const step = Math.min(8, Math.floor((i / Math.max(1, files.length - 1)) * 8));
+                progress(step, 'LOADING', `Loaded ${files[i].name}`);
+            }
+            await this.startSequencePlayback(assets, 'PLY Sequence', 0, progress);
+            succeeded = true;
+        } catch (err) {
+            console.error('PLY sequence load failed', err);
+            alert('Failed to load PLY sequence: ' + (err instanceof Error ? err.message : String(err)));
+        } finally {
+            if (!succeeded) {
+                overlay?.classList.add('hidden');
+            }
+        }
+    }
+
+    private async loadSogSequence(files: File[]): Promise<void> {
+        const overlay = document.getElementById('loading-overlay');
+        const progress = this.createSequenceProgressUpdater();
+        progress(0, 'PREPARING', `Parsing ${files.length} SOG frames`);
+        let succeeded = false;
+        const loader = new TrueSplatsLoader(this.app);
+        const parseSOG = (loader as any).parseSOG.bind(loader);
+        try {
+            const assets: pc.Asset[] = [];
+            let bands = 0;
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const step = Math.min(8, Math.floor((i / Math.max(1, files.length - 1)) * 8));
+                progress(step, 'LOADING', `Parsing ${file.name}`);
+                const buffer = await file.arrayBuffer();
+                const parsed = await parseSOG(buffer, () => { });
+                bands = parsed.bands || bands;
+                const vertexElement = parsed.plyData.elements[0];
+                assets.push(this.createGsplatAssetFromVertexElement(file.name, vertexElement));
+            }
+            await this.startSequencePlayback(assets, 'SOG Sequence', bands, progress);
+            succeeded = true;
+        } catch (err) {
+            console.error('SOG sequence load failed', err);
+            alert('Failed to load SOG sequence: ' + (err instanceof Error ? err.message : String(err)));
+        } finally {
+            if (!succeeded) {
+                overlay?.classList.add('hidden');
+            }
+        }
+    }
+
+    private async collectDroppedFiles(e: DragEvent): Promise<File[]> {
+        const collected: File[] = [];
+        const items = e.dataTransfer?.items;
+        if (items && items.length > 0) {
+            const tasks: Promise<void>[] = [];
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.kind !== 'file') continue;
+                const entry = item.webkitGetAsEntry?.();
+                if (entry) {
+                    tasks.push(this.walkDroppedEntry(entry, collected));
+                } else {
+                    const file = item.getAsFile();
+                    if (file) collected.push(file);
+                }
+            }
+            await Promise.all(tasks);
+        } else if (e.dataTransfer?.files) {
+            collected.push(...Array.from(e.dataTransfer.files));
+        }
+        return collected;
+    }
+
+    private async walkDroppedEntry(entry: FileSystemEntry, collector: File[]): Promise<void> {
+        if (entry.isFile) {
+            return new Promise((resolve, reject) => {
+                (entry as FileSystemFileEntry).file((file) => {
+                    collector.push(file);
+                    resolve();
+                }, reject);
+            });
+        }
+        if (entry.isDirectory) {
+            const reader = (entry as FileSystemDirectoryEntry).createReader();
+            return new Promise((resolve, reject) => {
+                const readNext = () => {
+                    reader.readEntries(async (entries) => {
+                        if (!entries.length) {
+                            resolve();
+                            return;
+                        }
+                        await Promise.all(entries.map((child) => this.walkDroppedEntry(child, collector)));
+                        readNext();
+                    }, reject);
+                };
+                readNext();
+            });
+        }
+        return Promise.resolve();
+    }
+
+    private async handleDroppedFiles(files: File[]): Promise<void> {
+        const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+        const plySeq = sorted.filter((f) => this.isPlySequenceCandidate(f));
+        if (plySeq.length > 1) {
+            await this.loadPlySequence(plySeq);
+            return;
+        }
+        const sogSeq = sorted.filter((f) => this.isSogSequenceCandidate(f));
+        if (sogSeq.length > 1) {
+            await this.loadSogSequence(sogSeq);
+            return;
+        }
+        if (sorted.length > 0) {
+            await this.loadFile(sorted[0]);
+        }
+    }
+
+    private isPlySequenceCandidate(file: File): boolean {
+        const name = file.name.toLowerCase();
+        return name.endsWith('.ply') && !name.endsWith('.ply4');
+    }
+
+    private isSogSequenceCandidate(file: File): boolean {
+        const name = file.name.toLowerCase();
+        return name.endsWith('.sog') && !name.endsWith('.sog4');
     }
 
     // #WDD 2026-01-17: Dynamic Sorting Update
@@ -2362,8 +3120,8 @@ class Viewer {
                     if (el) el.value = parsed.pose[id.replace('-', '')];
                 });
             }
-        } else if (this.currentFileName) {
-            this.loadCachedTransform(this.currentFileName);
+        } else if (this.currentTransformCacheKey) {
+            this.loadCachedTransform(this.currentTransformCacheKey);
         } else {
             this.resetObjectTransformUI();
         }
@@ -2539,6 +3297,8 @@ class Viewer {
             const input = document.getElementById(id) as HTMLInputElement;
             if (input) input.value = "0";
         });
+        const s = document.getElementById('scale-uniform') as HTMLInputElement | null;
+        if (s) s.value = "1.0";
     }
 
     // Updated loadPointCloud to accept entity parent if needed, but signature changed above.
@@ -2547,22 +3307,34 @@ class Viewer {
 
 
     public updateSelectionUniform(tex: pc.Texture) {
-        if (this.splatEntity?.gsplat) {
-            const instance = (this.splatEntity.gsplat as any).instance;
+        const apply = (ent: pc.Entity | null) => {
+            if (!ent?.gsplat) return;
+            const instance = (ent.gsplat as any).instance;
             if (instance && instance.material) {
                 instance.material.setParameter('selectionTexture', tex);
                 instance.material.update();
             }
+        };
+        if (this.isSequenceMode) {
+            this.sequenceEntityPool.forEach((e) => apply(e));
+        } else {
+            apply(this.splatEntity);
         }
     }
 
     public updateSelectionModeParams(isSelecting: boolean) {
-        if (this.splatEntity?.gsplat) {
-            const instance = (this.splatEntity.gsplat as any).instance;
+        const apply = (ent: pc.Entity | null) => {
+            if (!ent?.gsplat) return;
+            const instance = (ent.gsplat as any).instance;
             if (instance && instance.material) {
                 instance.material.setParameter('isSelectionMode', isSelecting ? 1.0 : 0.0);
                 instance.material.update();
             }
+        };
+        if (this.isSequenceMode) {
+            this.sequenceEntityPool.forEach((e) => apply(e));
+        } else {
+            apply(this.splatEntity);
         }
     }
 
@@ -2729,6 +3501,11 @@ class Viewer {
             this.fpsTimer = 0;
         }
 
+        // Sequence playback is driven by the main update loop in the constructor; avoid double-advancing time here.
+        if (this.isSequenceMode) {
+            return;
+        }
+
         // #WDD 2026-01-17: Handle Playback
         if (this.isPlaying) {
             this.currentTime += dt * 10.0; // 10 FPS for 4DGS usually sufficient, can tune
@@ -2756,13 +3533,13 @@ class Viewer {
         }
     }
 
-    private loadCachedTransform(fileName: string) {
+    private loadCachedTransform(cacheKey: string) {
         try {
-            const cachedKey = `transform_cache_${fileName}`;
+            const cachedKey = `transform_cache_${cacheKey}`;
             const cachedData = localStorage.getItem(cachedKey);
 
             if (cachedData) {
-                const data = JSON.parse(cachedData); // { px, py, pz, rx, ry, rz }
+                const data = JSON.parse(cachedData); // { px, py, pz, rx, ry, rz, s? }
 
                 // Update Inputs
                 const posX = document.getElementById('pos-x') as HTMLInputElement;
@@ -2771,6 +3548,7 @@ class Viewer {
                 const rotX = document.getElementById('rot-x') as HTMLInputElement;
                 const rotY = document.getElementById('rot-y') as HTMLInputElement;
                 const rotZ = document.getElementById('rot-z') as HTMLInputElement;
+                const scaleU = document.getElementById('scale-uniform') as HTMLInputElement | null;
 
                 if (posX) posX.value = data.px;
                 if (posY) posY.value = data.py;
@@ -2778,13 +3556,16 @@ class Viewer {
                 if (rotX) rotX.value = data.rx;
                 if (rotY) rotY.value = data.ry;
                 if (rotZ) rotZ.value = data.rz;
+                if (scaleU) scaleU.value = (data.s ?? "1.0");
 
                 // Apply to Entity
                 if (this.splatEntity) {
                     this.splatEntity.setPosition(parseFloat(data.px), parseFloat(data.py), parseFloat(data.pz));
                     this.splatEntity.setEulerAngles(parseFloat(data.rx), parseFloat(data.ry), parseFloat(data.rz));
+                    const s = parseFloat(data.s ?? "1.0") || 1;
+                    this.splatEntity.setLocalScale(s, s, s);
 
-                    console.log(`Restored transform for ${fileName}`);
+                    console.log(`Restored transform for ${cacheKey}`);
                 }
             } else {
                 // No cache, just reset UI to 0
@@ -2801,6 +3582,7 @@ class Viewer {
 
         const pos = this.splatEntity.getPosition();
         const rot = this.splatEntity.getEulerAngles();
+        const scale = this.splatEntity.getLocalScale();
 
         const data = {
             px: pos.x.toFixed(2),
@@ -2808,7 +3590,8 @@ class Viewer {
             pz: pos.z.toFixed(2),
             rx: rot.x.toFixed(1),
             ry: rot.y.toFixed(1),
-            rz: rot.z.toFixed(1)
+            rz: rot.z.toFixed(1),
+            s: scale.x.toFixed(3)
         };
 
         //console.log(`Saving transform usage for ${fileName}:`, data);
@@ -2823,7 +3606,7 @@ class Viewer {
 
         const pos = this.splatEntity.getLocalPosition();
         const rot = this.splatEntity.getLocalEulerAngles();
-        const scale = this.splatEntity.getLocalScale(); // Future proofing
+        const scale = this.splatEntity.getLocalScale();
 
         const posX = document.getElementById('pos-x') as HTMLInputElement;
         const posY = document.getElementById('pos-y') as HTMLInputElement;
@@ -2831,6 +3614,7 @@ class Viewer {
         const rotX = document.getElementById('rot-x') as HTMLInputElement;
         const rotY = document.getElementById('rot-y') as HTMLInputElement;
         const rotZ = document.getElementById('rot-z') as HTMLInputElement;
+        const scaleU = document.getElementById('scale-uniform') as HTMLInputElement | null;
 
         if (posX) posX.value = pos.x.toFixed(2);
         if (posY) posY.value = pos.y.toFixed(2);
@@ -2838,6 +3622,7 @@ class Viewer {
         if (rotX) rotX.value = rot.x.toFixed(1);
         if (rotY) rotY.value = rot.y.toFixed(1);
         if (rotZ) rotZ.value = rot.z.toFixed(1);
+        if (scaleU) scaleU.value = scale.x.toFixed(3);
     }
 
     // #WDD 2026-01-18: Expose current positions for SelectionTool
