@@ -102,9 +102,6 @@ class Viewer {
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
     private hasLoggedSorterKeys: boolean = false;
-    private sortCameraPos = new pc.Vec3();
-    private sortCameraDir = new pc.Vec3();
-    private sortInvModel = new pc.Mat4();
 
     // --- Sequence Playback (static-per-frame) ---
     private isSequenceMode = false;
@@ -3049,27 +3046,8 @@ class Viewer {
             }, [centersCopy.buffer]);
         }
 
-        this.forceResortByCamera();
-
         // PlayCanvas's GSplat sorter reads these arrays (referenced by GSplatData) naturally 
         // when calculating depth, assuming it runs every frame.
-    }
-
-    private forceResortByCamera() {
-        const instance = (this.splatEntity?.gsplat as any)?.instance;
-        const sorter = instance?.sorter;
-        if (!sorter || !this.camera || !instance?.meshInstance) return;
-
-        const cameraMat = this.camera.getWorldTransform();
-        cameraMat.getTranslation(this.sortCameraPos);
-        cameraMat.getZ(this.sortCameraDir);
-
-        const modelMat = instance.meshInstance.node.getWorldTransform();
-        this.sortInvModel.copy(modelMat).invert();
-        this.sortInvModel.transformPoint(this.sortCameraPos, this.sortCameraPos);
-        this.sortInvModel.transformVector(this.sortCameraDir, this.sortCameraDir);
-
-        sorter.setCamera(this.sortCameraPos, this.sortCameraDir);
     }
 
 
