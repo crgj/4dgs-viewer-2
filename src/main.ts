@@ -102,6 +102,9 @@ class Viewer {
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
     private hasLoggedSorterKeys: boolean = false;
+    private sortCameraPos = new pc.Vec3();
+    private sortCameraDir = new pc.Vec3();
+    private sortInvModel = new pc.Mat4();
 
     // --- Sequence Playback (static-per-frame) ---
     private isSequenceMode = false;
@@ -1748,6 +1751,7 @@ class Viewer {
         const simplifiedPanel = document.getElementById('simplified-panel');
 
         const shouldHide = forceHidden !== undefined ? forceHidden : !this.isUIHidden();
+        const wasOrbitMode = this.isOrbitMode;
 
         if (shouldHide) {
             sidebar?.classList.add('sidebar-hidden');
@@ -1768,6 +1772,9 @@ class Viewer {
         // but if they somehow toggle UI, we enforce relation unless specifically overridden.
         // Actually, for consistency: Simple UI -> Orbit Mode. Full UI -> Editor Mode.
         this.isOrbitMode = shouldHide;
+        if (shouldHide && !wasOrbitMode) {
+            this.syncOrbitFromCamera();
+        }
 
         // #WDD 2026-01-21 Auto-hide Grid and Axes in Simple Mode
         if (this.gridEntity) this.gridEntity.enabled = !shouldHide;
@@ -1781,6 +1788,18 @@ class Viewer {
             // In Editor Mode, hide skybox
             this.skyboxManager.clearSkybox();
         }
+    }
+
+    private syncOrbitFromCamera() {
+        if (!this.camera) return;
+        const pos = this.camera.getPosition().clone();
+        const dist = pos.length();
+        if (dist <= 0.0001) return;
+        const dir = pos.clone().scale(1 / dist);
+        this.orbitDistance = Math.max(1.0, dist);
+        this.yaw = Math.atan2(dir.x, dir.z) * pc.math.RAD_TO_DEG;
+        this.pitch = -Math.asin(pc.math.clamp(dir.y, -1, 1)) * pc.math.RAD_TO_DEG;
+        this.orbitCameraUpdates();
     }
 
     // #WDD 2026-01-22: Concurrent Chunk Downloader
@@ -2968,14 +2987,17 @@ class Viewer {
         const traj = this.trajectoryData;
         const N = this.posArrays.x.length;
 
-        // Calculate interpolation vars
-        const idx = Math.floor(time / stride);
-        const k0 = Math.min(Math.max(0, idx), K - 2);
-        const k1 = k0 + 1;
+        // Calculate interpolation vars with end-cap safety
+        const keyframeMax = Math.max(0, (K - 1) * stride);
+        const maxTime = Math.max(0, Math.min(this.duration - 1, keyframeMax));
+        const tClamped = Math.max(0, Math.min(time, maxTime));
+        const idx = stride > 0 ? Math.floor(tClamped / stride) : 0;
+        const k0 = K <= 1 ? 0 : Math.min(Math.max(0, idx), K - 1);
+        const k1 = K <= 1 ? 0 : Math.min(k0 + 1, K - 1);
 
         const t0 = k0 * stride;
         const t1 = k1 * stride;
-        const ratio = Math.max(0, Math.min(1, (time - t0) / (t1 - t0)));
+        const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
 
         const xArr = this.posArrays.x;
         const yArr = this.posArrays.y;
@@ -3027,8 +3049,27 @@ class Viewer {
             }, [centersCopy.buffer]);
         }
 
+        this.forceResortByCamera();
+
         // PlayCanvas's GSplat sorter reads these arrays (referenced by GSplatData) naturally 
         // when calculating depth, assuming it runs every frame.
+    }
+
+    private forceResortByCamera() {
+        const instance = (this.splatEntity?.gsplat as any)?.instance;
+        const sorter = instance?.sorter;
+        if (!sorter || !this.camera || !instance?.meshInstance) return;
+
+        const cameraMat = this.camera.getWorldTransform();
+        cameraMat.getTranslation(this.sortCameraPos);
+        cameraMat.getZ(this.sortCameraDir);
+
+        const modelMat = instance.meshInstance.node.getWorldTransform();
+        this.sortInvModel.copy(modelMat).invert();
+        this.sortInvModel.transformPoint(this.sortCameraPos, this.sortCameraPos);
+        this.sortInvModel.transformVector(this.sortCameraDir, this.sortCameraDir);
+
+        sorter.setCamera(this.sortCameraPos, this.sortCameraDir);
     }
 
 
@@ -3036,6 +3077,19 @@ class Viewer {
 
     private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
         this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
+        if (parsed && !originalFrames) {
+            const keyframeMax = (() => {
+                const k = parsed.keyframes || 0;
+                const s = parsed.xyzStride || 1;
+                return k > 1 ? (k - 1) * s + 1 : 1;
+            })();
+            const rotKeyframeMax = (() => {
+                const k = parsed.rotKeyframes || 0;
+                const s = parsed.rotStride || 1;
+                return k > 1 ? (k - 1) * s + 1 : 1;
+            })();
+            this.duration = Math.max(this.duration, keyframeMax, rotKeyframeMax);
+        }
         this.totalFrames = this.duration; // #WDD 2026-01-16: Keep sync
         this.originalFrames = originalFrames;
         this.lastParsedData = parsed;
@@ -3695,27 +3749,6 @@ class Viewer {
             return;
         }
 
-        // #WDD 2026-01-17: Handle Playback
-        if (this.isPlaying) {
-            this.currentTime += dt * 10.0; // 10 FPS for 4DGS usually sufficient, can tune
-            if (this.currentTime >= this.duration) {
-                this.currentTime = 0;
-            }
-
-            // Sync UI
-            const slider = document.getElementById('time-slider') as HTMLInputElement;
-            if (slider) slider.value = this.currentTime.toString();
-
-            const timeLabel = document.getElementById('time-label');
-            const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
-            if (timeLabel) timeLabel.innerText = `${Math.floor(this.currentTime)} / ${maxIdx}`;
-
-            // Sync Shader
-            if (this.splatEntity?.gsplat) {
-                (this.splatEntity.gsplat as any).time = Math.floor(this.currentTime);
-            }
-        }
-
         // #WDD 2026-01-17: Dynamic Sorting - Update CPU positions
         if (this.is4DGS && this.trajectoryData) {
             this.updateDynamicPositions(Math.floor(this.currentTime));
@@ -4007,7 +4040,8 @@ class Viewer {
             const buffer = await TrueSplatsLoader.save(this.lastParsedData, {
                 model_transform: transform,
                 cameras: cameras,
-                deleted_indices: deletedIndices // #WDD 2026-01-18
+                deleted_indices: deletedIndices, // #WDD 2026-01-18
+                apply_deleted: true
             });
             const filename = `saved_${this.currentFileName || 'model.truesplats'}`;
 
@@ -4034,6 +4068,26 @@ class Viewer {
 
         console.log(`[Export] Saving .sog4...`);
         try {
+            const overlay = document.getElementById('loading-overlay');
+            const statusEl = document.getElementById('loading-status');
+            const detailEl = document.getElementById('loading-detail');
+            const bar = document.getElementById('loading-step-progress');
+            const squares = Array.from(document.querySelectorAll('.step-square'));
+            const setExportProgress = (pct: number, detail: string) => {
+                overlay?.classList.remove('hidden');
+                if (statusEl) statusEl.innerText = 'EXPORTING';
+                if (detailEl) detailEl.innerText = detail || '';
+                if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
+                const stepMax = Math.max(squares.length - 1, 1);
+                const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
+                squares.forEach((square, idx) => {
+                    if (idx <= step) square.classList.add('reached');
+                    else square.classList.remove('reached');
+                });
+            };
+
+            setExportProgress(0, 'Preparing export');
+
             const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
             if (this.splatEntity) {
                 const p = this.splatEntity.getLocalPosition();
@@ -4058,11 +4112,15 @@ class Viewer {
                 }
             }
 
+            const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
+
             const buffer = await SOG4Loader.save(this.lastParsedData, {
                 model_transform: transform,
                 cameras: cameras,
-                deleted_indices: deletedIndices
-            });
+                deleted_indices: deletedIndices,
+                apply_deleted: true,
+                original_indices: origIndices
+            }, (pct: number, msg: string) => setExportProgress(pct, msg));
             const filename = `saved_${this.currentFileName || 'model.sog4'}`;
 
             const blob = new Blob([buffer.buffer as ArrayBuffer], { type: "application/octet-stream" });
@@ -4073,9 +4131,12 @@ class Viewer {
             a.click();
             URL.revokeObjectURL(url);
             console.log(`[Export] Saved .sog4: ${filename}`);
+            setExportProgress(100, 'Export complete');
+            setTimeout(() => { overlay?.classList.add('hidden'); }, 600);
         } catch (e: any) {
             console.error("[Export] Save SOG4 failed:", e);
             alert("Save failed: " + e.message);
+            document.getElementById('loading-overlay')?.classList.add('hidden');
         }
     }
 }
@@ -4085,6 +4146,7 @@ let app: pc.Application;
 declare global {
     interface Window {
         exportPlySequence: () => void;
+        testSog4Delete: (url: string, deleteRatio?: number) => Promise<void>;
     }
 }
 
@@ -4092,4 +4154,30 @@ window.addEventListener('DOMContentLoaded', () => {
     const viewer = new Viewer();
     app = viewer.app;
     window.exportPlySequence = () => viewer.exportPlySequence();
+    window.testSog4Delete = async (url: string, deleteRatio: number = 0.5) => {
+        const res = await fetch(url);
+        const buffer = await res.arrayBuffer();
+        const loader = new SOG4Loader();
+        const parsed = await loader.load(buffer);
+        const count = parsed.count || 0;
+        const deleteCount = Math.max(0, Math.min(count, Math.floor(count * deleteRatio)));
+        const deleted: number[] = [];
+        for (let i = 0; i < deleteCount; i++) deleted.push(i);
+        const origIndices = parsed.original_index ? Array.from(parsed.original_index as Float32Array) : undefined;
+
+        const out = await SOG4Loader.save(parsed, {
+            deleted_indices: deleted,
+            apply_deleted: true,
+            original_indices: origIndices
+        });
+
+        const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(2)} MB`;
+        console.log("[Test] SOG4 delete", {
+            url,
+            originalCount: count,
+            deleted: deleteCount,
+            originalSize: mb(buffer.byteLength),
+            newSize: mb(out.byteLength)
+        });
+    };
 });

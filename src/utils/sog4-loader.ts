@@ -455,7 +455,11 @@ export class SOG4Loader {
         return this.lastResult;
     }
 
-    static async save(data: any, overrides: any = {}): Promise<Uint8Array> {
+    static async save(
+        data: any,
+        overrides: any = {},
+        progress?: (pct: number, message: string) => void
+    ): Promise<Uint8Array> {
         if (!data.sogBuffer) throw new Error("Missing source SOG buffer for saving");
 
         const zip = new JSZip();
@@ -466,17 +470,157 @@ export class SOG4Loader {
 
         const meta = JSON.parse(await metaFile.async('string'));
 
+        const decodeRgbaTexture = async (buffer: ArrayBuffer) => {
+            const blob = new Blob([buffer]);
+            const bitmap = await createImageBitmap(blob, {
+                premultiplyAlpha: 'none',
+                colorSpaceConversion: 'none',
+                resizeQuality: 'pixelated'
+            });
+            const { width, height } = bitmap;
+            const canvas: any = (typeof OffscreenCanvas !== 'undefined')
+                ? new OffscreenCanvas(width, height)
+                : Object.assign(document.createElement('canvas'), { width, height });
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) throw new Error("Failed to get 2D context for texture decode");
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(bitmap, 0, 0);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            bitmap.close();
+            return { canvas, ctx, imageData, width, height };
+        };
+
+        const encodeCanvasToImage = async (canvas: any, fileName: string): Promise<ArrayBuffer> => {
+            const isWebp = fileName.toLowerCase().endsWith('.webp');
+            const preferredType = isWebp ? 'image/webp' : 'image/png';
+            if (typeof canvas.convertToBlob === 'function') {
+                let blob = await canvas.convertToBlob({ type: preferredType });
+                if (!blob || blob.size === 0) {
+                    blob = await canvas.convertToBlob({ type: 'image/png' });
+                }
+                return await blob.arrayBuffer();
+            }
+            return await new Promise<ArrayBuffer>((resolve, reject) => {
+                const tryType = (type: string, fallback: boolean) => {
+                    canvas.toBlob(async (blob: Blob | null) => {
+                        if (!blob || blob.size === 0) {
+                            if (fallback) return tryType('image/png', false);
+                            reject(new Error("Failed to encode texture"));
+                            return;
+                        }
+                        resolve(await blob.arrayBuffer());
+                    }, type);
+                };
+                tryType(preferredType, true);
+            });
+        };
+
+        const report = (pct: number, message: string) => {
+            if (progress) progress(Math.max(0, Math.min(100, pct)), message);
+        };
+
+        report(0, "Preparing export");
+
         // Apply overrides
         if (overrides.model_transform) meta.model_transform = overrides.model_transform;
         if (overrides.cameras) meta.cameras = overrides.cameras;
         // SOG4 doesn't support 'deleted_indices' in parsing yet, but we can store it
         if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
 
+        if (overrides.apply_deleted && overrides.deleted_indices?.length) {
+            const originalCount = meta.count as number;
+            const deleted = new Set<number>();
+            const origIndices = overrides.original_indices as number[] | undefined;
+            for (let i = 0; i < overrides.deleted_indices.length; i++) {
+                const idx = overrides.deleted_indices[i];
+                const mapped = origIndices ? Math.round(origIndices[idx]) : idx;
+                if (mapped >= 0 && mapped < originalCount) deleted.add(mapped);
+            }
+
+            let keepCount = 0;
+            for (let i = 0; i < originalCount; i++) {
+                if (!deleted.has(i)) keepCount++;
+            }
+
+            const calcNewSize = (count: number, maxWidth: number) => {
+                const width = Math.max(1, Math.min(maxWidth, Math.ceil(Math.sqrt(count))));
+                const height = Math.max(1, Math.ceil(count / width));
+                return { width, height };
+            };
+
+            const compactTexture = async (fileName: string) => {
+                const file = zip.file(fileName);
+                if (!file) return;
+                const buffer = await file.async('arraybuffer');
+                const { imageData: srcImage, width: srcWidth } = await decodeRgbaTexture(buffer);
+                const src = srcImage.data;
+                const { width, height } = calcNewSize(keepCount, srcWidth);
+                const canvas: any = (typeof OffscreenCanvas !== 'undefined')
+                    ? new OffscreenCanvas(width, height)
+                    : Object.assign(document.createElement('canvas'), { width, height });
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                if (!ctx) throw new Error("Failed to get 2D context for texture encode");
+                const dstImage = ctx.createImageData(width, height);
+
+                let write = 0;
+                for (let i = 0; i < originalCount; i++) {
+                    if (deleted.has(i)) continue;
+                    const si = i * 4;
+                    const di = write * 4;
+                    dstImage.data[di + 0] = src[si + 0];
+                    dstImage.data[di + 1] = src[si + 1];
+                    dstImage.data[di + 2] = src[si + 2];
+                    dstImage.data[di + 3] = src[si + 3];
+                    write++;
+                }
+
+                ctx.putImageData(dstImage, 0, 0);
+                const updated = await encodeCanvasToImage(canvas, fileName);
+                zip.file(fileName, updated);
+            };
+
+            const targets: string[] = [];
+            if (meta.means?.files?.[0]) targets.push(meta.means.files[0]);
+            if (meta.means?.files?.[1]) targets.push(meta.means.files[1]);
+            if (meta.quats?.files?.[0]) targets.push(meta.quats.files[0]);
+            if (meta.scales?.files?.[0]) targets.push(meta.scales.files[0]);
+            if (meta.sh0?.files?.[0]) targets.push(meta.sh0.files[0]);
+            if (meta.shN?.files?.[1]) targets.push(meta.shN.files[1]); // labels
+            if (meta.opacity?.files?.[0]) targets.push(meta.opacity.files[0]);
+            if (meta.lifetime?.files?.[0]) targets.push(meta.lifetime.files[0]);
+            if (meta.params?.files?.[0]) targets.push(meta.params.files[0]);
+            if (meta.xyz_bank && Array.isArray(meta.xyz_bank)) {
+                meta.xyz_bank.forEach((bank: any) => {
+                    if (bank?.files?.[0]) targets.push(bank.files[0]);
+                    if (bank?.files?.[1]) targets.push(bank.files[1]);
+                });
+            }
+            if (meta.rot_bank && Array.isArray(meta.rot_bank)) {
+                meta.rot_bank.forEach((bank: any) => {
+                    if (bank?.files?.[0]) targets.push(bank.files[0]);
+                });
+            }
+
+            const total = targets.length;
+            for (let i = 0; i < total; i++) {
+                const fileName = targets[i];
+                report((i / Math.max(total, 1)) * 90, `Compressing ${fileName}`);
+                await compactTexture(fileName);
+            }
+
+            meta.count = keepCount;
+            meta.deleted_indices = [];
+        }
+
+        report(92, "Updating metadata");
         // Write back meta
         zip.file('meta.json', JSON.stringify(meta, null, 2));
 
         // Generate new zip
         console.log("[SOG4] Re-zipping with updated metadata...");
-        return await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
+        report(98, "Finalizing archive");
+        const result = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
+        report(100, "Done");
+        return result;
     }
 }

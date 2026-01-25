@@ -608,7 +608,7 @@ export class TrueSplatsLoader {
     }
 
     // #WDD 2026-01-18: Save as .truesplats with Updated Meta
-    public static async save(data: any, overrides?: { model_transform?: any, cameras?: any, deleted_indices?: number[] }): Promise<ArrayBuffer> {
+    public static async save(data: any, overrides?: { model_transform?: any, cameras?: any, deleted_indices?: number[], apply_deleted?: boolean }): Promise<ArrayBuffer> {
         if (!data || !data.sogBuffer || !data.binBuffer) {
             throw new Error("Cannot save: Original .truesplats buffers not found.");
         }
@@ -620,6 +620,42 @@ export class TrueSplatsLoader {
         await sogZip.loadAsync(data.sogBuffer);
         const metaFile = sogZip.file('meta.json');
 
+        const decodeRgbaTexture = async (buffer: ArrayBuffer) => {
+            const blob = new Blob([buffer]);
+            const bitmap = await createImageBitmap(blob, {
+                premultiplyAlpha: 'none',
+                colorSpaceConversion: 'none',
+                resizeQuality: 'pixelated'
+            });
+            const { width, height } = bitmap;
+            const canvas: any = (typeof OffscreenCanvas !== 'undefined')
+                ? new OffscreenCanvas(width, height)
+                : Object.assign(document.createElement('canvas'), { width, height });
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) throw new Error("Failed to get 2D context for texture decode");
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(bitmap, 0, 0);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            bitmap.close();
+            return { canvas, ctx, imageData };
+        };
+
+        const encodeCanvasToPng = async (canvas: any): Promise<ArrayBuffer> => {
+            if (typeof canvas.convertToBlob === 'function') {
+                const blob = await canvas.convertToBlob({ type: 'image/png' });
+                return await blob.arrayBuffer();
+            }
+            return await new Promise<ArrayBuffer>((resolve, reject) => {
+                canvas.toBlob(async (blob: Blob | null) => {
+                    if (!blob) {
+                        reject(new Error("Failed to encode texture to PNG"));
+                        return;
+                    }
+                    resolve(await blob.arrayBuffer());
+                }, 'image/png');
+            });
+        };
+
         if (metaFile && overrides) {
             try {
                 const metaStr = await metaFile.async('string');
@@ -629,6 +665,28 @@ export class TrueSplatsLoader {
                 if (overrides.model_transform) meta.model_transform = overrides.model_transform;
                 if (overrides.cameras) meta.cameras = overrides.cameras;
                 if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
+
+                if ((overrides as any).apply_deleted && overrides.deleted_indices?.length) {
+                    const deleted = overrides.deleted_indices;
+                    const targets: string[] = [];
+                    if (meta.opacity?.files?.[0]) targets.push(meta.opacity.files[0]);
+                    if (meta.sh0?.files?.[0]) targets.push(meta.sh0.files[0]);
+
+                    for (const fileName of targets) {
+                        const file = sogZip.file(fileName);
+                        if (!file) continue;
+                        const buffer = await file.async('arraybuffer');
+                        const { canvas, ctx, imageData } = await decodeRgbaTexture(buffer);
+                        const pixels = imageData.data;
+                        for (let i = 0; i < deleted.length; i++) {
+                            const idx = deleted[i] * 4 + 3;
+                            if (idx < pixels.length) pixels[idx] = 0;
+                        }
+                        ctx.putImageData(imageData, 0, 0);
+                        const updated = await encodeCanvasToPng(canvas);
+                        sogZip.file(fileName, updated);
+                    }
+                }
 
                 // Write back to SOG
                 sogZip.file('meta.json', JSON.stringify(meta));

@@ -292,19 +292,26 @@ export const splatMainVS = `
             // - uTime 是当前帧索引 (float)
             // - uXYZStride 是关键帧采样间隔 (例如 5)
             // - idx 是当前时间对应的左侧关键帧索引 (0, 1, 2...)
-            int idx = int(floor(uTime / uXYZStride));
-            
-            // 边界检查: 确保不会读取超过纹理范围的关键帧
-            if (idx >= int(uKeyframes) - 1) idx = int(uKeyframes) - 2;
-
-            float t0 = float(idx) * uXYZStride;
-            float t1 = float(idx + 1) * uXYZStride;
-
-            int k0 = idx;
-            int k1 = idx + 1;
-            
-            // 插值系数 t: 在两个关键帧之间的时间比例 (0.0 -> 1.0)
-            float t = clamp((uTime - t0) / (t1 - t0), 0.0, 1.0);
+            float keyframeMax = max(0.0, (uKeyframes - 1.0) * uXYZStride);
+            float maxTime = keyframeMax;
+            if (uGlobalTotalFrames > 0.0) {
+                maxTime = min(maxTime, uGlobalTotalFrames - 1.0);
+            }
+            float tClamped = clamp(uTime, 0.0, maxTime);
+            int k0 = 0;
+            int k1 = 0;
+            float t = 0.0;
+            if (uKeyframes > 1.0) {
+                int idx = int(floor(tClamped / uXYZStride));
+                if (idx >= int(uKeyframes)) idx = int(uKeyframes) - 1;
+                k0 = idx;
+                k1 = min(k0 + 1, int(uKeyframes) - 1);
+                float t0 = float(k0) * uXYZStride;
+                float t1 = float(k1) * uXYZStride;
+                if (t1 != t0) {
+                    t = clamp((tClamped - t0) / (t1 - t0), 0.0, 1.0);
+                }
+            }
 
             int width = textureSize(uTrajectoryTexture, 0).x;
             uint baseIdx = splatId * uint(uKeyframes);
@@ -327,15 +334,26 @@ export const splatMainVS = `
 
         #ifdef USE_ROTATION
             // 1. Interpolate Rotation (Stride-based)
-            int rIdx = int(floor(uTime / uRotStride));
-            if (rIdx >= int(uRotKeyframes) - 1) rIdx = int(uRotKeyframes) - 2;
-
-            float rt0 = float(rIdx) * uRotStride;
-            float rt1 = float(rIdx + 1) * uRotStride;
-
-            int rk0 = rIdx;
-            int rk1 = rIdx + 1;
-            float rt = clamp((uTime - rt0) / (rt1 - rt0), 0.0, 1.0);
+            float rKeyframeMax = max(0.0, (uRotKeyframes - 1.0) * uRotStride);
+            float rMaxTime = rKeyframeMax;
+            if (uGlobalTotalFrames > 0.0) {
+                rMaxTime = min(rMaxTime, uGlobalTotalFrames - 1.0);
+            }
+            float rtClamped = clamp(uTime, 0.0, rMaxTime);
+            int rk0 = 0;
+            int rk1 = 0;
+            float rt = 0.0;
+            if (uRotKeyframes > 1.0) {
+                int rIdx = int(floor(rtClamped / uRotStride));
+                if (rIdx >= int(uRotKeyframes)) rIdx = int(uRotKeyframes) - 1;
+                rk0 = rIdx;
+                rk1 = min(rk0 + 1, int(uRotKeyframes) - 1);
+                float rt0 = float(rk0) * uRotStride;
+                float rt1 = float(rk1) * uRotStride;
+                if (rt1 != rt0) {
+                    rt = clamp((rtClamped - rt0) / (rt1 - rt0), 0.0, 1.0);
+                }
+            }
 
             int rWidth = textureSize(uRotationTexture, 0).x;
             uint rBaseIdx = splatId * uint(uRotKeyframes);
