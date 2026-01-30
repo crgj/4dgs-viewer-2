@@ -102,6 +102,8 @@ class Viewer {
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
     private hasLoggedSorterKeys: boolean = false;
+    private sorterUpdateInterval = 2;
+    private sorterUpdateFrame = 0;
 
     // --- Sequence Playback (static-per-frame) ---
     private isSequenceMode = false;
@@ -3040,10 +3042,13 @@ class Viewer {
             // Important: varying checks to ensure stability
             // We MUST copy the buffer because sending it transfers ownership (detaches it),
             // which would crash the Main Thread on the next frame access.
-            const centersCopy = new Float32Array(centers);
-            instance.sorter.worker.postMessage({
-                centers: centersCopy.buffer
-            }, [centersCopy.buffer]);
+            const shouldUpdate = !this.isPlaying || (this.sorterUpdateFrame++ % this.sorterUpdateInterval === 0);
+            if (shouldUpdate) {
+                const centersCopy = new Float32Array(centers);
+                instance.sorter.worker.postMessage({
+                    centers: centersCopy.buffer
+                }, [centersCopy.buffer]);
+            }
         }
 
         // PlayCanvas's GSplat sorter reads these arrays (referenced by GSplatData) naturally 
