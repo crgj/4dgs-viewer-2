@@ -386,6 +386,56 @@ export class SOG4Loader {
             }
         }
 
+        // F_DC Banks (Color)
+        let dcData: Float32Array | null = null;
+        let K_dc = 0;
+        let dcStride = 0;
+
+        if (meta.f_dc_bank && Array.isArray(meta.f_dc_bank)) {
+            K_dc = meta.f_dc_bank.length;
+            dcData = new Float32Array(count * K_dc * 3);
+
+            // Parse stride from custom metadata or fallback
+            if (meta.custom && meta.custom.features_dc_bank_keyframe_stride) {
+                dcStride = parseInt(meta.custom.features_dc_bank_keyframe_stride);
+            } else {
+                dcStride = meta.f_dc_bank_stride || xyzStride || 1;
+            }
+
+            for (let k = 0; k < K_dc; k++) {
+                const bankMeta = meta.f_dc_bank[k];
+                if (!bankMeta) continue;
+
+                let bankL_tex, bankU_tex;
+                if (bankMeta.files) {
+                    bankL_tex = await loadTexture(bankMeta.files[0]);
+                    bankU_tex = await loadTexture(bankMeta.files[1]);
+                }
+
+                if (bankL_tex && bankU_tex) {
+                    const mins = bankMeta.mins, maxs = bankMeta.maxs;
+                    const bL = bankL_tex.data, bU = bankU_tex.data;
+
+                    for (let i = 0; i < count; i++) {
+                        const nx = (bU[i * 4 + 0] << 8) | bL[i * 4 + 0];
+                        const ny = (bU[i * 4 + 1] << 8) | bL[i * 4 + 1];
+                        const nz = (bU[i * 4 + 2] << 8) | bL[i * 4 + 2];
+
+                        // f_dc values are stored as "means" (Log Transformed)
+                        const r = inverseLogTransform((nx / 65535.0) * (maxs[0] - mins[0]) + mins[0]);
+                        const g = inverseLogTransform((ny / 65535.0) * (maxs[1] - mins[1]) + mins[1]);
+                        const b = inverseLogTransform((nz / 65535.0) * (maxs[2] - mins[2]) + mins[2]);
+
+                        const base = i * K_dc * 3 + k * 3;
+                        dcData[base + 0] = r;
+                        dcData[base + 1] = g;
+                        dcData[base + 2] = b;
+                    }
+                }
+                progressCallback?.(80 + (k / K_dc) * 10, `Decoding Color Bank ${k}`);
+            }
+        }
+
         // --- 4. Final Data Assembly ---
         const plyProperties: any[] = [
             { name: 'x', type: 'float', storage: data.x },
@@ -437,10 +487,13 @@ export class SOG4Loader {
             // Fallback:
             trajectory: xyzData,
             rotTrajectory: rotData,
+            dcTrajectory: dcData,
             keyframes: K_xyz,
             rotKeyframes: K_rot,
+            dcKeyframes: K_dc,
             xyzStride: xyzStride,
             rotStride: rotStride,
+            dcStride: dcStride,
 
             bands: meta.shN?.bands || 0,
             model_transform: meta.model_transform,
@@ -598,6 +651,12 @@ export class SOG4Loader {
             if (meta.rot_bank && Array.isArray(meta.rot_bank)) {
                 meta.rot_bank.forEach((bank: any) => {
                     if (bank?.files?.[0]) targets.push(bank.files[0]);
+                });
+            }
+            if (meta.f_dc_bank && Array.isArray(meta.f_dc_bank)) {
+                meta.f_dc_bank.forEach((bank: any) => {
+                    if (bank?.files?.[0]) targets.push(bank.files[0]);
+                    if (bank?.files?.[1]) targets.push(bank.files[1]);
                 });
             }
 

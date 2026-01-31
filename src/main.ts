@@ -1794,7 +1794,7 @@ class Viewer {
         const pos = this.camera.getPosition().clone();
         const dist = pos.length();
         if (dist <= 0.0001) return;
-        const dir = pos.clone().scale(1 / dist);
+        const dir = pos.clone().mulScalar(1 / dist);
         this.orbitDistance = Math.max(1.0, dist);
         this.yaw = Math.atan2(dir.x, dir.z) * pc.math.RAD_TO_DEG;
         this.pitch = -Math.asin(pc.math.clamp(dir.y, -1, 1)) * pc.math.RAD_TO_DEG;
@@ -3058,6 +3058,11 @@ class Viewer {
 
     private posArrays: { x: Float32Array, y: Float32Array, z: Float32Array } | null = null;
 
+    // #WDD Support for Color Trajectory
+    private dcTrajectoryData: Float32Array | null = null;
+    private dcKeyframes = 0;
+    private dcStride = 1;
+
     private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
         this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
         if (parsed && !originalFrames) {
@@ -3273,6 +3278,48 @@ class Viewer {
         }
 
 
+        // --- 4DGS Color Trajectory Texture ---
+        let dcTrajectoryTexture: pc.Texture | null = null;
+        if (parsed.dcTrajectory) {
+            this.dcTrajectoryData = parsed.dcTrajectory as Float32Array;
+            this.dcKeyframes = parsed.dcKeyframes || 0;
+            this.dcStride = parsed.dcStride || 1;
+
+            const dcData = parsed.dcTrajectory as Float32Array;
+            const Kdc = this.dcKeyframes;
+            const texWidth = 4096;
+            const totalPixels = numSplats * Kdc;
+            const texHeight = Math.ceil(totalPixels / texWidth);
+            const texData = new Float32Array(texWidth * texHeight * 4);
+
+            const origIndices = splatData.getProp('original_index');
+
+            for (let i = 0; i < numSplats; i++) {
+                const oidx = origIndices ? Math.round(origIndices[i]) : i;
+                for (let k = 0; k < Kdc; k++) {
+                    const srcOff = (oidx * Kdc + k) * 3;
+                    const dstOff = (i * Kdc + k) * 4;
+
+                    // #WDD 2026-01-30 Apply SH0 -> RGB conversion (0.5 + SH * 0.282...)
+                    const SH_C0 = 0.28209479177387814;
+                    texData[dstOff + 0] = dcData[srcOff + 0] * SH_C0 + 0.5;
+                    texData[dstOff + 1] = dcData[srcOff + 1] * SH_C0 + 0.5;
+                    texData[dstOff + 2] = dcData[srcOff + 2] * SH_C0 + 0.5;
+                    texData[dstOff + 3] = 1.0;
+                }
+            }
+
+            dcTrajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dcTrajectoryTexture'
+            });
+            const dst = dcTrajectoryTexture.lock();
+            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
+            dcTrajectoryTexture.unlock();
+        }
+
+
         // --- Scales Texture (for dynamic rotation reconstruction) ---
         let scalesTexture: pc.Texture | null = null;
         const s0 = splatData.getProp('scale_0');
@@ -3305,7 +3352,9 @@ class Viewer {
                 rotationTexture, parsed.rotKeyframes,
                 this.duration, // #WDD 2026-01-16 Use calculated duration
                 scalesTexture,
-                parsed.bands || 3 // #WDD 2026-01-16
+                parsed.bands || 3, // #WDD 2026-01-16
+                dcTrajectoryTexture,
+                parsed.dcKeyframes || 0
             );
         }
 
@@ -3365,7 +3414,9 @@ class Viewer {
         rotKeyframes: number = 0,
         totalFrames: number = 0,
         scalesTexture: pc.Texture | null = null,
-        bands: number = 0 // #WDD 2026-01-16
+        bands: number = 0, // #WDD 2026-01-16
+        dcTrajectoryTexture: pc.Texture | null = null,
+        dcKeyframes: number = 0
     ) {
         console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands });
 
@@ -3400,6 +3451,12 @@ class Viewer {
             material.setParameter('uScalesTexture', scalesTexture);
         }
 
+        if (dcTrajectoryTexture) {
+            material.setParameter('uColorTrajectoryTexture', dcTrajectoryTexture);
+            material.setParameter('uColorKeyframes', dcKeyframes);
+            material.setParameter('uColorStride', this.dcStride);
+        }
+
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // --- ROBUST SHADER INJECTION ---
@@ -3429,6 +3486,9 @@ class Viewer {
                     }
                     if (rotationTexture) {
                         if (!options.defines.includes('USE_ROTATION')) options.defines.push('USE_ROTATION');
+                    }
+                    if (dcTrajectoryTexture) {
+                        if (!options.defines.includes('USE_COLOR_TRAJECTORY')) options.defines.push('USE_COLOR_TRAJECTORY');
                     }
 
                     // #WDD 2026-01-16 Dynamically set SH bands

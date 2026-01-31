@@ -212,6 +212,13 @@ export const splatMainVS = `
         uniform float uRotKeyframes;
         uniform float uRotStride; // #WDD 2026-01-15
 
+    // Color Trajectory
+    #ifdef USE_COLOR_TRAJECTORY
+        uniform sampler2D uColorTrajectoryTexture;
+        uniform float uColorKeyframes;
+        uniform float uColorStride;
+    #endif
+
         // Simple NLERP for quaternions
         vec4 nlerp(vec4 a, vec4 b, float t) {
             if (dot(a, b) < 0.0) b = -b; // Shortest path
@@ -502,6 +509,42 @@ export const splatMainVS = `
         
         // Base Color Fetch moved early for scale calc #WDD 2026-01-15
         vec4 baseColor = texelFetch(splatColor, splatUV, 0);
+
+        #ifdef USE_COLOR_TRAJECTORY
+            // Interpolate Color (Stride-based)
+            float cKeyframeMax = max(0.0, (uColorKeyframes - 1.0) * uColorStride);
+            float cMaxTime = cKeyframeMax;
+            if (uGlobalTotalFrames > 0.0) {
+                cMaxTime = min(cMaxTime, uGlobalTotalFrames - 1.0);
+            }
+            float ctClamped = clamp(uTime, 0.0, cMaxTime);
+            int ck0 = 0;
+            int ck1 = 0;
+            float ct = 0.0;
+            if (uColorKeyframes > 1.0) {
+                int cIdx = int(floor(ctClamped / uColorStride));
+                if (cIdx >= int(uColorKeyframes)) cIdx = int(uColorKeyframes) - 1;
+                ck0 = cIdx;
+                ck1 = min(ck0 + 1, int(uColorKeyframes) - 1);
+                float ct0 = float(ck0) * uColorStride;
+                float ct1 = float(ck1) * uColorStride;
+                if (ct1 != ct0) {
+                    ct = clamp((ctClamped - ct0) / (ct1 - ct0), 0.0, 1.0);
+                }
+            }
+
+            int cWidth = textureSize(uColorTrajectoryTexture, 0).x;
+            uint cBaseIdx = splatId * uint(uColorKeyframes);
+            
+            ivec2 cuv0 = ivec2((cBaseIdx + uint(ck0)) % uint(cWidth), (cBaseIdx + uint(ck0)) / uint(cWidth));
+            vec3 c0 = texelFetch(uColorTrajectoryTexture, cuv0, 0).rgb;
+
+            ivec2 cuv1 = ivec2((cBaseIdx + uint(ck1)) % uint(cWidth), (cBaseIdx + uint(ck1)) / uint(cWidth));
+            vec3 c1 = texelFetch(uColorTrajectoryTexture, cuv1, 0).rgb;
+
+            // Overwrite baseColor RGB (keep Alpha)
+            baseColor.rgb = mix(c0, c1, ct);
+        #endif
 
         // --- Lifetime Calculation & Early Discard ---
         float alphaMult = getLifetimeOpacityTexture(splatId, uTime); // Passing splatId instead of UV
