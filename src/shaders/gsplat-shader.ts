@@ -219,6 +219,10 @@ export const splatMainVS = `
         uniform float uColorStride;
     #endif
 
+    uniform float uBrightness; // #WDD 2026-01-30 PostProcess
+    uniform float uContrast;   // #WDD 2026-01-30 PostProcess
+    uniform float uExposure;   // #WDD 2026-01-30 PostProcess
+
         // Simple NLERP for quaternions
         vec4 nlerp(vec4 a, vec4 b, float t) {
             if (dot(a, b) < 0.0) b = -b; // Shortest path
@@ -598,6 +602,20 @@ export const splatMainVS = `
             // Keep high opacity for better volume feel
             color.a = mix(color.a, 0.6 * color.a, visualFactor);
         }
+
+        // #WDD 2026-01-30 Post Processing (VS Approximation)
+        // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
+        // Contrast: (color - 0.5) * contrast + 0.5
+        // Brightness: color + brightness
+        // BUT: CSS filters use contrast(1.0) as identity. 
+        // Here we use uContrast multiplier (1.0 = normal).
+        
+        // Apply Contrast
+        color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+        // Apply Brightness
+        color.rgb += uBrightness;
+        // Apply Exposure
+        color.rgb *= uExposure;
         
         // --- Selection Highlight ---
         float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;

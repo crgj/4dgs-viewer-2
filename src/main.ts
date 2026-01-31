@@ -10,6 +10,7 @@ import { SelectionTool } from './ui/selection-tool';
 import { GaussianEffects } from './particle-effects';
 import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
+import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -56,6 +57,7 @@ class Viewer {
     cachedPositions: Float32Array | null = null;
     selectionTool: SelectionTool;
     arHandler: ARHandler;
+    postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private effects: GaussianEffects;
 
     private pitch = 0;
@@ -242,6 +244,7 @@ class Viewer {
         this.effects = new GaussianEffects(this.app);
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
+        this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
 
         this.setupEventListeners();
         this.initSkyboxSelector(); // #WDD 2026-01-21
@@ -2144,6 +2147,34 @@ class Viewer {
                 // #WDD 2026-01-16
                 this.finalizeGSplatLoad(asset, count, null, parsed.frames || parsed.maxMu || 100, parsed);
 
+                // #WDD 2026-01-30 Apply postProcessing parameters from file
+                if (parsed.postProcessing) {
+                    console.log('[Viewer] Applying postProcessing from file:', parsed.postProcessing);
+                    this.postProcessingTool.exposure = parsed.postProcessing.exposure || 1.0;
+                    this.postProcessingTool.brightness = parsed.postProcessing.brightness || 0.0;
+                    this.postProcessingTool.contrast = parsed.postProcessing.contrast || 0.0;
+                    this.postProcessingTool.applySettings();
+                    // Update UI to reflect loaded values
+                    const expInput = document.getElementById('pp-exposure') as HTMLInputElement;
+                    const briInput = document.getElementById('pp-brightness') as HTMLInputElement;
+                    const conInput = document.getElementById('pp-contrast') as HTMLInputElement;
+                    if (expInput) {
+                        expInput.value = this.postProcessingTool.exposure.toString();
+                        const expVal = document.getElementById('val-exposure');
+                        if (expVal) expVal.innerText = this.postProcessingTool.exposure.toFixed(1);
+                    }
+                    if (briInput) {
+                        briInput.value = this.postProcessingTool.brightness.toString();
+                        const briVal = document.getElementById('val-brightness');
+                        if (briVal) briVal.innerText = this.postProcessingTool.brightness > 0 ? '+' + this.postProcessingTool.brightness.toFixed(2) : this.postProcessingTool.brightness.toFixed(2);
+                    }
+                    if (conInput) {
+                        conInput.value = this.postProcessingTool.contrast.toString();
+                        const conVal = document.getElementById('val-contrast');
+                        if (conVal) conVal.innerText = this.postProcessingTool.contrast > 0 ? '+' + this.postProcessingTool.contrast.toFixed(2) : this.postProcessingTool.contrast.toFixed(2);
+                    }
+                }
+
                 // #WDD 2026-01-22: Auto-Play and Switch to Play Mode
                 console.log("[Viewer] Auto-starting playback and switching to Play Mode");
                 this.toggleUIVisibility(true); // Switch to Simplified UI
@@ -3459,6 +3490,11 @@ class Viewer {
 
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
+        // #WDD 2026-01-30 PostProcessing uniforms
+        material.setParameter('uBrightness', 0.0);
+        material.setParameter('uContrast', 1.0);
+        material.setParameter('uExposure', 1.0);
+
         // --- ROBUST SHADER INJECTION ---
 
         const originalGetShaderVariant = material.getShaderVariant;
@@ -4162,7 +4198,12 @@ class Viewer {
                 cameras: cameras,
                 deleted_indices: deletedIndices,
                 apply_deleted: true,
-                original_indices: origIndices
+                original_indices: origIndices,
+                postProcessing: { // #WDD 2026-01-30
+                    exposure: this.postProcessingTool.exposure,
+                    brightness: this.postProcessingTool.brightness,
+                    contrast: this.postProcessingTool.contrast
+                }
             }, (pct: number, msg: string) => setExportProgress(pct, msg));
             const filename = `saved_${this.currentFileName || 'model.sog4'}`;
 

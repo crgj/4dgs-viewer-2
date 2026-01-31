@@ -498,6 +498,7 @@ export class SOG4Loader {
             bands: meta.shN?.bands || 0,
             model_transform: meta.model_transform,
             cameras: meta.cameras,
+            postProcessing: meta.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 }, // #WDD 2026-01-30
 
             // Buffers for saving
             sogBuffer: buffer, // The single zip is the source
@@ -673,6 +674,11 @@ export class SOG4Loader {
 
         report(92, "Updating metadata");
         // Write back meta
+        // #WDD 2026-01-30 Add postProcessing to meta
+        if (overrides.postProcessing) {
+            meta.postProcessing = overrides.postProcessing;
+        }
+
         zip.file('meta.json', JSON.stringify(meta, null, 2));
 
         // Generate new zip
