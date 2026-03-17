@@ -148,6 +148,22 @@
                     <option value="" disabled selected>Camera</option>
                 </select>
             </div>
+
+            <!-- Face Tracking Control #WDD 2026-02-03 -->
+            <div class="col-span-4 relative flex items-center bg-[#2a2b2f] rounded-lg border border-white/10 p-1">
+                <button id="start-face-tracking" class="p-1 px-2 hover:text-white transition-colors"
+                    title="Start/Stop Face Tracking">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path
+                            d="M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21 2.37-1.47 5.72-4.17 7.74z" />
+                    </svg>
+                </button>
+                <select id="face-tracking-camera-select"
+                    class="bg-transparent text-xs text-gray-400 focus:outline-none max-w-[100px] cursor-pointer">
+                    <option value="" disabled selected>Webcam</option>
+                </select>
+            </div>
+
             <input type="file" id="file-input" class="hidden" accept=".truesplats" />
         </div>
 
@@ -603,6 +619,21 @@
 
     <button id="playButton">Play / Pause</button>
     <button id="exportButton" onclick="window.exportPlySequence()">Export PLY Sequence</button>
+
+    <!-- Face Tracker Video Feed #WDD 2026-02-03 -->
+    <div id="face-tracker-video-container"
+        class="fixed bottom-4 right-4 z-50 hidden border-2 border-emerald-500 rounded-lg overflow-hidden w-48 h-36 bg-black shadow-lg">
+        <video id="face-tracker-video" class="w-full h-full object-cover transform scale-x-[-1]" autoplay playsinline
+            muted></video>
+        <button id="toggle-face-video"
+            class="absolute top-1 right-1 p-1 bg-black/50 text-white rounded hover:bg-black/80 transition-colors">
+            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                <path
+                    d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            </svg>
+        </button>
+    </div>
+
     <script type="module" src="./src/main.ts"></script>
 </body>
 

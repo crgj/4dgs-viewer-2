@@ -11,6 +11,7 @@ import { GaussianEffects } from './particle-effects';
 import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
+import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -59,6 +60,19 @@ class Viewer {
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private effects: GaussianEffects;
+
+    // #WDD 2026-02-03 Face Tracking
+    private faceTracker: FaceTracker;
+    private isFaceTracking = false;
+    private faceTrackingBasePos = new pc.Vec3();
+    private faceTrackingBaseRight = new pc.Vec3();
+    private faceTrackingBaseUp = new pc.Vec3();
+    private faceTrackingTarget = new pc.Vec3();
+    private faceTrackingOffset = new pc.Vec3();
+    // private previousFaceOffset = new pc.Vec3(); // Removed
+    private faceTrackingScale = 5.0; // Sensitivity for movement
+    private faceTrackingInvertX = true; // Physical Right -> Cam Right (MP is mirrored)
+    private faceTrackingInvertY = true; // Physical Up -> Cam Up (MP is inverted)
 
     private pitch = 0;
     private yaw = 0;
@@ -130,6 +144,18 @@ class Viewer {
     private sequenceSwapRaf: number | null = null;
     private sequencePendingSwapFrame: number | null = null;
     private sequencePendingSwapEntity: pc.Entity | null = null;
+
+    // --- SOG4 Segment Sequence (temporal-per-segment) ---
+    private isSog4SequenceMode = false;
+    private sog4SequenceFiles: File[] = [];
+    private sog4SequenceSegments: { name: string; parsed: any; asset: pc.Asset; entity: pc.Entity; duration: number }[] = [];
+    private sog4SequenceName: string | null = null;
+    private sog4SequenceSharedTransform: { pos: number[]; rot: number[]; scale: number[] } | null = null;
+    private sog4SequenceIndex = 0;
+    private sog4SequenceTotalFrames = 0;
+    private sog4SequenceOffsets: number[] = [];
+    private sog4SequenceLoading = false;
+    private sog4SequenceRequestId = 0;
 
     private getSequenceParentEntity(): pc.Entity {
         if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) return this.arHandler.arAnchor;
@@ -245,6 +271,28 @@ class Viewer {
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
+
+        // #WDD 2026-02-03 Init Face Tracker
+        this.faceTracker = new FaceTracker('face-tracker-video', (pos) => {
+            // Callback when face moves
+            if (this.isFaceTracking) {
+                // Pos.x, Pos.y are roughly -0.5 to 0.5.
+                // Pos.z is depth. Use X and Y for parallax.
+                // Invert X because moving head Right (camera perspective) means user moved Left in world,
+                // so we want camera to move Left to create parallax?
+                // Visual check: Head moves Right -> We see Left side of object -> Camera moves Left.
+                // Input X is positive right (in image).
+                // If mirroring is on (scale -1), user Right is image Right?
+                // Let's rely on config.
+
+                const targetX = (this.faceTrackingInvertX ? -pos.x : pos.x) * this.faceTrackingScale;
+                const targetY = (this.faceTrackingInvertY ? -pos.y : pos.y) * this.faceTrackingScale * 0.7; // Reduce Y sensitivity
+
+                // Smoothly interpolate
+                this.faceTrackingOffset.x = pc.math.lerp(this.faceTrackingOffset.x, targetX, 0.1);
+                this.faceTrackingOffset.y = pc.math.lerp(this.faceTrackingOffset.y, targetY, 0.1);
+            }
+        });
 
         this.setupEventListeners();
         this.initSkyboxSelector(); // #WDD 2026-01-21
@@ -416,6 +464,14 @@ class Viewer {
         arSelect?.addEventListener('click', populateCameras); // For mobile/touch
 
         startArBtn?.addEventListener('click', async () => {
+            // Stop Face Tracking if active
+            if (this.isFaceTracking) {
+                this.faceTracker.stop();
+                this.isFaceTracking = false;
+                this.updateToggleButton(document.getElementById('start-face-tracking'), false);
+                document.getElementById('face-tracker-video-container')?.classList.add('hidden');
+            }
+
             await populateCameras(); // Ensure populated before start if clicked rapidly
 
             // #WDD 2026-01-19: Update button state AFTER AR action completes
@@ -445,6 +501,98 @@ class Viewer {
                 });
             }
         });
+
+        // #WDD 2026-02-03 Face Tracking UI Logic
+        const faceBtn = document.getElementById('start-face-tracking');
+        const faceSelect = document.getElementById('face-tracking-camera-select') as HTMLSelectElement;
+        const faceVideoContainer = document.getElementById('face-tracker-video-container');
+        const faceVideoToggle = document.getElementById('toggle-face-video');
+
+        const populateFaceCameras = async () => {
+            if (!faceSelect || faceSelect.options.length > 1) return;
+            // Reuse FaceTracker static helper
+            const devices = await FaceTracker.getCameras();
+            while (faceSelect.options.length > 1) faceSelect.remove(1);
+            devices.forEach((d, i) => {
+                const opt = document.createElement('option');
+                opt.value = d.deviceId;
+                opt.text = d.label || `Cam ${i + 1}`;
+                faceSelect.appendChild(opt);
+            });
+        };
+
+        faceSelect?.addEventListener('click', populateFaceCameras);
+
+        faceBtn?.addEventListener('click', async () => {
+            // Stop AR if active
+            if (this.arHandler.isARRunning) {
+                this.arHandler.stop();
+                this.updateToggleButton(startArBtn, false);
+            }
+
+            if (this.isFaceTracking) {
+                this.faceTracker.stop();
+                this.isFaceTracking = false;
+                this.updateToggleButton(faceBtn, false);
+                faceVideoContainer?.classList.add('hidden');
+            } else {
+                await populateFaceCameras();
+                const deviceId = faceSelect?.value || undefined;
+                try {
+                    await this.faceTracker.start(deviceId);
+                    this.isFaceTracking = true;
+                    this.updateToggleButton(faceBtn, true);
+
+                    // Show video container
+                    faceVideoContainer?.classList.remove('hidden');
+
+                    // Capture current position as base
+                    // Capture base frame for orbit
+                    if (this.camera) {
+                        this.faceTrackingBasePos.copy(this.camera.getPosition());
+                        this.faceTrackingBaseRight.copy(this.camera.right);
+                        this.faceTrackingBaseUp.copy(this.camera.up);
+
+                        // User requested LookAt Origin (0,0,0)
+                        this.faceTrackingTarget.set(0, 0, 0);
+                    }
+                    this.faceTrackingOffset.set(0, 0, 0);
+
+                } catch (e) {
+                    console.error("Failed to start face tracking", e);
+                    alert("Failed to start face tracking. See console.");
+                }
+            }
+        });
+
+        // Handle select change for face tracking
+        faceSelect?.addEventListener('change', () => {
+            if (this.isFaceTracking) {
+                this.faceTracker.stop();
+                this.faceTracker.start(faceSelect.value);
+            }
+        });
+
+        faceVideoToggle?.addEventListener('click', () => {
+            // Minimize/Maximize or close? User said "can hide".
+            // Since there is a button inside the video container, maybe it toggles visibility.
+            // But if we hide the container, we can't click it again.
+            // So maybe this button just collapses it or we need a way to show it back.
+            // Let's make it toggle the SIZE or hide it.
+            // If hidden, how to bring back? "摄像机图像显示在屏幕的右下角（可以隐藏）"
+            // Maybe the main toggle button (faceBtn) controls "Mode", and this small button hides the preview.
+            // But if I hide the preview, the container disappears.
+            // I'll leave it as "Close Preview" but keep tracking running.
+            // But to show it again? Maybe I need a "Show Preview" checkbox or just click the main button again?
+            // Actually, let's make it minimize.
+            // But for now, simple toggle of 'hidden' class on the video element itself?
+            // Container needs to stay potentially.
+            // No, simplest: Hide the whole container. To show again, users might toggle the feature off/on.
+            // Or better: The main setup toggles the mode. The video window can be closed.
+            faceVideoContainer?.classList.add('hidden');
+        });
+
+
 
         // #WDD 2026-01-18 Settings UI Logic
         const settingsBtn = document.getElementById('ar-settings-btn');
@@ -534,7 +682,6 @@ class Viewer {
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
-
         const toggleUI = document.getElementById('toggle-ui');
         const headerBrand = document.getElementById('header-brand');
 
@@ -634,6 +781,17 @@ class Viewer {
             this.splatEntity.setPosition(px, py, pz);
             this.splatEntity.setEulerAngles(rx, ry, rz);
             this.splatEntity.setLocalScale(s, s, s);
+
+            if (this.isSog4SequenceMode && this.sog4SequenceSegments.length) {
+                const q = this.splatEntity.getLocalRotation();
+                this.sog4SequenceSharedTransform = { pos: [px, py, pz], rot: [q.x, q.y, q.z, q.w], scale: [s, s, s] };
+                for (const seg of this.sog4SequenceSegments) {
+                    if (!seg.entity) continue;
+                    seg.entity.setLocalPosition(px, py, pz);
+                    seg.entity.setLocalEulerAngles(rx, ry, rz);
+                    seg.entity.setLocalScale(s, s, s);
+                }
+            }
 
             // Save to cache on every update (manual input or scrub)
             if (this.currentTransformCacheKey) {
@@ -1165,48 +1323,66 @@ class Viewer {
                 // Loop logic #WDD 2026-01-16
                 // If total frames is 50, indices are 0..49. Duration is 50 (count).
                 // We should loop when we hit the last frame index.
-                const maxTime = Math.max(0, this.duration - 1.0);
+                
+                const totalFrames = this.isSog4SequenceMode ? (this.sog4SequenceTotalFrames || this.duration) : this.duration;
+                const maxTime = Math.max(0, totalFrames - 1.0);
                 if (this.currentTime > maxTime) {
                     this.currentTime = 0;
+                    if (this.isSog4SequenceMode) {
+                        void this.activateSog4SequenceSegment(0);
+                    }
                 }
 
-                // For UI, we floor to closest frame
-                const displayFrame = Math.floor(this.currentTime);
-                // #WDD 2026-01-16 Fix: Display 0 to N-1
-                const total = Math.max(0, Math.ceil(this.duration) - 1); // Duration is roughly max frame index or count
+                let displayFrame = 0;
+                let total = 0;
+                if (this.isSog4SequenceMode) {
+                    const info = this.updateSog4SequenceTime();
+                    displayFrame = info.displayFrame;
+                    total = Math.max(0, Math.ceil(info.total) - 1);
+                } else {
+                    // For UI, we floor to closest frame
+                    displayFrame = Math.floor(this.currentTime);
+                    // #WDD 2026-01-16 Fix: Display 0 to N-1
+                    total = Math.max(0, Math.ceil(this.duration) - 1); // Duration is roughly max frame index or count
+
+                    // Sequence mode switches whole gsplat assets per frame (static-per-frame playback).
+                    if (this.isSequenceMode) {
+                        void this.applySequenceFrame(displayFrame);
+                    }
+
+                    if (this.splatEntity?.gsplat) {
+                        const material = (this.splatEntity.gsplat as any).instance.material;
+                        if (material) {
+                            const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
+                            material.setParameter('uTime', shaderTime);
+                            material.setParameter('uGlobalTotalFrames', this.duration);
+                        }
+                    }
+                }
 
                 // Only auto-update slider if user is NOT scrubbing
                 if (timeSlider && !isScrubbing) {
                     timeSlider.value = displayFrame.toString();
                 }
                 if (timeLabel) timeLabel.innerText = `${displayFrame} / ${total}`;
-
-                // Sequence mode switches whole gsplat assets per frame (static-per-frame playback).
-                if (this.isSequenceMode) {
-                    void this.applySequenceFrame(displayFrame);
-                }
-
-                if (this.splatEntity?.gsplat) {
-                    const material = (this.splatEntity.gsplat as any).instance.material;
-                    if (material) {
-                        const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
-                        material.setParameter('uTime', shaderTime);
-                        material.setParameter('uGlobalTotalFrames', this.duration);
-                    }
-                }
             } else {
+                
                 // Also update on scrub
-                if (this.splatEntity?.gsplat) {
-                    const material = (this.splatEntity.gsplat as any).instance.material;
-                    if (material) {
-                        const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
-                        material.setParameter('uTime', shaderTime);
-                        material.setParameter('uGlobalTotalFrames', this.duration);
+                if (this.isSog4SequenceMode) {
+                    this.updateSog4SequenceTime();
+                } else {
+                    if (this.splatEntity?.gsplat) {
+                        const material = (this.splatEntity.gsplat as any).instance.material;
+                        if (material) {
+                            const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
+                            material.setParameter('uTime', shaderTime);
+                            material.setParameter('uGlobalTotalFrames', this.duration);
+                        }
                     }
-                }
 
-                if (this.isSequenceMode) {
-                    void this.applySequenceFrame(Math.floor(this.currentTime));
+                    if (this.isSequenceMode) {
+                        void this.applySequenceFrame(Math.floor(this.currentTime));
+                    }
                 }
             }
         });
@@ -1932,10 +2108,23 @@ class Viewer {
         });
     }
 
-    private async loadFile(file: File) {
+    private async loadFile(file: File, options: { keepSog4Sequence?: boolean } = {}) {
         // If on small screen (phone/tablet), auto-hide UI to simplified mode
         if (window.innerWidth < 1024) {
             this.toggleUIVisibility(true);
+        }
+
+        if (!options.keepSog4Sequence) {
+            this.isSog4SequenceMode = false;
+            this.sog4SequenceFiles = [];
+            this.sog4SequenceSegments = [];
+            this.sog4SequenceTotalFrames = 0;
+            this.sog4SequenceOffsets = [];
+            this.sog4SequenceName = null;
+            this.sog4SequenceSharedTransform = null;
+            this.sog4SequenceIndex = 0;
+            this.sog4SequenceLoading = false;
+            this.sog4SequenceRequestId++;
         }
 
         const name = file.name.toLowerCase();
@@ -1980,13 +2169,15 @@ class Viewer {
         this.currentFileName = file.name;
         this.currentTransformCacheKey = file.name;
 
-        if (this.splatEntity) this.splatEntity.destroy();
-        this.cameraPresets = [];
-        this.renderPresets();
-        this.isSequenceMode = false;
-        this.sequenceAssets = [];
-        this.sequenceFrameIndex = -1;
-        this.sequenceBands = 0;
+        if (!options.keepSog4Sequence) {
+            if (this.splatEntity) this.splatEntity.destroy();
+            this.cameraPresets = [];
+            this.renderPresets();
+            this.isSequenceMode = false;
+            this.sequenceAssets = [];
+            this.sequenceFrameIndex = -1;
+            this.sequenceBands = 0;
+        }
 
         const scElem = document.getElementById('splat-count');
         if (scElem) scElem.innerText = "--";
@@ -2145,9 +2336,11 @@ class Viewer {
 
                 // Call legacy finalize to setup shaders
                 // #WDD 2026-01-16
-                this.finalizeGSplatLoad(asset, count, null, parsed.frames || parsed.maxMu || 100, parsed);
+                
+const duration = parsed.frames || parsed.maxMu || 100;
+                this.finalizeGSplatLoad(asset, count, null, duration, parsed);
 
-                // #WDD 2026-01-30 Apply postProcessing parameters from file
+                // #WDD 2026-01-30 Apply postProcessing parameters from file parameters from file
                 if (parsed.postProcessing) {
                     console.log('[Viewer] Applying postProcessing from file:', parsed.postProcessing);
                     this.postProcessingTool.exposure = parsed.postProcessing.exposure || 1.0;
@@ -2240,6 +2433,16 @@ class Viewer {
             window.cancelAnimationFrame(this.sequenceSwapRaf);
             this.sequenceSwapRaf = null;
         }
+        this.isSog4SequenceMode = false;
+        this.sog4SequenceFiles = [];
+        this.sog4SequenceSegments = [];
+            this.sog4SequenceTotalFrames = 0;
+            this.sog4SequenceOffsets = [];
+            this.sog4SequenceName = null;
+            this.sog4SequenceSharedTransform = null;
+        this.sog4SequenceIndex = 0;
+        this.sog4SequenceLoading = false;
+        this.sog4SequenceRequestId++;
     }
 
     private async parsePlyFrame(file: File): Promise<SequenceFrameData> {
@@ -2895,6 +3098,340 @@ class Viewer {
         }
     }
 
+    
+    private async loadSog4Sequence(files: File[]): Promise<void> {
+        const overlay = document.getElementById('loading-overlay');
+        const progress = this.createSequenceProgressUpdater();
+        progress(0, 'PREPARING', `Loading ${files.length} SOG4 segments`);
+        let succeeded = false;
+        try {
+            this.activeLoadingSequenceCleanup();
+
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+            this.isSog4SequenceMode = true;
+            this.sog4SequenceFiles = sorted;
+            const base = sorted[0]?.name ? sorted[0].name.replace(/\.sog4$/i, '') : 'sog4_sequence';
+            this.sog4SequenceName = `${base}_sequence.sog4`;
+            this.sog4SequenceSharedTransform = null;
+            this.sog4SequenceSegments = [];
+            this.sog4SequenceOffsets = [];
+            this.sog4SequenceTotalFrames = 0;
+            this.sog4SequenceIndex = 0;
+            this.sog4SequenceLoading = true;
+            const requestId = ++this.sog4SequenceRequestId;
+
+            const loader = new SOG4Loader(this.app);
+            for (let i = 0; i < sorted.length; i++) {
+                const file = sorted[i];
+                const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
+                progress(step, 'LOADING', `Parsing ${file.name}`);
+                const parsed = await loader.load(file, () => { });
+                const { asset, entity, duration } = await this.applyParsedSog4Segment(parsed, file.name, { preload: true, hideEntity: true });
+                this.sog4SequenceOffsets.push(this.sog4SequenceTotalFrames);
+                this.sog4SequenceTotalFrames += Math.max(1, Math.floor(duration));
+                this.sog4SequenceSegments.push({ name: file.name, parsed, asset, entity, duration: Math.max(1, Math.floor(duration)) });
+            }
+
+            if (!this.sog4SequenceSegments.length) throw new Error('No SOG4 segments parsed');
+            await this.activateSog4SequenceSegment(0);
+            this.currentTime = 0;
+
+            const first = this.sog4SequenceSegments[0];
+            if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
+                this.cameraPresets = first.parsed.cameras.map((c: any) => ({
+                    name: c.name,
+                    pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                    pitch: c.pitch,
+                    yaw: c.yaw,
+                    textObjects: c.textObjects
+                }));
+                this.renderPresets();
+            }
+            if (first?.parsed?.postProcessing) {
+                this.postProcessingTool.exposure = first.parsed.postProcessing.exposure || 1.0;
+                this.postProcessingTool.brightness = first.parsed.postProcessing.brightness || 0.0;
+                this.postProcessingTool.contrast = first.parsed.postProcessing.contrast || 0.0;
+                this.postProcessingTool.applySettings();
+            }
+
+            if (this.sog4SequenceRequestId === requestId) {
+                this.sog4SequenceLoading = false;
+            }
+
+            console.log("[Viewer] Auto-starting playback and switching to Play Mode");
+            this.toggleUIVisibility(true);
+            if (!this.isPlaying) this.togglePlay();
+
+            setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 200);
+
+            succeeded = true;
+        } catch (err) {
+            console.error('SOG4 sequence load failed', err);
+            alert('Failed to load SOG4 sequence: ' + (err instanceof Error ? err.message : String(err)));
+        } finally {
+            if (!succeeded) {
+                this.isSog4SequenceMode = false;
+                this.sog4SequenceFiles = [];
+                this.sog4SequenceSegments = [];
+                this.sog4SequenceOffsets = [];
+                this.sog4SequenceTotalFrames = 0;
+                this.sog4SequenceIndex = 0;
+                this.sog4SequenceLoading = false;
+                overlay?.classList.add('hidden');
+            }
+        }
+    }
+
+
+
+    
+    private async applyParsedSog4Segment(parsed: any, name: string, options: { preload?: boolean; hideEntity?: boolean } = {}): Promise<{ asset: pc.Asset; entity: pc.Entity; duration: number }> {
+        const overlay = document.getElementById('loading-overlay');
+
+        if (!options.preload) {
+            const sharedName = this.isSog4SequenceMode ? (this.sog4SequenceName || name) : name;
+            this.currentFileName = sharedName;
+            this.currentTransformCacheKey = sharedName;
+        }
+
+        if (!options.preload) {
+            if (this.splatEntity) this.splatEntity.destroy();
+            this.cameraPresets = [];
+            this.renderPresets();
+            this.isSequenceMode = false;
+            this.sequenceAssets = [];
+            this.sequenceFrameIndex = -1;
+            this.sequenceBands = 0;
+        }
+
+        const scElem = document.getElementById('splat-count');
+        if (scElem) scElem.innerText = '--';
+
+        this.lastParsedData = parsed;
+        const count = parsed.count;
+
+        const elements = parsed.plyData.elements;
+        const vertexElement = elements[0];
+        const splatData = new (pc.GSplatData as any)([vertexElement]);
+        const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
+
+        const blob = new Blob([parsed.sogBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const asset = new pc.Asset(name, 'gsplat', { url: url });
+        asset.resource = resource;
+        asset.loaded = true;
+        this.app.assets.add(asset);
+
+        const entity = new pc.Entity('GSplat');
+        entity.addComponent('gsplat', { asset: asset });
+
+        let arScaleFactor = 1.0;
+        this.app.root.addChild(entity);
+        if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) {
+            console.log("[Viewer] AR Active: Reparenting new Splat to AR Anchor");
+            this.arHandler.arAnchor.addChild(entity);
+            entity.setLocalPosition(0, 0, 0);
+            entity.setLocalRotation(new pc.Quat().setFromEulerAngles(0, 0, 0));
+            const pScale = this.arHandler.arAnchor.getLocalScale().x;
+            console.log(`[Viewer] AR Anchor Scale: ${pScale}`);
+            if (pScale !== 0) {
+                arScaleFactor = 1.0 / pScale;
+            }
+        }
+
+        this.splatEntity = entity;
+
+        
+        const shared = this.sog4SequenceSharedTransform;
+        if (shared) {
+            if (shared.pos) entity.setLocalPosition(shared.pos[0], shared.pos[1], shared.pos[2]);
+            if (shared.rot) entity.setLocalRotation(new pc.Quat(shared.rot[0], shared.rot[1], shared.rot[2], shared.rot[3]));
+            if (shared.scale) entity.setLocalScale(shared.scale[0], shared.scale[1], shared.scale[2]);
+        } else if (parsed.model_transform) {
+            const t = parsed.model_transform;
+            this.sog4SequenceSharedTransform = { pos: t.pos || [0, 0, 0], rot: t.rot || [0, 0, 0, 1], scale: t.scale || [1, 1, 1] };
+            if (t.pos) entity.setLocalPosition(t.pos[0], t.pos[1], t.pos[2]);
+            if (t.rot) entity.setLocalRotation(new pc.Quat(t.rot[0], t.rot[1], t.rot[2], t.rot[3]));
+            if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
+        } else {
+            this.sog4SequenceSharedTransform = this.sog4SequenceSharedTransform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
+        }
+
+
+        console.log("[Viewer] Final Entity World Pos:", entity.getPosition().toString());
+        console.log("[Viewer] Final Entity World Scale:", entity.getLocalScale().toString());
+
+        if (!options.preload && !this.isSog4SequenceMode && parsed.cameras && Array.isArray(parsed.cameras)) {
+            this.cameraPresets = parsed.cameras.map((c: any) => ({
+                name: c.name,
+                pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                pitch: c.pitch,
+                yaw: c.yaw,
+                textObjects: c.textObjects
+            }));
+            this.renderPresets();
+            console.log(`[TrueSplats] Restored ${this.cameraPresets.length} Camera Presets`);
+        }
+
+        const duration = parsed.frames || parsed.maxMu || 100;
+        this.finalizeGSplatLoad(asset, count, null, duration, parsed, { suppressUI: options.preload });
+
+        if (options.hideEntity) {
+            entity.enabled = false;
+        }
+
+        if (!options.preload && !this.isSog4SequenceMode && parsed.postProcessing) {
+            console.log('[Viewer] Applying postProcessing from file:', parsed.postProcessing);
+            this.postProcessingTool.exposure = parsed.postProcessing.exposure || 1.0;
+            this.postProcessingTool.brightness = parsed.postProcessing.brightness || 0.0;
+            this.postProcessingTool.contrast = parsed.postProcessing.contrast || 0.0;
+            this.postProcessingTool.applySettings();
+            const expInput = document.getElementById('pp-exposure') as HTMLInputElement;
+            const briInput = document.getElementById('pp-brightness') as HTMLInputElement;
+            const conInput = document.getElementById('pp-contrast') as HTMLInputElement;
+            if (expInput) {
+                expInput.value = this.postProcessingTool.exposure.toString();
+                const expVal = document.getElementById('val-exposure');
+                if (expVal) expVal.innerText = this.postProcessingTool.exposure.toFixed(1);
+            }
+            if (briInput) {
+                briInput.value = this.postProcessingTool.brightness.toString();
+                const briVal = document.getElementById('val-brightness');
+                if (briVal) briVal.innerText = this.postProcessingTool.brightness > 0 ? '+' + this.postProcessingTool.brightness.toFixed(2) : this.postProcessingTool.brightness.toFixed(2);
+            }
+            if (conInput) {
+                conInput.value = this.postProcessingTool.contrast.toString();
+                const conVal = document.getElementById('val-contrast');
+                if (conVal) conVal.innerText = this.postProcessingTool.contrast > 0 ? '+' + this.postProcessingTool.contrast.toFixed(2) : this.postProcessingTool.contrast.toFixed(2);
+            }
+        }
+
+        if (!options.preload) {
+            setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 200);
+        }
+
+        return { asset, entity, duration };
+    }
+
+    private async advanceSog4Sequence(): Promise<void> {
+        if (!this.isSog4SequenceMode || this.sog4SequenceSegments.length === 0) return;
+        if (this.sog4SequenceLoading) return;
+
+        this.sog4SequenceLoading = true;
+        const nextIndex = (this.sog4SequenceIndex + 1) % this.sog4SequenceSegments.length;
+        const requestId = ++this.sog4SequenceRequestId;
+
+        try {
+            await this.activateSog4SequenceSegment(nextIndex);
+            this.currentTime = this.sog4SequenceOffsets[nextIndex] || 0;
+        } catch (err) {
+            console.error('SOG4 segment switch failed', err);
+            alert('Failed to switch SOG4 segment: ' + (err instanceof Error ? err.message : String(err)));
+            this.isSog4SequenceMode = false;
+            this.sog4SequenceFiles = [];
+            this.sog4SequenceSegments = [];
+            this.sog4SequenceOffsets = [];
+            this.sog4SequenceTotalFrames = 0;
+            this.sog4SequenceIndex = 0;
+        } finally {
+            if (this.sog4SequenceRequestId === requestId) {
+                this.sog4SequenceLoading = false;
+            }
+        }
+    }
+
+    
+    private getSog4SegmentIndex(globalTime: number): number {
+        if (!this.sog4SequenceOffsets.length) return 0;
+        let idx = this.sog4SequenceOffsets.length - 1;
+        for (let i = 0; i < this.sog4SequenceOffsets.length; i++) {
+            const start = this.sog4SequenceOffsets[i];
+            const end = (i + 1 < this.sog4SequenceOffsets.length) ? this.sog4SequenceOffsets[i + 1] : this.sog4SequenceTotalFrames;
+            if (globalTime >= start && globalTime < end) {
+                idx = i;
+                break;
+            }
+        }
+        return idx;
+    }
+
+    private applySog4LocalTime(localTime: number) {
+        if (this.splatEntity?.gsplat) {
+            const material = (this.splatEntity.gsplat as any).instance.material;
+            if (material) {
+                const shaderTime = Math.floor(localTime);
+                material.setParameter('uTime', shaderTime);
+                material.setParameter('uGlobalTotalFrames', this.duration);
+            }
+        }
+    }
+
+    private updateSog4SequenceTime() {
+        const total = Math.max(1, this.sog4SequenceTotalFrames || this.duration || 1);
+        const maxTime = Math.max(0, total - 1);
+        const t = Math.max(0, Math.min(this.currentTime, maxTime));
+        const segIndex = this.getSog4SegmentIndex(t);
+        if (segIndex !== this.sog4SequenceIndex) {
+            void this.activateSog4SequenceSegment(segIndex);
+        }
+        const offset = this.sog4SequenceOffsets[segIndex] || 0;
+        const localTime = t - offset;
+        this.applySog4LocalTime(localTime);
+        return { displayFrame: Math.floor(t), total };
+    }
+
+    private async activateSog4SequenceSegment(index: number): Promise<void> {
+        const segment = this.sog4SequenceSegments[index];
+        if (!segment) return;
+        if (this.sog4SequenceIndex === index && this.splatEntity === segment.entity) return;
+
+        if (this.splatEntity && this.splatEntity !== segment.entity) {
+            this.splatEntity.enabled = false;
+        }
+
+        this.sog4SequenceIndex = index;
+        this.currentFileName = this.sog4SequenceName || segment.name;
+        this.currentTransformCacheKey = this.currentFileName;
+        this.splatEntity = segment.entity;
+        this.splatEntity.enabled = true;
+        this.lastParsedData = segment.parsed;
+
+        const asset = segment.asset;
+        const splatData = (asset.resource as pc.GSplatResource).splatData;
+        const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
+        if (x && y && z) {
+            this.posArrays = { x: x as Float32Array, y: y as Float32Array, z: z as Float32Array };
+        }
+        const origIndices = splatData.getProp('original_index');
+        this.originalIndices = origIndices ? (origIndices as Float32Array) : null;
+
+        this.is4DGS = !!segment.parsed.trajectory;
+        this.trajectoryData = segment.parsed.trajectory || null;
+        this.keyframes = segment.parsed.keyframes || 0;
+        this.xyzStride = segment.parsed.xyzStride || 1;
+        this.rotTrajectoryData = segment.parsed.rotTrajectory || null;
+        this.rotKeyframes = segment.parsed.rotKeyframes || 0;
+        this.rotStride = segment.parsed.rotStride || 1;
+        this.dcTrajectoryData = segment.parsed.dcTrajectory || null;
+        this.dcKeyframes = segment.parsed.dcKeyframes || 0;
+        this.dcStride = segment.parsed.dcStride || 1;
+
+        
+        this.duration = segment.duration;
+        this.totalFrames = this.duration;
+        this.originalFrames = this.duration;
+
+
+        const slider = (document.getElementById('time-slider') as HTMLInputElement);
+        if (slider) {
+            const maxIdx = Math.max(0, Math.ceil(this.sog4SequenceTotalFrames) - 1);
+            slider.max = maxIdx.toString();
+            slider.step = "0.1";
+        }
+        this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
+        this.updateStats(asset);
+    }
+
     private async loadSogSequence(files: File[]): Promise<void> {
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
@@ -2985,6 +3522,11 @@ class Viewer {
             await this.loadPlySequence(plySeq);
             return;
         }
+        const sog4Seq = sorted.filter((f) => this.isSog4SequenceCandidate(f));
+        if (sog4Seq.length > 1) {
+            await this.loadSog4Sequence(sog4Seq);
+            return;
+        }
         const sogSeq = sorted.filter((f) => this.isSogSequenceCandidate(f));
         if (sogSeq.length > 1) {
             await this.loadSogSequence(sogSeq);
@@ -3003,6 +3545,11 @@ class Viewer {
     private isSogSequenceCandidate(file: File): boolean {
         const name = file.name.toLowerCase();
         return name.endsWith('.sog') && !name.endsWith('.sog4');
+    }
+
+    private isSog4SequenceCandidate(file: File): boolean {
+        const name = file.name.toLowerCase();
+        return name.endsWith('.sog4');
     }
 
     // #WDD 2026-01-17: Dynamic Sorting Update
@@ -3094,7 +3641,7 @@ class Viewer {
     private dcKeyframes = 0;
     private dcStride = 1;
 
-    private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any) {
+    private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any, options: { suppressUI?: boolean } = {}) {
         this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
         if (parsed && !originalFrames) {
             const keyframeMax = (() => {
@@ -3220,9 +3767,9 @@ class Viewer {
 
             for (let i = 0; i < numSplats; i++) {
                 const oidx = origIndices ? Math.round(origIndices[i]) : i;
-
+                const base = oidx * K * 3; // Base index in the original trajectory data
                 for (let k = 0; k < K; k++) {
-                    const srcOff = (oidx * K + k) * 3; // Source from Original Index (BIN)
+                    const srcOff = base + k * 3; // Source from Original Index (BIN)
                     const dstOff = (i * K + k) * 4;    // Destination to Sorted Index (Texture)
 
                     texData[dstOff + 0] = trajData[srcOff + 0];
@@ -3406,18 +3953,20 @@ class Viewer {
             slider.step = "0.1";
             slider.value = "0";
         }
-        this.updateTimelineTicks(this.duration);
-        const timeLabel = document.getElementById('time-label');
-        if (timeLabel) timeLabel.innerText = `0 / ${maxIdx}`;
+        if (!options.suppressUI) {
+            this.updateTimelineTicks(this.duration);
+            const timeLabel = document.getElementById('time-label');
+            if (timeLabel) timeLabel.innerText = `0 / ${maxIdx}`;
 
-        setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
-        this.updateStats(asset);
+            setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
+            this.updateStats(asset);
+        }
 
-        if (parsed.model_transform) {
+        if (!options.suppressUI && parsed.model_transform) {
             // #WDD 2026-01-19: Embedded transform takes precedence over cache
             console.log("[Viewer] Finalize: Respecting embedded model_transform, skipping cache.");
             this.updateTransformUIFromEntity();
-        } else if (parsed.pose) {
+        } else if (!options.suppressUI && parsed.pose) {
             if (this.splatEntity) {
                 this.splatEntity.setPosition(parseFloat(parsed.pose.px), parseFloat(parsed.pose.py), parseFloat(parsed.pose.pz));
                 this.splatEntity.setEulerAngles(parseFloat(parsed.pose.rx), parseFloat(parsed.pose.ry), parseFloat(parsed.pose.rz));
@@ -3426,9 +3975,9 @@ class Viewer {
                     if (el) el.value = parsed.pose[id.replace('-', '')];
                 });
             }
-        } else if (this.currentTransformCacheKey) {
+        } else if (!options.suppressUI && this.currentTransformCacheKey) {
             this.loadCachedTransform(this.currentTransformCacheKey);
-        } else {
+        } else if (!options.suppressUI) {
             this.resetObjectTransformUI();
         }
     }
@@ -3813,6 +4362,24 @@ class Viewer {
 
     private onUpdate(dt: number) {
         if (this.arHandler) this.arHandler.update();
+
+        // #WDD 2026-02-03 Face Tracking Camera Update
+        if (this.isFaceTracking && this.camera) {
+            // Calculate Orbital Position
+            // NewPos = BasePos + (BaseRight * OffX) + (BaseUp * OffY)
+            // Then LookAt Origin
+
+            const rightOffset = this.faceTrackingBaseRight.clone();
+            rightOffset.mulScalar(this.faceTrackingOffset.x);
+
+            const upOffset = this.faceTrackingBaseUp.clone();
+            upOffset.mulScalar(this.faceTrackingOffset.y);
+
+            const targetPos = this.faceTrackingBasePos.clone().add(rightOffset).add(upOffset);
+
+            this.camera.setPosition(targetPos);
+            this.camera.lookAt(this.faceTrackingTarget);
+        }
 
         this.fpsCounter++;
         this.fpsTimer += dt;

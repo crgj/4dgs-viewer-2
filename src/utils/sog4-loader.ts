@@ -474,13 +474,23 @@ export class SOG4Loader {
             }]
         };
 
+        const calcFrames = (k: number, stride: number) => {
+            const s = Number.isFinite(stride) && stride > 0 ? stride : 1;
+            return k > 1 ? (k - 1) * s + 1 : 1;
+        };
+        const computedFrames = Math.max(
+            calcFrames(K_xyz, xyzStride),
+            calcFrames(K_rot, rotStride),
+            calcFrames(K_dc, dcStride)
+        );
+
         this.lastResult = {
             count: count,
             plyData: plyData,
             // 4D / Temporal
             // #WDD 2026-01-18 Parse total_frames from custom metadata
             frames: (meta.custom && meta.custom.total_frames) ? parseInt(meta.custom.total_frames) :
-                (meta.total_frames || ((K_xyz > 1 ? (K_xyz - 1) * xyzStride + 1 : 1))),
+                (meta.total_frames || computedFrames),
             // Usually it's implied or in meta. Let's look for 'frames' or 'timeline' in meta? 
             // If not present, we assume K_xyz * xyzStride? 
             // Actually TrueSplats bin had T_total. meta.json might have it?

@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.32",
     "jszip": "^3.10.1",
     "mind-ar": "^1.2.5",
     "playcanvas": "^1.77.0"
