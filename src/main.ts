@@ -12,6 +12,7 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
+import { SOG4Encoder } from './utils/sog4-encoder';
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -4689,7 +4690,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 deleted_indices: deletedIndices, // #WDD 2026-01-18
                 apply_deleted: true
             });
-            const filename = `saved_${this.currentFileName || 'model.truesplats'}`;
+            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
+            const filename = `saved_${baseName}.truesplats`;
 
             const blob = new Blob([buffer], { type: "application/octet-stream" });
             const url = URL.createObjectURL(blob);
@@ -4706,9 +4708,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
     }
     async saveAsSOG4() {
         console.log("[Export] saveAsSOG4 called. LastParsed:", this.lastParsedData);
-        if (!this.lastParsedData || !this.lastParsedData.isSOG4) {
-            console.error("[Export] SOG4 Save Mismatch. isSOG4:", this.lastParsedData?.isSOG4);
-            alert("No SOG4 loaded or format mismatch.");
+        if (!this.lastParsedData) {
+            alert("No data loaded.");
             return;
         }
 
@@ -4733,6 +4734,15 @@ const duration = parsed.frames || parsed.maxMu || 100;
             };
 
             setExportProgress(0, 'Preparing export');
+
+            // #WDD 2026-03-26 Auto-encode to SOG4 if data is from PLY4 or TrueSplats
+            if (!this.lastParsedData.isSOG4 || !this.lastParsedData.sogBuffer) {
+                setExportProgress(5, 'Encoding to SOG4 format...');
+                this.lastParsedData.sogBuffer = await SOG4Encoder.encode(this.lastParsedData, {}, (pct: number, msg: string) => {
+                    setExportProgress(5 + (pct * 0.4), `Encoding: ${msg}`);
+                });
+                this.lastParsedData.isSOG4 = true;
+            }
 
             const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
             if (this.splatEntity) {
@@ -4772,7 +4782,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     contrast: this.postProcessingTool.contrast
                 }
             }, (pct: number, msg: string) => setExportProgress(pct, msg));
-            const filename = `saved_${this.currentFileName || 'model.sog4'}`;
+            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
+            const filename = `saved_${baseName}.sog4`;
 
             const blob = new Blob([buffer.buffer as ArrayBuffer], { type: "application/octet-stream" });
             const url = URL.createObjectURL(blob);

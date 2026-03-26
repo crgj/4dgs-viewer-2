@@ -555,8 +555,8 @@ export class SOG4Loader {
         };
 
         const encodeCanvasToImage = async (canvas: any, fileName: string): Promise<ArrayBuffer> => {
-            const isWebp = fileName.toLowerCase().endsWith('.webp');
-            const preferredType = isWebp ? 'image/webp' : 'image/png';
+            // #WDD 2026-03-26 Fix SOG4 save corruption: force lossless PNG even for .webp files
+            const preferredType = 'image/png';
             if (typeof canvas.convertToBlob === 'function') {
                 let blob = await canvas.convertToBlob({ type: preferredType });
                 if (!blob || blob.size === 0) {
