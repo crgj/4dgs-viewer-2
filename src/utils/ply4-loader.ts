@@ -28,6 +28,7 @@ export class PLY4Loader {
         let totalFrames = 0;
         let xyzStride = 1;
         let rotStride = 1;
+        let dcStride = 1;
 
         // Parse Header
         for (const line of headerLines) {
@@ -63,6 +64,7 @@ export class PLY4Loader {
                 if (line.includes('total_frames')) totalFrames = parseInt(parts[parts.indexOf('total_frames') + 1]);
                 if (line.includes('xyz_bank_keyframe_stride')) xyzStride = parseInt(parts[parts.indexOf('xyz_bank_keyframe_stride') + 1]);
                 if (line.includes('rot_bank_keyframe_stride')) rotStride = parseInt(parts[parts.indexOf('rot_bank_keyframe_stride') + 1]);
+                if (line.includes('features_dc_bank_keyframe_stride')) dcStride = parseInt(parts[parts.indexOf('features_dc_bank_keyframe_stride') + 1]);
             }
         }
 
@@ -71,6 +73,7 @@ export class PLY4Loader {
         // Identify Bank Structure
         let maxK_xyz = -1;
         let maxK_rot = -1;
+        let maxK_dc = -1;
 
         propertyTypes.forEach(p => {
             // xyz_bank_{k}_{c}
@@ -89,12 +92,21 @@ export class PLY4Loader {
                     if (!isNaN(k) && k > maxK_rot) maxK_rot = k;
                 }
             }
+            // f_dc_bank_{k}_{c}
+            if (p.name.startsWith('f_dc_bank_')) {
+                const parts = p.name.split('_');
+                if (parts.length >= 5) {
+                    const k = parseInt(parts[3]);
+                    if (!isNaN(k) && k > maxK_dc) maxK_dc = k;
+                }
+            }
         });
 
         const K_xyz = maxK_xyz + 1;
         const K_rot = maxK_rot > -1 ? maxK_rot + 1 : 0;
+        const K_dc = maxK_dc > -1 ? maxK_dc + 1 : 0;
 
-        console.log(`[PLY4] Meta: Frames=${totalFrames}, K_xyz=${K_xyz} (Stride ${xyzStride}), K_rot=${K_rot} (Stride ${rotStride})`);
+        console.log(`[PLY4] Meta: Frames=${totalFrames}, K_xyz=${K_xyz} (Stride ${xyzStride}), K_rot=${K_rot} (Stride ${rotStride}), K_dc=${K_dc} (Stride ${dcStride})`);
 
         // Prepare Data Arrays
         const count = vertexCount;
@@ -108,7 +120,8 @@ export class PLY4Loader {
 
             // Banks (Flattened)
             xyzBank: K_xyz > 0 ? new Float32Array(count * K_xyz * 3) : null,
-            rotBank: K_rot > 0 ? new Float32Array(count * K_rot * 4) : null
+            rotBank: K_rot > 0 ? new Float32Array(count * K_rot * 4) : null,
+            dcBank: K_dc > 0 ? new Float32Array(count * K_dc * 3) : null
         };
         for (let i = 0; i < 45; i++) data[`f_rest_${i}`] = new Float32Array(count);
 
@@ -162,6 +175,10 @@ export class PLY4Loader {
         const rotBankNames: string[][] = []; // [k][0=x,1=y,2=z,3=w]
         for (let k = 0; k < K_rot; k++) {
             rotBankNames[k] = [`rot_bank_${k}_x`, `rot_bank_${k}_y`, `rot_bank_${k}_z`, `rot_bank_${k}_w`];
+        }
+        const dcBankNames: string[][] = []; // [k][0=r,1=g,2=b] (or DC coeffs)
+        for (let k = 0; k < K_dc; k++) {
+            dcBankNames[k] = [`f_dc_bank_${k}_0`, `f_dc_bank_${k}_1`, `f_dc_bank_${k}_2`];
         }
 
         // F_REST
@@ -257,6 +274,18 @@ export class PLY4Loader {
                 data.rot_3[i] = getFloat('rot_3', rowBase) || 0;
             }
 
+            if (K_dc > 0) {
+                for (let k = 0; k < K_dc; k++) {
+                    const dr = getFloat(dcBankNames[k][0], rowBase);
+                    const dg = getFloat(dcBankNames[k][1], rowBase);
+                    const db = getFloat(dcBankNames[k][2], rowBase);
+                    const bIdx = (i * K_dc + k) * 3;
+                    data.dcBank[bIdx + 0] = dr;
+                    data.dcBank[bIdx + 1] = dg;
+                    data.dcBank[bIdx + 2] = db;
+                }
+            }
+
             if (i % 10000 === 0 && onProgress) {
                 onProgress(10 + (i / count) * 80, "Reading Vertices");
             }
@@ -325,6 +354,10 @@ export class PLY4Loader {
             rotTrajectory: data.rotBank,
             rotKeyframes: K_rot,
             rotStride: rotStride,
+
+            dcTrajectory: data.dcBank,
+            dcKeyframes: K_dc,
+            dcStride: dcStride,
 
             bands: 3
         };
