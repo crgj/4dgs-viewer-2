@@ -164,9 +164,10 @@ export class SOG4Loader {
             const cb = meta.scales.codebook;
             const texData = props.scales.data;
             for (let i = 0; i < count; i++) {
-                data.scale_0[i] = cb[texData[i * 4 + 0]];
-                data.scale_1[i] = cb[texData[i * 4 + 1]];
-                data.scale_2[i] = cb[texData[i * 4 + 2]];
+                // #WDD 2026-03-30: Apply inverseLogTransform to scales
+                data.scale_0[i] = inverseLogTransform(cb[texData[i * 4 + 0]]);
+                data.scale_1[i] = inverseLogTransform(cb[texData[i * 4 + 1]]);
+                data.scale_2[i] = inverseLogTransform(cb[texData[i * 4 + 2]]);
             }
         }
 

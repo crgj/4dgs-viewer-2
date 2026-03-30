@@ -251,21 +251,21 @@ export class PLY4Loader {
 
             if (K_rot > 0) {
                 for (let k = 0; k < K_rot; k++) {
-                    const br = getFloat(rotBankNames[k][0], rowBase);
-                    const bg = getFloat(rotBankNames[k][1], rowBase);
-                    const bb = getFloat(rotBankNames[k][2], rowBase);
-                    const ba = getFloat(rotBankNames[k][3], rowBase);
+                    const qx = getFloat(rotBankNames[k][0], rowBase); // x
+                    const qy = getFloat(rotBankNames[k][1], rowBase); // y
+                    const qz = getFloat(rotBankNames[k][2], rowBase); // z
+                    const qw = getFloat(rotBankNames[k][3], rowBase); // w
                     const bIdx = (i * K_rot + k) * 4;
-                    data.rotBank[bIdx + 0] = br;
-                    data.rotBank[bIdx + 1] = bg;
-                    data.rotBank[bIdx + 2] = bb;
-                    data.rotBank[bIdx + 3] = ba;
+                    data.rotBank[bIdx + 0] = qx; // x
+                    data.rotBank[bIdx + 1] = qy; // y
+                    data.rotBank[bIdx + 2] = qz; // z
+                    data.rotBank[bIdx + 3] = qw; // w
                 }
-                // Fill rot_0..3 from frame 0
-                data.rot_0[i] = data.rotBank[i * K_rot * 4 + 0];
-                data.rot_1[i] = data.rotBank[i * K_rot * 4 + 1];
-                data.rot_2[i] = data.rotBank[i * K_rot * 4 + 2];
-                data.rot_3[i] = data.rotBank[i * K_rot * 4 + 3];
+                // Fill rot_0..3 from frame 0 (Map WXYZ to 0123)
+                data.rot_0[i] = data.rotBank[i * K_rot * 4 + 3]; // w
+                data.rot_1[i] = data.rotBank[i * K_rot * 4 + 0]; // x
+                data.rot_2[i] = data.rotBank[i * K_rot * 4 + 1]; // y
+                data.rot_3[i] = data.rotBank[i * K_rot * 4 + 2]; // z
             } else {
                 // Try to read standard or default
                 data.rot_0[i] = getFloat('rot_0', rowBase) || 1;

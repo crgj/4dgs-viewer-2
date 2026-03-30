@@ -83,7 +83,11 @@ export class SOG4Encoder {
         const qTex = createTex();
         for (let i = 0; i < count; i++) {
             const di = i * 4;
-            const q = [p.rot_0?.[i] || 1, p.rot_1?.[i] || 0, p.rot_2?.[i] || 0, p.rot_3?.[i] || 0];
+            // #WDD 2026-03-30: Normalize quaternion to ensure smallest-three reconstruction is unit length
+            const qr = p.rot_0?.[i] || 1, qi = p.rot_1?.[i] || 0, qj = p.rot_2?.[i] || 0, qk = p.rot_3?.[i] || 0;
+            const qlen = Math.sqrt(qr*qr + qi*qi + qj*qj + qk*qk);
+            const q = [qr/qlen, qi/qlen, qj/qlen, qk/qlen];
+            
             let maxIdx = 0, maxVal = -1;
             for (let j = 0; j < 4; j++) {
                 const absV = Math.abs(q[j]);
@@ -102,18 +106,24 @@ export class SOG4Encoder {
         progress?.(45, "Encoding Scales & Opacity...");
         // 3. SCALES (Uniform 256 Codebook)
         let minS = 1e9, maxS = -1e9;
+        const ls0 = new Float32Array(count), ls1 = new Float32Array(count), ls2 = new Float32Array(count);
         for (let i = 0; i < count; i++) {
-            if (p.scale_0[i] < minS) minS = p.scale_0[i]; if (p.scale_0[i] > maxS) maxS = p.scale_0[i];
-            if (p.scale_1[i] < minS) minS = p.scale_1[i]; if (p.scale_1[i] > maxS) maxS = p.scale_1[i];
-            if (p.scale_2[i] < minS) minS = p.scale_2[i]; if (p.scale_2[i] > maxS) maxS = p.scale_2[i];
+            // #WDD 2026-03-30: Apply logTransform to scales to match SOG4Loader expectations for positions/colors
+            ls0[i] = logTransform(p.scale_0[i] || 0);
+            ls1[i] = logTransform(p.scale_1[i] || 0);
+            ls2[i] = logTransform(p.scale_2[i] || 0);
+            if (ls0[i] < minS) minS = ls0[i]; if (ls0[i] > maxS) maxS = ls0[i];
+            if (ls1[i] < minS) minS = ls1[i]; if (ls1[i] > maxS) maxS = ls1[i];
+            if (ls2[i] < minS) minS = ls2[i]; if (ls2[i] > maxS) maxS = ls2[i];
         }
         const scaleCb = new Array(256).fill(0).map((_, i) => minS + (i / 255) * (maxS - minS || 1));
         meta.scales = { codebook: scaleCb, files: ['scales.png'] };
         const sTex = createTex();
         for (let i = 0; i < count; i++) {
-            sTex.data[i * 4] = Math.max(0, Math.min(255, Math.round(((p.scale_0[i] - minS) / (maxS - minS || 1)) * 255)));
-            sTex.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(((p.scale_1[i] - minS) / (maxS - minS || 1)) * 255)));
-            sTex.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(((p.scale_2[i] - minS) / (maxS - minS || 1)) * 255)));
+            // Encode using the logged values
+            sTex.data[i * 4] = Math.max(0, Math.min(255, Math.round(((ls0[i] - minS) / (maxS - minS || 1)) * 255)));
+            sTex.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(((ls1[i] - minS) / (maxS - minS || 1)) * 255)));
+            sTex.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(((ls2[i] - minS) / (maxS - minS || 1)) * 255)));
             sTex.data[i * 4 + 3] = 255;
         }
         await saveTex(sTex, 'scales.png');
@@ -199,7 +209,10 @@ export class SOG4Encoder {
                 const bTex = createTex();
                 for (let i = 0; i < count; i++) {
                     const base = i * numFrames * 4 + k * 4;
-                    const q = [bankData[base], bankData[base + 1], bankData[base + 2], bankData[base + 3]];
+                    const bqr = bankData[base], bqi = bankData[base + 1], bqj = bankData[base + 2], bqk = bankData[base + 3];
+                    const bqlen = Math.sqrt(bqr*bqr + bqi*bqi + bqj*bqj + bqk*bqk);
+                    const q = [bqr/bqlen, bqi/bqlen, bqj/bqlen, bqk/bqlen];
+                    
                     let maxIdx = 0, maxVal = -1;
                     for (let j = 0; j < 4; j++) {
                         const absV = Math.abs(q[j]);
