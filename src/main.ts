@@ -4734,15 +4734,11 @@ const duration = parsed.frames || parsed.maxMu || 100;
             };
 
             setExportProgress(0, 'Preparing export');
-
-            // #WDD 2026-03-26 Auto-encode to SOG4 if data is from PLY4 or TrueSplats
-            if (!this.lastParsedData.isSOG4 || !this.lastParsedData.sogBuffer) {
-                setExportProgress(5, 'Encoding to SOG4 format...');
-                this.lastParsedData.sogBuffer = await SOG4Encoder.encode(this.lastParsedData, {}, (pct: number, msg: string) => {
-                    setExportProgress(5 + (pct * 0.4), `Encoding: ${msg}`);
-                });
-                this.lastParsedData.isSOG4 = true;
-            }
+            let usedDirectEncode = false;
+            const mapSaveProgress = (pct: number) => {
+                if (!usedDirectEncode) return Math.min(Math.max(pct, 0), 100);
+                return Math.min(100, 88 + (Math.min(Math.max(pct, 0), 100) * 0.12));
+            };
 
             const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
             if (this.splatEntity) {
@@ -4767,21 +4763,52 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     if (selData[i * 4 + 1] > 0) deletedIndices.push(i);
                 }
             }
+            setExportProgress(5, `Deleted splats: ${deletedIndices.length}`);
 
             const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
+            const hasDeletes = deletedIndices.length > 0;
+            const isNativeSog4 = !!(this.lastParsedData.isSOG4 && this.lastParsedData.sogBuffer);
+            let buffer: Uint8Array;
 
-            const buffer = await SOG4Loader.save(this.lastParsedData, {
-                model_transform: transform,
-                cameras: cameras,
-                deleted_indices: deletedIndices,
-                apply_deleted: true,
-                original_indices: origIndices,
-                postProcessing: { // #WDD 2026-01-30
-                    exposure: this.postProcessingTool.exposure,
-                    brightness: this.postProcessingTool.brightness,
-                    contrast: this.postProcessingTool.contrast
+            if (!isNativeSog4) {
+                usedDirectEncode = true;
+                setExportProgress(8, 'Encoding final SOG4 archive...');
+                const encodeOverrides: any = {
+                    model_transform: transform,
+                    cameras: cameras,
+                    postProcessing: {
+                        exposure: this.postProcessingTool.exposure,
+                        brightness: this.postProcessingTool.brightness,
+                        contrast: this.postProcessingTool.contrast
+                    }
+                };
+                if (hasDeletes) {
+                    encodeOverrides.apply_deleted = true;
+                    encodeOverrides.deleted_indices = deletedIndices;
+                    if (origIndices) encodeOverrides.original_indices = origIndices;
                 }
-            }, (pct: number, msg: string) => setExportProgress(pct, msg));
+                buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string) => {
+                    setExportProgress(8 + (pct * 0.8), `Encoding: ${msg}`);
+                });
+                this.lastParsedData.sogBuffer = buffer;
+                this.lastParsedData.isSOG4 = true;
+                setExportProgress(92, 'Final archive ready');
+            } else {
+                setExportProgress(12, hasDeletes ? 'Updating native SOG4 with deletion compaction...' : 'Updating native SOG4 metadata...');
+                buffer = await SOG4Loader.save(this.lastParsedData, {
+                    model_transform: transform,
+                    cameras: cameras,
+                    deleted_indices: deletedIndices,
+                    apply_deleted: hasDeletes,
+                    original_indices: origIndices,
+                    postProcessing: { // #WDD 2026-01-30
+                        exposure: this.postProcessingTool.exposure,
+                        brightness: this.postProcessingTool.brightness,
+                        contrast: this.postProcessingTool.contrast
+                    }
+                }, (pct: number, msg: string) => setExportProgress(mapSaveProgress(pct), msg));
+                this.lastParsedData.sogBuffer = buffer;
+            }
             const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
             const filename = `saved_${baseName}.sog4`;
 

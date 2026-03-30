@@ -160,14 +160,19 @@ export class SOG4Loader {
         }
 
         // Scales
+        // #WDD 2026-03-30: Backward compatibility. Older SOG4 used linear scales; newer uses logTransform.
+        // If meta.custom.scales_log === true, apply inverseLogTransform. Otherwise keep raw codebook values.
+        const scalesAreLog = !!(meta.custom && meta.custom.scales_log === true);
         if (props.scales && meta.scales && meta.scales.codebook) {
             const cb = meta.scales.codebook;
             const texData = props.scales.data;
             for (let i = 0; i < count; i++) {
-                // #WDD 2026-03-30: Apply inverseLogTransform to scales
-                data.scale_0[i] = inverseLogTransform(cb[texData[i * 4 + 0]]);
-                data.scale_1[i] = inverseLogTransform(cb[texData[i * 4 + 1]]);
-                data.scale_2[i] = inverseLogTransform(cb[texData[i * 4 + 2]]);
+                const s0 = cb[texData[i * 4 + 0]];
+                const s1 = cb[texData[i * 4 + 1]];
+                const s2 = cb[texData[i * 4 + 2]];
+                data.scale_0[i] = scalesAreLog ? inverseLogTransform(s0) : s0;
+                data.scale_1[i] = scalesAreLog ? inverseLogTransform(s1) : s1;
+                data.scale_2[i] = scalesAreLog ? inverseLogTransform(s2) : s2;
             }
         }
 
@@ -590,22 +595,36 @@ export class SOG4Loader {
         if (overrides.model_transform) meta.model_transform = overrides.model_transform;
         if (overrides.cameras) meta.cameras = overrides.cameras;
         // SOG4 doesn't support 'deleted_indices' in parsing yet, but we can store it
-        if (overrides.deleted_indices) meta.deleted_indices = overrides.deleted_indices;
+        if (overrides.deleted_indices && !overrides.apply_deleted) meta.deleted_indices = overrides.deleted_indices;
 
         if (overrides.apply_deleted && overrides.deleted_indices?.length) {
             const originalCount = meta.count as number;
             const deleted = new Set<number>();
+            const mappedDeleted: number[] = [];
             const origIndices = overrides.original_indices as number[] | undefined;
             for (let i = 0; i < overrides.deleted_indices.length; i++) {
                 const idx = overrides.deleted_indices[i];
                 const mapped = origIndices ? Math.round(origIndices[idx]) : idx;
-                if (mapped >= 0 && mapped < originalCount) deleted.add(mapped);
+                if (mapped >= 0 && mapped < originalCount) {
+                    deleted.add(mapped);
+                    mappedDeleted.push(mapped);
+                }
             }
 
-            let keepCount = 0;
+            if (deleted.size === 0) {
+                report(5, "No valid deleted splats after mapping; skipping compaction.");
+                // Keep mapped deleted indices in meta so loader can hide them if desired
+                meta.deleted_indices = mappedDeleted;
+            } else {
+            // Build keep list once for faster compaction per texture
+            const keepIndices: number[] = [];
+            keepIndices.length = 0;
             for (let i = 0; i < originalCount; i++) {
-                if (!deleted.has(i)) keepCount++;
+                if (!deleted.has(i)) keepIndices.push(i);
             }
+            const keepCount = keepIndices.length;
+
+            report(2, `Deleting ${deleted.size} / ${originalCount} splats...`);
 
             const calcNewSize = (count: number, maxWidth: number) => {
                 const width = Math.max(1, Math.min(maxWidth, Math.ceil(Math.sqrt(count))));
@@ -627,16 +646,15 @@ export class SOG4Loader {
                 if (!ctx) throw new Error("Failed to get 2D context for texture encode");
                 const dstImage = ctx.createImageData(width, height);
 
-                let write = 0;
-                for (let i = 0; i < originalCount; i++) {
-                    if (deleted.has(i)) continue;
+                // Copy only kept indices (faster than per-index delete checks for each texture)
+                for (let w = 0; w < keepCount; w++) {
+                    const i = keepIndices[w];
                     const si = i * 4;
-                    const di = write * 4;
+                    const di = w * 4;
                     dstImage.data[di + 0] = src[si + 0];
                     dstImage.data[di + 1] = src[si + 1];
                     dstImage.data[di + 2] = src[si + 2];
                     dstImage.data[di + 3] = src[si + 3];
-                    write++;
                 }
 
                 ctx.putImageData(dstImage, 0, 0);
@@ -675,12 +693,13 @@ export class SOG4Loader {
             const total = targets.length;
             for (let i = 0; i < total; i++) {
                 const fileName = targets[i];
-                report((i / Math.max(total, 1)) * 90, `Compressing ${fileName}`);
+                report((i / Math.max(total, 1)) * 90, `Compressing ${i + 1}/${total}: ${fileName}`);
                 await compactTexture(fileName);
             }
 
             meta.count = keepCount;
             meta.deleted_indices = [];
+            }
         }
 
         report(92, "Updating metadata");
