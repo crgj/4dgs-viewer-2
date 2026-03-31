@@ -19,6 +19,10 @@ export class SkyboxManager {
 
             asset.ready((a) => {
                 const texture = a.resource as pc.Texture;
+                if (!texture) {
+                    reject(new Error(`Skybox asset loaded without texture resource: ${filename}`));
+                    return;
+                }
                 this.processSkybox(texture);
                 resolve();
             });
@@ -38,7 +42,15 @@ export class SkyboxManager {
             this.processSkybox(asset.resource as pc.Texture);
         } else {
             asset.ready((a) => {
-                this.processSkybox(a.resource as pc.Texture);
+                const texture = a.resource as pc.Texture;
+                if (!texture) {
+                    console.warn(`[Skybox] Asset "${a.name}" became ready without a texture resource.`);
+                    return;
+                }
+                this.processSkybox(texture);
+            });
+            asset.once('error', (err: string) => {
+                console.warn(`[Skybox] Failed to load asset "${asset.name}":`, err);
             });
             this.app.assets.load(asset);
         }
@@ -65,6 +77,11 @@ export class SkyboxManager {
      * Main processing logic using EnvLighting to generate high-quality cubemap and lighting
      */
     private processSkybox(source: pc.Texture) {
+        if (!source) {
+            console.warn('[Skybox] Skipping skybox processing because source texture is missing.');
+            return;
+        }
+
         // Cleanup previous
         if (this.currentSkyboxTexture && this.currentSkyboxTexture !== source) {
             this.currentSkyboxTexture.destroy();
@@ -73,8 +90,19 @@ export class SkyboxManager {
             this.currentEnvAtlas.destroy();
         }
 
-        // 1. Generate Skybox Cubemap (Fixes seams & projection, creates mipmaps)
-        const skybox = pc.EnvLighting.generateSkyboxCubemap(source);
+        let skybox: pc.Texture;
+        let lighting: pc.Texture;
+        let envAtlas: pc.Texture;
+
+        try {
+            // 1. Generate Skybox Cubemap (Fixes seams & projection, creates mipmaps)
+            skybox = pc.EnvLighting.generateSkyboxCubemap(source);
+            lighting = pc.EnvLighting.generateLightingSource(source);
+            envAtlas = pc.EnvLighting.generateAtlas(lighting, {});
+        } catch (err) {
+            console.warn('[Skybox] Failed to process skybox texture.', err);
+            return;
+        }
 
         // #WDD 2026-01-21 Ensure correct filtering for blur
         skybox.minFilter = pc.FILTER_LINEAR_MIPMAP_LINEAR;
@@ -84,8 +112,6 @@ export class SkyboxManager {
         this.currentSkyboxTexture = skybox;
 
         // 2. Generate Lighting (EnvAtlas) for PBR
-        const lighting = pc.EnvLighting.generateLightingSource(source);
-        const envAtlas = pc.EnvLighting.generateAtlas(lighting, {});
         lighting.destroy();
         this.currentEnvAtlas = envAtlas;
 

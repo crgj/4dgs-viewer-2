@@ -4510,7 +4510,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
             if (existing.resource) {
                 applySettings();
             } else {
-                existing.ready(applySettings);
+                existing.ready((asset: pc.Asset) => {
+                    if (!asset.resource) return;
+                    applySettings();
+                });
             }
             return;
         }
@@ -4521,7 +4524,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
         const asset = new pc.Asset(name, 'texture', { url: url });
         this.app.assets.add(asset);
         this.skyboxManager.setSkyboxAsset(asset);
-        asset.ready(applySettings);
+        asset.ready((readyAsset: pc.Asset) => {
+            if (!readyAsset.resource) return;
+            applySettings();
+        });
     }
 
     private updateStats(asset: pc.Asset) {
