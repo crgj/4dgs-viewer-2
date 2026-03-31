@@ -321,6 +321,102 @@ body.theme-light {
     box-shadow: 0 0 8px var(--accent-glow);
 }
 
+.sidebar-panel {
+    box-shadow: 0 10px 30px var(--glass-shadow);
+}
+
+.sidebar-tabs .ui-btn {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.panel-title {
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.04em;
+}
+
+.panel-desc {
+    margin-top: 4px;
+    font-size: 8px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    opacity: 0.8;
+}
+
+.panel-label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-start;
+    gap: 8px;
+}
+
+.panel-label {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    opacity: 0.72;
+}
+
+.panel-divider {
+    height: 1px;
+    background: var(--glass-border);
+}
+
+.panel-select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.panel-note {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    font-size: 8px;
+    line-height: 1.5;
+}
+
+.panel-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+}
+
+.panel-stat-label {
+    font-size: 7px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.panel-stat-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-highlight);
+}
+
 /* Timeline Ticks */
 .tick-mark {
     width: 1px;
@@ -342,46 +438,44 @@ body.theme-light {
 }
 
 .has-tooltip::before {
-    content: attr(aria-label);
+    content: attr(data-tip);
     position: absolute;
     bottom: 100%;
     left: 50%;
-    transform: translateX(-50%) translateY(2px) scale(0.95);
+    transform: translateX(-50%) translateY(-1px) scale(0.96);
     background: var(--glass-bg);
-    /* Use theme bg */
     border: 1px solid var(--glass-border);
-    color: var(--text-secondary);
-    /* Softer text color */
-    padding: 3px 6px;
-    /* Tighter padding */
-    border-radius: 4px;
-    /* Slightly squarer, clean look */
+    color: var(--text-primary);
+    padding: 4px 6px;
+    border-radius: 6px;
     font-size: 8px;
-    /* Tiny, precise text */
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    /* Tracking for readability */
+    line-height: 1.2;
     font-weight: 600;
     white-space: nowrap;
+    width: max-content;
+    min-width: 0;
+    max-width: 96px;
     opacity: 0;
     pointer-events: none;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    /* Smooth easing */
-    z-index: 100;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    /* Stronger shadow for depth */
-    backdrop-filter: blur(8px);
-    /* Ensure glass effect works */
+    z-index: 120;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px);
 }
 
-/* Optional Arrow */
-/* .has-tooltip::after { ... } - Keeping it clean without arrow for now */
+.has-tooltip[aria-label]:not([data-tip])::before {
+    content: attr(aria-label);
+}
+
+.has-tooltip[data-tip=""]::before,
+.has-tooltip:not([data-tip]):not([aria-label])::before {
+    display: none;
+}
 
 .has-tooltip:hover::before {
     opacity: 1;
-    transform: translateX(-50%) translateY(-2px) scale(1);
+    transform: translateX(-50%) translateY(-7px) scale(1);
     border-color: rgba(16, 185, 129, 0.3);
-    color: var(--text-primary);
 }
 
 .tooltip-style-select {

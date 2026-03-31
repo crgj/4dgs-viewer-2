@@ -6,6 +6,10 @@ const ICON_BRUSH = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path 
 const ICON_RECT = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/></svg>`;
 const ICON_INVERT = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.49 10 10-4.49 10-10 10zm-1-17.93C7.06 4.56 4 7.92 4 12s3.06 7.44 7 7.93V4.07z"/></svg>`;
 const ICON_CLEAR = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+// Center point icon (dot in center)
+const ICON_CENTER = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="3"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" opacity="0.5"/></svg>`;
+// Ellipse/Edge icon (circle with ring)
+const ICON_ELLIPSE = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3"/></svg>`;
 
 
 // Export class
@@ -17,6 +21,7 @@ export class SelectionTool {
 
     // Tools
     currentTool: 'none' | 'brush' | 'rect' = 'none';
+    selectionMode: 'center' | 'ellipse' = 'center';
     brushRadius = 50; // pixels
 
     // State
@@ -180,6 +185,16 @@ export class SelectionTool {
                     </button>
                 </div>
 
+                <!-- Selection Mode -->
+                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto">
+                    <button id="select-mode-center" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Center Mode">
+                        ${ICON_CENTER}
+                    </button>
+                    <button id="select-mode-ellipse" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Ellipse Mode">
+                        ${ICON_ELLIPSE}
+                    </button>
+                </div>
+
                 <!-- Delete Panel (Independent) -->
                 <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto items-center">
                      <button id="action-delete" class="p-2 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
@@ -218,6 +233,8 @@ export class SelectionTool {
 
         get('tool-brush')?.addEventListener('click', () => this.setTool('brush'));
         get('tool-rect')?.addEventListener('click', () => this.setTool('rect'));
+        get('select-mode-center')?.addEventListener('click', () => this.setSelectionMode('center'));
+        get('select-mode-ellipse')?.addEventListener('click', () => this.setSelectionMode('ellipse'));
         get('tool-invert')?.addEventListener('click', () => {
             const positions = this.getCachedPositions();
             if (positions) {
@@ -243,6 +260,9 @@ export class SelectionTool {
                 ov.style.height = (this.brushRadius * 2) + 'px';
             }
         });
+        
+        // Initialize selection mode UI
+        this.setSelectionMode('center');
     }
 
     setTool(tool: 'brush' | 'rect' | 'none') {
@@ -277,6 +297,17 @@ export class SelectionTool {
             settings?.classList.remove('flex');
             document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
         }
+    }
+
+    setSelectionMode(mode: 'center' | 'ellipse') {
+        this.selectionMode = mode;
+        
+        // UI Feedback
+        const get = (id: string) => document.getElementById(id);
+        get('select-mode-center')?.classList.toggle('active', mode === 'center');
+        get('select-mode-ellipse')?.classList.toggle('active', mode === 'ellipse');
+        
+        console.log(`[Selection] Mode: ${mode}`);
     }
 
     setupEvents() {
@@ -381,6 +412,12 @@ export class SelectionTool {
     }
 
     performBrush(cx: number, cy: number) {
+        if (this.selectionMode === 'ellipse') {
+            this.performBrushEllipse(cx, cy);
+            return;
+        }
+        
+        // Center mode (original)
         const positions = this.getCachedPositions();
         if (!positions || !this.selectionData) return;
 
@@ -442,6 +479,12 @@ export class SelectionTool {
     }
 
     performRect(x1: number, y1: number, x2: number, y2: number) {
+        if (this.selectionMode === 'ellipse') {
+            this.performRectEllipse(x1, y1, x2, y2);
+            return;
+        }
+        
+        // Center mode (original)
         const positions = this.getCachedPositions();
         if (!positions || !this.selectionData) return;
 
@@ -529,5 +572,132 @@ export class SelectionTool {
             this.rectOverlay.remove();
             this.rectOverlay = null;
         }
+    }
+
+    // ===== ELLIPSE SELECTION METHODS =====
+    
+    // Simple ellipse-brush intersection using screen-space approximation
+    performBrushEllipse(cx: number, cy: number) {
+        const positions = this.getCachedPositions();
+        if (!positions || !this.selectionData) return;
+
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
+
+        const r = this.brushRadius;
+        const rSq = r * r;
+        
+        let changed = false;
+        const numSplats = positions.length / 3;
+        const screen = new pc.Vec3();
+        
+        const modelMat = this.viewer.splatEntity.getWorldTransform();
+        const localPos = new pc.Vec3();
+        const worldPos = new pc.Vec3();
+
+        for (let i = 0; i < numSplats; i++) {
+            localPos.set(
+                positions[i * 3 + 0],
+                positions[i * 3 + 1],
+                positions[i * 3 + 2]
+            );
+
+            modelMat.transformPoint(localPos, worldPos);
+            camera.worldToScreen(worldPos, screen);
+
+            // screen.z > 0 means in front of camera
+            if (screen.z <= 0) continue;
+
+            // For ellipse mode: check if brush intersects with splat's ellipse boundary
+            // Estimate screen-space ellipse radius based on z-depth
+            // Use smaller radius so brush must be closer to center to select
+            const pixelSize = Math.max(2, Math.min(15, 100 / (screen.z + 5))); 
+            const totalRadius = r + pixelSize;
+            const totalRSq = totalRadius * totalRadius;
+            
+            const dx = screen.x - cx;
+            const dy = screen.y - cy;
+            
+            if (dx * dx + dy * dy <= totalRSq) {
+                const idx = i * 4;
+                if (this.selectionData[idx + 1] > 0) continue;
+
+                if (this.isSubtracting) {
+                    if (this.selectionData[idx] > 0) {
+                        this.selectionData[idx] = 0;
+                        changed = true;
+                    }
+                } else {
+                    if (this.selectionData[idx] === 0) {
+                        this.selectionData[idx] = 255;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        
+        if (changed) this.updateTexture();
+    }
+
+    // Simple ellipse-rect intersection
+    performRectEllipse(x1: number, y1: number, x2: number, y2: number) {
+        const positions = this.getCachedPositions();
+        if (!positions || !this.selectionData) return;
+
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
+
+        const minX = Math.min(x1, x2);
+        const maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2);
+        const maxY = Math.max(y1, y2);
+        
+        let changed = false;
+        const numSplats = positions.length / 3;
+        const screen = new pc.Vec3();
+        
+        const modelMat = this.viewer.splatEntity.getWorldTransform();
+        const localPos = new pc.Vec3();
+        const worldPos = new pc.Vec3();
+
+        for (let i = 0; i < numSplats; i++) {
+            localPos.set(
+                positions[i * 3 + 0],
+                positions[i * 3 + 1],
+                positions[i * 3 + 2]
+            );
+
+            modelMat.transformPoint(localPos, worldPos);
+            camera.worldToScreen(worldPos, screen);
+
+            if (screen.z <= 0) continue;
+
+            // Estimate screen-space ellipse radius based on z-depth
+            const pixelSize = Math.max(2, Math.min(15, 100 / (screen.z + 5)));
+            
+            // Check if splat circle intersects with selection rect
+            if (screen.x >= minX - pixelSize && 
+                screen.x <= maxX + pixelSize &&
+                screen.y >= minY - pixelSize && 
+                screen.y <= maxY + pixelSize) {
+                
+                const idx = i * 4;
+                if (this.selectionData[idx + 1] > 0) continue;
+
+                if (this.isSubtracting) {
+                    if (this.selectionData[idx] > 0) {
+                        this.selectionData[idx] = 0;
+                        changed = true;
+                    }
+                } else {
+                    if (this.selectionData[idx] === 0) {
+                        this.selectionData[idx] = 255;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        
+        if (changed) this.updateTexture();
     }
 }

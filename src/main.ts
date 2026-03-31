@@ -105,6 +105,7 @@ class Viewer {
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
+    private gaussianRenderMode = 0; // 0=normal, 1=center point, 2=ellipse outline
 
     private is4DGS = false;
     private trajectoryData: Float32Array | null = null;
@@ -319,6 +320,76 @@ class Viewer {
         } else {
             btn.classList.remove('active');
         }
+    }
+
+    private applyGaussianRenderMode() {
+        const apply = (ent: pc.Entity | null) => {
+            if (!ent?.gsplat) return;
+            const instance = (ent.gsplat as any).instance;
+            if (instance?.material) {
+                instance.material.setParameter('uRenderMode', this.gaussianRenderMode);
+                instance.material.update();
+            }
+        };
+
+        if (this.isSequenceMode || this.isSog4SequenceMode) {
+            this.sequenceEntityPool.forEach((ent) => apply(ent));
+            this.sog4SequenceSegments.forEach((seg) => apply(seg.entity));
+        }
+
+        apply(this.splatEntity);
+    }
+
+    private bindGaussianRenderModeControls() {
+        const buttons = {
+            normal: document.getElementById('render-mode-normal') as HTMLElement | null,
+            center: document.getElementById('render-mode-center') as HTMLElement | null,
+            outline: document.getElementById('render-mode-outline') as HTMLElement | null
+        };
+
+        const updateButtons = () => {
+            this.updateToggleButton(buttons.normal, this.gaussianRenderMode === 0);
+            this.updateToggleButton(buttons.center, this.gaussianRenderMode === 1);
+            this.updateToggleButton(buttons.outline, this.gaussianRenderMode === 2);
+        };
+
+        buttons.normal?.addEventListener('click', () => {
+            this.gaussianRenderMode = 0;
+            this.applyGaussianRenderMode();
+            updateButtons();
+        });
+        buttons.center?.addEventListener('click', () => {
+            this.gaussianRenderMode = 1;
+            this.applyGaussianRenderMode();
+            updateButtons();
+        });
+        buttons.outline?.addEventListener('click', () => {
+            this.gaussianRenderMode = 2;
+            this.applyGaussianRenderMode();
+            updateButtons();
+        });
+
+        updateButtons();
+    }
+
+    private bindSidebarTabs() {
+        const tabs = Array.from(document.querySelectorAll('.sidebar-tab')) as HTMLElement[];
+        const panels = Array.from(document.querySelectorAll('.sidebar-panel-view')) as HTMLElement[];
+        if (!tabs.length || !panels.length) return;
+
+        const activate = (targetId: string) => {
+            tabs.forEach((tab) => this.updateToggleButton(tab, tab.dataset.panelTarget === targetId));
+            panels.forEach((panel) => panel.classList.toggle('hidden', panel.id !== targetId));
+        };
+
+        tabs.forEach((tab) => {
+            tab.addEventListener('click', () => {
+                const targetId = tab.dataset.panelTarget;
+                if (targetId) activate(targetId);
+            });
+        });
+
+        activate('panel-common');
     }
 
     private setupScene() {
@@ -744,6 +815,8 @@ class Viewer {
         // Init Button States
         if (btnGrid) this.updateToggleButton(btnGrid, this.gridEntity?.enabled ?? false);
         if (btnAxes) this.updateToggleButton(btnAxes, this.axesEntity?.enabled ?? false);
+        this.bindSidebarTabs();
+        this.bindGaussianRenderModeControls();
 
         const dropZone = document.getElementById('drop-zone');
         const dropMsg = document.getElementById('drop-msg');
@@ -1493,10 +1566,10 @@ class Viewer {
                     </svg>
                 </div>
                 <div class="flex items-center gap-1">
-                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text">
+                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text" data-tip="Text">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                     </button>
-                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
+                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Preset" data-tip="Delete">
                         <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                     </button>
                 </div>
@@ -1511,7 +1584,7 @@ class Viewer {
                     textItem.className = 'flex items-center justify-between group/text hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer';
                     textItem.innerHTML = `
                         <span class="text-[8px] opacity-40 group-hover/text:opacity-100 truncate flex-1">${textObj.content || '(Empty)'}</span>
-                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all">
+                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Text" data-tip="Delete">
                              <svg viewBox="0 0 24 24" class="w-2.5 h-2.5 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </button>
                     `;
@@ -2550,7 +2623,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
         material.setParameter('uTransitionFactor', 0.0);
         material.setParameter('uSwizzleMode', this.swizzleMode);
         material.setParameter('uGlobalTotalFrames', this.duration);
-        material.setParameter('uSequenceOpacity', 1.0);
+        material.setParameter('uOpacityScale', 1.0);
+        material.setParameter('uRenderMode', this.gaussianRenderMode);
         if (this.selectionTool?.selectionTexture) {
             material.setParameter('selectionTexture', this.selectionTool.selectionTexture);
         }
@@ -2577,7 +2651,16 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     if (bands >= 2 && !options.defines.includes('USE_SH2')) options.defines.push('USE_SH2');
                     if (bands >= 3 && !options.defines.includes('USE_SH3')) options.defines.push('USE_SH3');
 
-                    const defines = options.defines.map((d: string) => `#define ${d}`).join('\n') + '\n';
+                    const shaderPassInfo = (pc as any).ShaderPass?.get(device)?.getByIndex?.(options.pass);
+                    let passDefines = shaderPassInfo?.shaderDefines ? `${shaderPassInfo.shaderDefines}\n` : '';
+                    // Ensure PICK_PASS is defined for pick passes (some versions may not set shaderDefines correctly)
+                    if (options.pass === (pc as any).PASS_PICK || options.pass === 2) {
+                        if (!passDefines.includes('PICK_PASS')) {
+                            passDefines += '#define PICK_PASS\n';
+                        }
+                    }
+                    const optionDefines = options.defines.map((d: string) => `#define ${d}`).join('\n');
+                    const defines = passDefines + optionDefines + '\n';
                     const version = "#version 300 es\n";
 
                     const vsCode = version + defines + sequenceSplatCoreVS + sequenceSplatMainVS;
@@ -2760,7 +2843,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         if (!ent?.gsplat) return;
         const inst = (ent.gsplat as any).instance;
         if (inst?.material) {
-            inst.material.setParameter('uSequenceOpacity', opacity);
+            inst.material.setParameter('uOpacityScale', opacity);
             inst.material.update();
         }
     }
@@ -4005,6 +4088,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
         material.setParameter('uTime', 0.0);
         material.setParameter('uTransitionFactor', 0.0);
         material.setParameter('uSwizzleMode', this.swizzleMode); // #WDD 2026-01-15 Init
+        material.setParameter('uOpacityScale', 1.0);
+        material.setParameter('uRenderMode', this.gaussianRenderMode);
 
         if (lifetimeTexture) {
             material.setParameter('lifetimeTexture', lifetimeTexture);
@@ -4096,7 +4181,16 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     // Let's assume the user wants the raw splatMainPS provided.
 
 
-                    const defines = options.defines.map((d: string) => `#define ${d}`).join('\n') + '\n';
+                    const shaderPassInfo = (pc as any).ShaderPass?.get(device)?.getByIndex?.(options.pass);
+                    let passDefines = shaderPassInfo?.shaderDefines ? `${shaderPassInfo.shaderDefines}\n` : '';
+                    // Ensure PICK_PASS is defined for pick passes (some versions may not set shaderDefines correctly)
+                    if (options.pass === (pc as any).PASS_PICK || options.pass === 2) {
+                        if (!passDefines.includes('PICK_PASS')) {
+                            passDefines += '#define PICK_PASS\n';
+                        }
+                    }
+                    const optionDefines = options.defines.map((d: string) => `#define ${d}`).join('\n');
+                    const defines = passDefines + optionDefines + '\n';
 
                     const version = "#version 300 es\n";
 
@@ -4496,12 +4590,21 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
     // #WDD 2026-01-18: Expose current positions for SelectionTool
     public getCurrentPositions(): Float32Array | null {
-        // If 4DGS is active, usage the dynamic positions from the sorter
-        if (this.is4DGS && this.splatEntity?.gsplat) {
-            const instance = (this.splatEntity.gsplat as any).instance;
-            if (instance?.sorter?.centers) {
-                return instance.sorter.centers;
+        // Important: selection logic expects positions in the same splat-data order
+        // as scale / rotation / selection texture indexing. sorter.centers is not a
+        // reliable source for that because it is owned by the depth sorter path.
+        if (this.is4DGS && this.posArrays) {
+            const { x, y, z } = this.posArrays;
+            const count = Math.min(x.length, y.length, z.length);
+            if (!this.cachedPositions || this.cachedPositions.length !== count * 3) {
+                this.cachedPositions = new Float32Array(count * 3);
             }
+            for (let i = 0; i < count; i++) {
+                this.cachedPositions[i * 3 + 0] = x[i];
+                this.cachedPositions[i * 3 + 1] = y[i];
+                this.cachedPositions[i * 3 + 2] = z[i];
+            }
+            return this.cachedPositions;
         }
         // Fallback or Non-4DGS
         return this.cachedPositions;

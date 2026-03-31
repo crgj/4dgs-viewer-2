@@ -187,6 +187,7 @@ export const splatMainVS = `
     
     out mediump vec2 texCoord;
     out mediump vec4 color;
+    out mediump float vFinalScale;
     
     mediump vec4 discardVec = vec4(0.0, 0.0, 2.0, 1.0);
 
@@ -590,44 +591,49 @@ export const splatMainVS = `
 
         gl_Position = splat_proj + vec4((vertex_position.x * v1v2.xy + vertex_position.y * v1v2.zw) / viewport * splat_proj.w, 0, 0);
         
-        texCoord = vertex_position.xy * finalScale / 2.0; 
+        texCoord = vertex_position.xy * finalScale / 2.0;
+        vFinalScale = finalScale; 
+        #ifdef PICK_PASS
+            uvec4 bits = (uvec4(splatId) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u);
+            color = vec4(bits) / 255.0;
+        #else
+            color = baseColor;
+            color.a *= alphaMult; 
+            
+            // --- Rapid Visual Transition #WDD 2026-01-15 ---
+            if (isSnowflake) {
+                // Preserving more original color - reduced whiteness mix
+                color.rgb = mix(color.rgb, vec3(1.0), visualFactor * 0.4); 
+                // Keep high opacity for better volume feel
+                color.a = mix(color.a, 0.6 * color.a, visualFactor);
+            }
 
-        color = baseColor;
-        color.a *= alphaMult; 
-        
-        // --- Rapid Visual Transition #WDD 2026-01-15 ---
-        if (isSnowflake) {
-            // Preserving more original color - reduced whiteness mix
-            color.rgb = mix(color.rgb, vec3(1.0), visualFactor * 0.4); 
-            // Keep high opacity for better volume feel
-            color.a = mix(color.a, 0.6 * color.a, visualFactor);
-        }
+            // #WDD 2026-01-30 Post Processing (VS Approximation)
+            // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
+            // Contrast: (color - 0.5) * contrast + 0.5
+            // Brightness: color + brightness
+            // BUT: CSS filters use contrast(1.0) as identity. 
+            // Here we use uContrast multiplier (1.0 = normal).
+            
+            // Apply Contrast
+            color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+            // Apply Brightness
+            color.rgb += uBrightness;
+            // Apply Exposure
+            color.rgb *= uExposure;
+            
+            // --- Selection Highlight ---
+            float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;
+            
+            if (isSelectionMode > 0.5) {
+                 color.a = max(color.a, 0.2); 
+            }
 
-        // #WDD 2026-01-30 Post Processing (VS Approximation)
-        // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
-        // Contrast: (color - 0.5) * contrast + 0.5
-        // Brightness: color + brightness
-        // BUT: CSS filters use contrast(1.0) as identity. 
-        // Here we use uContrast multiplier (1.0 = normal).
-        
-        // Apply Contrast
-        color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-        // Apply Brightness
-        color.rgb += uBrightness;
-        // Apply Exposure
-        color.rgb *= uExposure;
-        
-        // --- Selection Highlight ---
-        float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;
-        
-        if (isSelectionMode > 0.5) {
-             color.a = max(color.a, 0.2); 
-        }
-
-        if (selectionVal > 0.0) {
-            color.rgb = vec3(1.0, 1.0, 0.0); // Yellow
-            color.a = 1.0; 
-        }
+            if (selectionVal > 0.0) {
+                color.rgb = vec3(1.0, 1.0, 0.0); // Yellow
+                color.a = 1.0; 
+            }
+        #endif
 
         // // 1. Priority: Yellow if W < 1.0 (Short duration)
         // #ifdef USE_LIFETIME_TEXTURE
@@ -720,22 +726,78 @@ export const splatMainVS = `
 export const splatMainPS = `
     in mediump vec2 texCoord;
     in mediump vec4 color;
+    in mediump float vFinalScale;
+    uniform float uOpacityScale;
+    uniform float uRenderMode;
     
     layout(location=0) out highp vec4 pc_fragColor;
 
+    const mediump float EXP4 = exp(-4.0);
+    const mediump float INV_EXP4 = 1.0 / (1.0 - EXP4);
+
+    mediump float normExp(mediump float x) {
+        return (exp(x * -4.0) - EXP4) * INV_EXP4;
+    }
+
     void main(void)
     {
-        // evalSplat logic from PlayCanvas splatCoreFS
         mediump float A = dot(texCoord, texCoord);
-        if (A > 1.0) {
+        mediump float ringSize = 0.15;  // Increased ring width for better visibility
+        #ifdef PICK_PASS
+            // Match PlayCanvas / SuperSplat pick semantics:
+            // pick the whole visible projected gaussian footprint, not a custom ring band.
+            if (A > 1.0) {
+                discard;
+            }
+            pc_fragColor = color;
+            return;
+        #endif
+
+        if (uRenderMode < 0.5) {
+            if (A > 1.0) {
+                discard;
+            }
+            mediump float B = exp(-A * 4.0) * color.a;
+            if (B < (1.0/255.0)) {
+                discard;
+            }
+            pc_fragColor = vec4(color.rgb, B * uOpacityScale);
+            return;
+        }
+
+        if (uRenderMode < 1.5) {
+            if (A > 1.0) {
+                discard;
+            }
+            mediump float centerRadius = 0.035;
+            mediump float centerFeather = max(fwidth(A) * 2.0, 0.002);
+            mediump float centerMask = 1.0 - smoothstep(centerRadius, centerRadius + centerFeather, A);
+            mediump float centerAlpha = centerMask * max(color.a, 0.85);
+            if (centerAlpha < (1.0 / 255.0)) {
+                discard;
+            }
+            pc_fragColor = vec4(color.rgb, centerAlpha * uOpacityScale);
+            return;
+        }
+
+        // Compute max A based on actual finalScale (texCoord = vertex_position * finalScale / 2)
+        mediump float maxA = (vFinalScale / 2.0) * (vFinalScale / 2.0);
+        if (A > maxA) {
             discard;
         }
-        mediump float B = exp(-A * 4.0) * color.a;
-        if (B < (1.0/255.0)) {
+        mediump float alpha = normExp(A) * color.a;
+        // Ring threshold: near the outer edge (last 10% of radius)
+        mediump float ringThreshold = maxA * (1.0 - ringSize);
+        if (A < ringThreshold) {
+            alpha = max(0.05, alpha);
+        } else {
+            // Ring border: full opacity for clear edge visibility
+            alpha = 1.0;
+        }
+        if (alpha < (1.0 / 255.0)) {
             discard;
         }
 
-        // Output
-        pc_fragColor = vec4(color.rgb, B);
+        pc_fragColor = vec4(color.rgb, alpha * uOpacityScale);
     }
 `;

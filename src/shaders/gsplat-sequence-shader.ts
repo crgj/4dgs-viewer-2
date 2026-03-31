@@ -16,8 +16,4 @@ const stripSelectionUniforms = (vs: string) =>
 
 export const sequenceSplatCoreVS = splatCoreVS;
 export const sequenceSplatMainVS = stripSelectionUniforms(splatMainVS);
-export const sequenceSplatMainPS = `
-    uniform float uSequenceOpacity;
-${splatMainPS.replace('mediump float B = exp(-A * 4.0) * color.a;', 'mediump float Braw = exp(-A * 4.0) * color.a;')}
-`.replace('if (B < (1.0/255.0)) {', 'if (Braw < (1.0/255.0)) {')
-    .replace('pc_fragColor = vec4(color.rgb, B);', 'pc_fragColor = vec4(color.rgb, Braw * uSequenceOpacity);');
+export const sequenceSplatMainPS = splatMainPS;
