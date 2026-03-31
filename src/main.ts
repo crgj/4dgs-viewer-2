@@ -13,6 +13,7 @@ import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { SOG4Encoder } from './utils/sog4-encoder';
+import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -65,7 +66,9 @@ class Viewer {
     // #WDD 2026-02-03 Face Tracking
     private faceTracker: FaceTracker;
     private isFaceTracking = false;
+    private isHighQuality = true; // #WDD 2026-03-31 Default to true for sharpness
     private faceTrackingBasePos = new pc.Vec3();
+
     private faceTrackingBaseRight = new pc.Vec3();
     private faceTrackingBaseUp = new pc.Vec3();
     private faceTrackingTarget = new pc.Vec3();
@@ -120,7 +123,12 @@ class Viewer {
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
     private hasLoggedSorterKeys: boolean = false;
-    private sorterUpdateInterval = 2;
+    // #WDD 2026-03-31: Sort-Before-Render Synchronization
+    private isWaitingForSort = false;
+    private sortingTaskID = 0;
+    private lastCompletedSortTaskID = 0;
+    private sorterUpdateInterval = 1;
+
     private sorterUpdateFrame = 0;
 
     // --- Sequence Playback (static-per-frame) ---
@@ -260,6 +268,9 @@ class Viewer {
 
         this.app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
         this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
+        // #WDD 2026-03-31: High DPI support to resolve blurriness
+        this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
+
 
         window.addEventListener('resize', () => {
             this.app.resizeCanvas();
@@ -273,6 +284,19 @@ class Viewer {
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
+
+        // #WDD 2026-03-31: High Quality UI connection
+        const hqToggle = document.getElementById('toggle-high-quality') as HTMLInputElement;
+        if (hqToggle) {
+            hqToggle.checked = this.isHighQuality;
+            hqToggle.addEventListener('change', () => {
+                this.isHighQuality = hqToggle.checked;
+                this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
+                this.app.resizeCanvas();
+                console.log(`[Viewer] Render quality changed: ${this.isHighQuality ? 'Native DPI' : 'Fixed 1.0'}`);
+            });
+        }
+
 
         // #WDD 2026-02-03 Init Face Tracker
         this.faceTracker = new FaceTracker('face-tracker-video', (pos) => {
@@ -746,10 +770,14 @@ class Viewer {
             settingsPanel?.classList.add('hidden');
         });
 
-        // #WDD 2026-01-19 导出按钮直接导出 SOG4 文件
-        const exportBtn = document.getElementById('export-file');
-        exportBtn?.addEventListener('click', () => {
+        // #WDD 2026-03-31 改为支持 SOG4 和 PLY4 两种导出
+        const btnExportSog = document.getElementById('btn-export-sog');
+        btnExportSog?.addEventListener('click', () => {
             this.saveAsSOG4();
+        });
+        const btnExportPly4 = document.getElementById('btn-export-ply4');
+        btnExportPly4?.addEventListener('click', () => {
+            this.saveAsPLY4();
         });
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
@@ -867,11 +895,8 @@ class Viewer {
                 }
             }
 
-            // Save to cache on every update (manual input or scrub)
-            if (this.currentTransformCacheKey) {
-                this.saveTransformToCache(this.currentTransformCacheKey);
-            }
         };
+
 
         // --- View Presets ---
         document.getElementById('view-top')?.addEventListener('click', () => {
@@ -1390,10 +1415,13 @@ class Viewer {
             }
 
             if (this.isPlaying) {
-                // Use FPS-based playback
-                this.currentTime += dt * this.fps;
+                // #WDD 2026-03-31: Sort-Before-Render - Pause time advancement if waiting for a sort responding to a frame jump
+                if (!this.isWaitingForSort) {
+                    this.currentTime += dt * this.fps;
+                }
 
                 // Loop logic
+
                 // Loop logic #WDD 2026-01-16
                 // If total frames is 50, indices are 0..49. Duration is 50 (count).
                 // We should loop when we hit the last frame index.
@@ -2363,7 +2391,7 @@ class Viewer {
 
                 this.splatEntity = entity;
 
-                // #WDD 2026-01-18: Restore Model Transform if present
+                // #WDD 2026-01-18: Restore Model Transform if present (SOG4/TrueSplats format)
                 if (parsed.model_transform) {
                     const t = parsed.model_transform;
                     console.log("[TrueSplats] applying model_transform with arFactor for Pos:", arScaleFactor, t);
@@ -2376,7 +2404,25 @@ class Viewer {
 
                     // Do NOT compensate Scale. Let it inherit AR Scale (Magnified).
                     if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
+                } 
+                // #WDD 2026-03-31: Restore Model Transform from PLY4 format (parsed.meta)
+                else if (parsed.meta) {
+                    console.log("[PLY4] applying meta transform:", parsed.meta);
+                    console.log("[PLY4] modelPos:", parsed.meta.modelPos, "modelRot:", parsed.meta.modelRot, "modelScale:", parsed.meta.modelScale);
+                    if (parsed.meta.modelPos) {
+                        entity.setLocalPosition(parsed.meta.modelPos);
+                        console.log("[PLY4] Applied position:", parsed.meta.modelPos);
+                    }
+                    if (parsed.meta.modelRot) {
+                        entity.setLocalRotation(parsed.meta.modelRot);
+                        console.log("[PLY4] Applied rotation:", parsed.meta.modelRot);
+                    }
+                    if (parsed.meta.modelScale) {
+                        entity.setLocalScale(parsed.meta.modelScale);
+                        console.log("[PLY4] Applied scale:", parsed.meta.modelScale);
+                    }
                 } else {
+                    console.log("[PLY4] No parsed.meta found! parsed keys:", Object.keys(parsed));
                     console.log("[TrueSplats] No model_transform found. Using default 0,0,0 local.");
                 }
 
@@ -2402,7 +2448,10 @@ class Viewer {
                 // Finalize
                 this.updateStats(asset);
                 this.updateStats(asset);
-                this.updateTransformUIFromEntity(); // #WDD 2026-01-18: Sync UI with restored transform
+                // #WDD 2026-03-31: 同步 entity 变换到 UI（PLY4 meta 已在上面的代码中应用）
+                console.log("[Load] About to call updateTransformUIFromEntity. Entity pos:", this.splatEntity?.getLocalPosition()?.toString());
+                this.updateTransformUIFromEntity();
+                console.log("[Load] UI should be updated now");
                 this.resetCamera();
                 this.resetCamera();
                 const container = document.getElementById('timeline-ticks');
@@ -3022,12 +3071,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.sequenceActiveEntity = this.sequenceEntityPool[0];
             this.splatEntity = this.sequenceActiveEntity;
 
-            // Restore per-sequence transform (including scale) if available.
-            if (this.currentTransformCacheKey) {
-                this.loadCachedTransform(this.currentTransformCacheKey);
-            } else {
-                this.resetObjectTransformUI();
-            }
+            this.resetObjectTransformUI();
+
 
             // Ensure every frame's instance exists + sequence shader is injected.
             for (let i = 0; i < assets.length; i++) {
@@ -3099,12 +3144,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.sequenceActiveEntity = this.sequenceEntityPool[0];
             this.splatEntity = this.sequenceActiveEntity;
 
-            // Restore per-sequence transform (including scale) if available.
-            if (this.currentTransformCacheKey) {
-                this.loadCachedTransform(this.currentTransformCacheKey);
-            } else {
-                this.resetObjectTransformUI();
-            }
+            this.resetObjectTransformUI();
+
 
             // Ensure the active entity is fully ready + shader injected, then cache it as frame 0.
             this.sequenceDesiredFrameIndex = 0;
@@ -3639,9 +3680,16 @@ const duration = parsed.frames || parsed.maxMu || 100;
     // #WDD 2026-01-17: Dynamic Sorting Update
     // #WDD 2026-01-17: Dynamic Sorting Update
     // #WDD 2026-01-17: Dynamic Sorting Update
+    private lastUpdatedFrame = -1;
     private updateDynamicPositions(time: number) {
         if (!this.posArrays || !this.trajectoryData || !this.is4DGS) return;
         if (!this.splatEntity || !this.splatEntity.gsplat) return;
+
+        const frameIdx = Math.floor(time);
+        // #WDD 2026-03-31: If frame hasn't changed, skip CPU calculation to save performance.
+        if (frameIdx === this.lastUpdatedFrame && this.isPlaying) return;
+        this.lastUpdatedFrame = frameIdx;
+
 
         const K = this.keyframes;
         const stride = this.xyzStride;
@@ -3706,6 +3754,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
             // which would crash the Main Thread on the next frame access.
             const shouldUpdate = !this.isPlaying || (this.sorterUpdateFrame++ % this.sorterUpdateInterval === 0);
             if (shouldUpdate) {
+                this.isWaitingForSort = true;
+                this.sortingTaskID++;
                 const centersCopy = new Float32Array(centers);
                 instance.sorter.worker.postMessage({
                     centers: centersCopy.buffer
@@ -3771,7 +3821,19 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 this.cachedPositions[i * 3 + 2] = z[i];
             }
         }
-        if (this.cachedPositions) this.selectionTool.init(this.cachedPositions.length / 3);
+        if (this.cachedPositions) {
+            // #WDD 2026-03-31: Use initWithSize to ensure selectionTexture matches GSplat textures dimension.
+            // This is critical for correct UV mapping in the shader (using splatId).
+            this.selectionTool.initWithSize(this.cachedPositions.length / 3, width, height);
+        }
+
+        // --- #WDD 2026-03-31: Restore Transformation Metadata (仅用于非 loadFile 路径) ---
+        // 注意：对于 PLY4 文件，变换已在 loadFile 中应用，这里只需更新 UI
+        if (parsed?.meta && this.splatEntity && !options.suppressUI) {
+            console.log("[Finalize] PLY4 meta found, syncing UI. modelPos:", parsed.meta.modelPos);
+            // 只更新 UI，不重新应用变换（已在 loadFile 中应用）
+            this.updateTransformUIFromEntity();
+        }
 
         const origIndices = splatData.getProp('original_index');
         this.originalIndices = origIndices ? (origIndices as Float32Array) : null; // #WDD 2026-01-17
@@ -4007,8 +4069,23 @@ const duration = parsed.frames || parsed.maxMu || 100;
         }
 
         if (this.splatEntity?.gsplat) {
+            const instance = (this.splatEntity.gsplat as any).instance;
+            // #WDD 2026-03-31 Intercept Sorter Worker to sync Sort-Before-Render
+            if (instance?.sorter?.worker) {
+                const worker = instance.sorter.worker;
+                const self = this;
+                const oldOnMessage = worker.onmessage;
+                worker.onmessage = function(e: MessageEvent) {
+                    if (self.isWaitingForSort) {
+                        self.isWaitingForSort = false;
+                        self.lastCompletedSortTaskID = self.sortingTaskID;
+                    }
+                    if (oldOnMessage) oldOnMessage.call(worker, e);
+                };
+            }
+
             this.setupLifetimeShader(
-                (this.splatEntity.gsplat as any).instance,
+                instance,
                 lifeTexture,
                 trajectoryTexture, parsed.keyframes,
                 rotationTexture, parsed.rotKeyframes,
@@ -4046,9 +4123,15 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.updateStats(asset);
         }
 
-        if (!options.suppressUI && parsed.model_transform) {
+        const hasPly4TransformMeta = !!(parsed?.meta && (
+            parsed.meta.modelPos ||
+            parsed.meta.modelRot ||
+            parsed.meta.modelScale
+        ));
+
+        if (!options.suppressUI && (parsed.model_transform || hasPly4TransformMeta)) {
             // #WDD 2026-01-19: Embedded transform takes precedence over cache
-            console.log("[Viewer] Finalize: Respecting embedded model_transform, skipping cache.");
+            console.log("[Viewer] Finalize: Respecting embedded transform metadata, skipping cache.");
             this.updateTransformUIFromEntity();
         } else if (!options.suppressUI && parsed.pose) {
             if (this.splatEntity) {
@@ -4059,11 +4142,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     if (el) el.value = parsed.pose[id.replace('-', '')];
                 });
             }
-        } else if (!options.suppressUI && this.currentTransformCacheKey) {
-            this.loadCachedTransform(this.currentTransformCacheKey);
         } else if (!options.suppressUI) {
             this.resetObjectTransformUI();
         }
+
     }
 
 
@@ -4490,86 +4572,25 @@ const duration = parsed.frames || parsed.maxMu || 100;
             return;
         }
 
-        // #WDD 2026-01-17: Dynamic Sorting - Update CPU positions
+        // #WDD 2026-03-31: Back to forced integer frames as requested. 
         if (this.is4DGS && this.trajectoryData) {
             this.updateDynamicPositions(Math.floor(this.currentTime));
         }
     }
 
-    private loadCachedTransform(cacheKey: string) {
-        try {
-            const cachedKey = `transform_cache_${cacheKey}`;
-            const cachedData = localStorage.getItem(cachedKey);
-
-            if (cachedData) {
-                const data = JSON.parse(cachedData); // { px, py, pz, rx, ry, rz, s? }
-
-                // Update Inputs
-                const posX = document.getElementById('pos-x') as HTMLInputElement;
-                const posY = document.getElementById('pos-y') as HTMLInputElement;
-                const posZ = document.getElementById('pos-z') as HTMLInputElement;
-                const rotX = document.getElementById('rot-x') as HTMLInputElement;
-                const rotY = document.getElementById('rot-y') as HTMLInputElement;
-                const rotZ = document.getElementById('rot-z') as HTMLInputElement;
-                const scaleU = document.getElementById('scale-uniform') as HTMLInputElement | null;
-
-                if (posX) posX.value = data.px;
-                if (posY) posY.value = data.py;
-                if (posZ) posZ.value = data.pz;
-                if (rotX) rotX.value = data.rx;
-                if (rotY) rotY.value = data.ry;
-                if (rotZ) rotZ.value = data.rz;
-                if (scaleU) scaleU.value = (data.s ?? "1.0");
-
-                // Apply to Entity
-                if (this.splatEntity) {
-                    this.splatEntity.setPosition(parseFloat(data.px), parseFloat(data.py), parseFloat(data.pz));
-                    this.splatEntity.setEulerAngles(parseFloat(data.rx), parseFloat(data.ry), parseFloat(data.rz));
-                    const s = parseFloat(data.s ?? "1.0") || 1;
-                    this.splatEntity.setLocalScale(s, s, s);
-
-                    console.log(`Restored transform for ${cacheKey}`);
-                }
-            } else {
-                // No cache, just reset UI to 0
-                this.resetObjectTransformUI();
-            }
-        } catch (e) {
-            console.warn("Failed to load cached transform", e);
-            this.resetObjectTransformUI();
-        }
-    }
-
-    private saveTransformToCache(fileName: string) {
-        if (!this.splatEntity) return;
-
-        const pos = this.splatEntity.getPosition();
-        const rot = this.splatEntity.getEulerAngles();
-        const scale = this.splatEntity.getLocalScale();
-
-        const data = {
-            px: pos.x.toFixed(2),
-            py: pos.y.toFixed(2),
-            pz: pos.z.toFixed(2),
-            rx: rot.x.toFixed(1),
-            ry: rot.y.toFixed(1),
-            rz: rot.z.toFixed(1),
-            s: scale.x.toFixed(3)
-        };
-
-        //console.log(`Saving transform usage for ${fileName}:`, data);
-
-        const cachedKey = `transform_cache_${fileName}`;
-        localStorage.setItem(cachedKey, JSON.stringify(data));
-    }
 
     // #WDD 2026-01-18: Helper to sync UI inputs with current Entity state
     private updateTransformUIFromEntity() {
-        if (!this.splatEntity) return;
+        if (!this.splatEntity) {
+            console.log("[updateTransformUIFromEntity] No splatEntity!");
+            return;
+        }
 
         const pos = this.splatEntity.getLocalPosition();
         const rot = this.splatEntity.getLocalEulerAngles();
         const scale = this.splatEntity.getLocalScale();
+        
+        console.log("[updateTransformUIFromEntity] pos:", pos?.toString(), "rot:", rot?.toString(), "scale:", scale?.toString());
 
         const posX = document.getElementById('pos-x') as HTMLInputElement;
         const posY = document.getElementById('pos-y') as HTMLInputElement;
@@ -4809,6 +4830,75 @@ const duration = parsed.frames || parsed.maxMu || 100;
             alert("Save failed: " + e.message);
         }
     }
+
+    /**
+     * saveAsPLY4: Lossless 4DGS export
+     * #WDD 2026-03-31: Created for high-fidelity comparison
+     */
+    async saveAsPLY4() {
+        console.log("[Export] saveAsPLY4 called. LastParsed:", this.lastParsedData);
+        if (!this.lastParsedData) {
+            alert("No data loaded.");
+            return;
+        }
+
+        try {
+            const overlay = document.getElementById('loading-overlay');
+            const statusEl = document.getElementById('loading-status');
+            const detailEl = document.getElementById('loading-detail');
+            const bar = document.getElementById('loading-step-progress');
+            const squares = Array.from(document.querySelectorAll('.step-square'));
+
+            const setExportProgress = (pct: number, detail: string) => {
+                overlay?.classList.remove('hidden');
+                if (statusEl) statusEl.innerText = 'EXPORTING PLY4';
+                if (detailEl) detailEl.innerText = detail || '';
+                if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
+                const stepMax = Math.max(squares.length - 1, 1);
+                const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
+                squares.forEach((square, idx) => {
+                    if (idx <= step) square.classList.add('reached');
+                    else square.classList.remove('reached');
+                });
+            };
+
+            setExportProgress(5, 'Encoding PLY4 binary...');
+
+            // #WDD 2026-03-31: Pass current transform to metadata
+            const encodeOverrides = {
+                selectionData: this.selectionTool?.selectionData,
+                model_pos: this.splatEntity?.getLocalPosition(),
+                model_rot: this.splatEntity?.getLocalRotation(),
+                model_scale: this.splatEntity?.getLocalScale()
+            };
+
+            const buffer = await PLY4Encoder.encode(this.lastParsedData, encodeOverrides, (pct, msg) => {
+                setExportProgress(10 + pct * 0.85, msg);
+            });
+
+            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
+            const filename = `saved_${baseName}.ply4`;
+
+            const blob = new Blob([buffer], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+
+            setExportProgress(100, 'Export Complete');
+
+        } catch (err) {
+            console.error(err);
+            alert("PLY4 Export failed: " + err);
+        } finally {
+            setTimeout(() => {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) overlay.classList.add('hidden');
+            }, 1000);
+        }
+    }
+
     async saveAsSOG4() {
         console.log("[Export] saveAsSOG4 called. LastParsed:", this.lastParsedData);
         if (!this.lastParsedData) {

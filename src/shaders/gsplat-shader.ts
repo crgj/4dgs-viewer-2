@@ -294,6 +294,16 @@ export const splatMainVS = `
             gl_Position = discardVec;
             return;
         }
+
+        // --- #WDD 2026-03-31: Early Discard for Deleted Points ---
+        // Fetch from selectionTexture using splatId to check for "Deleted" flag (Green channel)
+        int sTexWidth = textureSize(selectionTexture, 0).x;
+        ivec2 selUV = ivec2(int(splatId % uint(sTexWidth)), int(splatId / uint(sTexWidth)));
+        vec4 selData = texelFetch(selectionTexture, selUV, 0);
+        if (selData.g > 0.5) {
+            gl_Position = discardVec;
+            return;
+        }
         
         vec3 center = getCenter();
 

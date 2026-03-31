@@ -57,8 +57,8 @@
             pointer-events: none;
         }
     </style>
-  <script type="module" crossorigin src="./assets/index-CdF7Siiw.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BeJyiZCd.css">
+  <script type="module" crossorigin src="./assets/index-DzyiWvHq.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BtPwzxEL.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -86,7 +86,7 @@
                 <h1 class="text-[10px] font-bold  ui-text-primary">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] font-bold text-gray-400 bg-black/30 px-1 rounded">v2.2.3</span>
+                <span class="text-[9px] font-bold text-gray-400 bg-black/30 px-1 rounded">v2.2.5</span>
                 <div class="h-3 w-px ui-border"></div>
                 <button id="toggle-samples" class="flex items-center gap-1.5 group">
                     <span
@@ -108,50 +108,67 @@
     <!-- UI Overlay: Control Panel (Light Blue Theme) -->
     <div id="control-panel"
         class="fixed top-6 right-6 flex flex-col items-stretch gap-2 z-20 pointer-events-none transition-all duration-500">
-        <div class="grid grid-cols-4 gap-1 pointer-events-auto">
-            <button id="toggle-ui" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                aria-label="Toggle UI" data-tip="UI">
-                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                    <path
-                        d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-                </svg>
-            </button>
-            <button id="reset-cam" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                aria-label="Reset Camera" data-tip="Reset">
-                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                    <path
-                        d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
-                </svg>
-            </button>
-            <button id="open-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                aria-label="Open File" data-tip="Open">
-                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                    <path
-                        d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
-                </svg>
-            </button>
-            <!-- Export Button - Direct SOG4 #WDD 2026-01-19 去掉下拉列表,直接导出sog4 -->
-            <button id="export-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                aria-label="Export SOG4" data-tip="Export">
-                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
-                </svg>
-            </button>
-            <input type="file" id="file-input" class="hidden" accept=".truesplats" />
+        <div class="flex flex-col gap-1.5 pointer-events-auto">
+            <!-- Main Controls Row -->
+            <div class="grid grid-cols-3 gap-1">
+                <button id="toggle-ui" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
+                    aria-label="Toggle UI" data-tip="UI">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path
+                            d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+                    </svg>
+                </button>
+                <button id="reset-cam" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
+                    aria-label="Reset Camera" data-tip="Reset">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path
+                            d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+                    </svg>
+                </button>
+                <button id="open-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
+                    aria-label="Open File" data-tip="Open">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path
+                            d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Export Buttons Row #WDD 2026-03-31: Move to separate row -->
+            <div class="grid grid-cols-2 gap-1">
+                <button id="btn-export-sog"
+                    class="ui-btn px-2 py-2 rounded-lg flex items-center justify-center has-tooltip bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
+                    aria-label="Export SOG4" data-tip="Export SOG4">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                    </svg>
+                    <span class="text-[9px] font-bold ml-1.5 tracking-wider">SAVE SOG4</span>
+                </button>
+                <button id="btn-export-ply4"
+                    class="ui-btn px-2 py-2 rounded-lg flex items-center justify-center has-tooltip bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                    aria-label="Export PLY4" data-tip="Export PLY4">
+                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                    </svg>
+                    <span class="text-[9px] font-bold ml-1.5 tracking-wider">SAVE PLY4</span>
+                </button>
+            </div>
+            <input type="file" id="file-input" class="hidden" accept=".truesplats,.sog4,.ply4" />
         </div>
 
         <aside id="sidebar"
             class="w-[248px] max-w-[calc(100vw-3rem)] flex flex-col gap-3 pointer-events-auto transition-all duration-500 text-[9px]">
             <div class="glass-blue rounded-xl p-1.5 flex gap-1 sidebar-tabs">
-                <button class="ui-btn active flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab" data-panel-target="panel-common"
-                    aria-label="Common" data-tip="Common">COMMON</button>
-                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab" data-panel-target="panel-presets"
-                    aria-label="Presets" data-tip="Presets">PRESETS</button>
-                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab" data-panel-target="panel-special"
-                    aria-label="Special" data-tip="Special">SPECIAL</button>
+                <button class="ui-btn active flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
+                    data-panel-target="panel-common" aria-label="Common" data-tip="Common">COMMON</button>
+                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
+                    data-panel-target="panel-presets" aria-label="Presets" data-tip="Presets">PRESETS</button>
+                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
+                    data-panel-target="panel-special" aria-label="Special" data-tip="Special">SPECIAL</button>
             </div>
 
-            <section id="panel-common" class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view">
+            <section id="panel-common"
+                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">COMMON</div>
@@ -326,6 +343,12 @@
                             Outline
                         </button>
                     </div>
+                    <!-- #WDD 2026-03-31: High Quality / High DPI Toggle -->
+                    <div class="flex items-center justify-between px-1 mt-2">
+                        <span class="panel-label text-[7px]">HIGH QUALITY (DPI)</span>
+                        <input type="checkbox" id="toggle-high-quality" checked
+                            class="w-3 h-3 accent-emerald-500 cursor-pointer" />
+                    </div>
                 </div>
 
                 <div class="panel-divider"></div>
@@ -342,7 +365,8 @@
                 </div>
             </section>
 
-            <section id="panel-presets" class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
+            <section id="panel-presets"
+                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">PRESETS</div>
@@ -374,7 +398,8 @@
                 </div>
             </section>
 
-            <section id="panel-special" class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
+            <section id="panel-special"
+                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">SPECIAL</div>
@@ -425,7 +450,8 @@
                         <span class="panel-label">POST PROCESS</span>
                     </div>
                     <div class="flex items-center justify-between pl-3">
-                        <button id="reset-pp" class="ui-btn px-2 py-1.5 rounded-lg text-[8px] font-semibold tracking-[0.12em] uppercase has-tooltip"
+                        <button id="reset-pp"
+                            class="ui-btn px-2 py-1.5 rounded-lg text-[8px] font-semibold tracking-[0.12em] uppercase has-tooltip"
                             aria-label="Reset Post" data-tip="Reset">RESET</button>
                     </div>
                     <div class="flex flex-col gap-1.5 pl-3">

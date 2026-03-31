@@ -29,6 +29,9 @@ export class PLY4Loader {
         let xyzStride = 1;
         let rotStride = 1;
         let dcStride = 1;
+        let modelPos: pc.Vec3 | null = null;
+        let modelRot: pc.Quat | null = null;
+        let modelScale: pc.Vec3 | null = null;
 
         // Parse Header
         for (const line of headerLines) {
@@ -65,6 +68,21 @@ export class PLY4Loader {
                 if (line.includes('xyz_bank_keyframe_stride')) xyzStride = parseInt(parts[parts.indexOf('xyz_bank_keyframe_stride') + 1]);
                 if (line.includes('rot_bank_keyframe_stride')) rotStride = parseInt(parts[parts.indexOf('rot_bank_keyframe_stride') + 1]);
                 if (line.includes('features_dc_bank_keyframe_stride')) dcStride = parseInt(parts[parts.indexOf('features_dc_bank_keyframe_stride') + 1]);
+                
+                // #WDD 2026-03-31: Parse model transform metadata
+                if (line.includes('model_pos')) {
+                    const idx = parts.indexOf('model_pos');
+                    modelPos = new pc.Vec3(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]));
+                }
+                if (line.includes('model_rot')) {
+                    const idx = parts.indexOf('model_rot');
+                    // Format: x y z w
+                    modelRot = new pc.Quat(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]), parseFloat(parts[idx + 4]));
+                }
+                if (line.includes('model_scale')) {
+                    const idx = parts.indexOf('model_scale');
+                    modelScale = new pc.Vec3(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]));
+                }
             }
         }
 
@@ -261,11 +279,11 @@ export class PLY4Loader {
                     data.rotBank[bIdx + 2] = qz; // z
                     data.rotBank[bIdx + 3] = qw; // w
                 }
-                // Fill rot_0..3 from frame 0 (Map WXYZ to 0123)
-                data.rot_0[i] = data.rotBank[i * K_rot * 4 + 3]; // w
-                data.rot_1[i] = data.rotBank[i * K_rot * 4 + 0]; // x
-                data.rot_2[i] = data.rotBank[i * K_rot * 4 + 1]; // y
-                data.rot_3[i] = data.rotBank[i * K_rot * 4 + 2]; // z
+                // #WDD 2026-03-31: 内部 rotBank 格式 [x,y,z,w]，rot_0=x, rot_1=y, rot_2=z, rot_3=w
+                data.rot_0[i] = data.rotBank[i * K_rot * 4 + 0]; // x
+                data.rot_1[i] = data.rotBank[i * K_rot * 4 + 1]; // y
+                data.rot_2[i] = data.rotBank[i * K_rot * 4 + 2]; // z
+                data.rot_3[i] = data.rotBank[i * K_rot * 4 + 3]; // w
             } else {
                 // Try to read standard or default
                 data.rot_0[i] = getFloat('rot_0', rowBase) || 1;
@@ -325,7 +343,7 @@ export class PLY4Loader {
         // See TrueSplatsLoader.ts
 
         // Return compatible object
-        return {
+        const result = {
             x: data.x, y: data.y, z: data.z,
             opacity: data.opacity,
             scale_0: data.scale_0, scale_1: data.scale_1, scale_2: data.scale_2,
@@ -358,9 +376,17 @@ export class PLY4Loader {
             dcTrajectory: data.dcBank,
             dcKeyframes: K_dc,
             dcStride: dcStride,
+            // #WDD 2026-03-31: Dynamic SH degree detection
+            bands: data.f_rest_44 ? 3 : (data.f_rest_23 ? 2 : (data.f_rest_8 ? 1 : 0)),
 
-            bands: 3
+            // #WDD 2026-03-31: Transformation Metadata
+            meta: {
+                modelPos,
+                modelRot,
+                modelScale
+            }
         };
+        return result;
     }
 
     private findHeaderEnd(buffer: ArrayBuffer): number {
