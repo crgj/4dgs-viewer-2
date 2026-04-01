@@ -3,6 +3,10 @@ import JSZip from 'jszip';
 // Matches Python log_transform & inverseLogTransform
 const logTransform = (v: number) => Math.sign(v) * Math.log(Math.abs(v) + 1);
 const sigmoid = (v: number) => 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, v))));
+const extractTrailingIndex = (name: string) => {
+    const match = name.match(/_(\d+)$/);
+    return match ? parseInt(match[1], 10) : -1;
+};
 
 export class SOG4Encoder {
     static async encode(data: any, overrides: any = {}, progress?: (pct: number, msg: string) => void): Promise<Uint8Array> {
@@ -45,12 +49,107 @@ export class SOG4Encoder {
         }
 
         const zip = new JSZip();
+        const getSourceIndex = (i: number) => sourceIndices ? sourceIndices[i] : i;
         const meta: any = {
             count: count,
             model_transform: data.model_transform || overrides.model_transform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] },
             cameras: data.cameras || overrides.cameras || [],
             postProcessing: data.postProcessing || overrides.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 }
         };
+        const fRestNames = Object.keys(p).filter((name) => /^f_rest_\d+$/.test(name)).sort((a, b) => extractTrailingIndex(a) - extractTrailingIndex(b));
+        const opacitySemantic = data.opacitySemantic;
+        const rawMode = overrides.rawFloatPayload !== false;
+
+        if (rawMode) {
+            progress?.(5, "Encoding Raw Float Payload...");
+            const staticRowFloats = 17 + fRestNames.length;
+            const staticData = new Float32Array(count * staticRowFloats);
+            for (let i = 0; i < count; i++) {
+                const src = getSourceIndex(i);
+                let off = i * staticRowFloats;
+                staticData[off++] = p.x?.[src] || 0;
+                staticData[off++] = p.y?.[src] || 0;
+                staticData[off++] = p.z?.[src] || 0;
+                staticData[off++] = p.rot_0?.[src] ?? 1;
+                staticData[off++] = p.rot_1?.[src] ?? 0;
+                staticData[off++] = p.rot_2?.[src] ?? 0;
+                staticData[off++] = p.rot_3?.[src] ?? 0;
+                staticData[off++] = p.scale_0?.[src] || 0;
+                staticData[off++] = p.scale_1?.[src] || 0;
+                staticData[off++] = p.scale_2?.[src] || 0;
+                const rawOpacity = p.opacity?.[src] ?? 0;
+                staticData[off++] = opacitySemantic === 'probability' ? Math.log(Math.max(1e-7, Math.min(1 - 1e-7, rawOpacity)) / Math.max(1e-7, 1 - Math.max(1e-7, Math.min(1 - 1e-7, rawOpacity)))) : rawOpacity;
+                staticData[off++] = p.f_dc_0?.[src] || 0;
+                staticData[off++] = p.f_dc_1?.[src] || 0;
+                staticData[off++] = p.f_dc_2?.[src] || 0;
+                staticData[off++] = p.lifetime_mu?.[src] || 0;
+                staticData[off++] = p.lifetime_w?.[src] || 0;
+                staticData[off++] = p.lifetime_k?.[src] ?? 10.0;
+                for (const name of fRestNames) {
+                    staticData[off++] = p[name]?.[src] || 0;
+                }
+            }
+
+            const saveFloat32 = (name: string, arr: Float32Array) => {
+                zip.file(name, new Uint8Array(arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength)));
+            };
+
+            saveFloat32('raw_static.bin', staticData);
+
+            const buildCompactedBank = (bank: Float32Array | null | undefined, keyframes: number, components: number) => {
+                if (!bank || keyframes <= 0) return null;
+                const compact = new Float32Array(count * keyframes * components);
+                for (let i = 0; i < count; i++) {
+                    const src = getSourceIndex(i);
+                    const srcBase = src * keyframes * components;
+                    const dstBase = i * keyframes * components;
+                    compact.set(bank.subarray(srcBase, srcBase + keyframes * components), dstBase);
+                }
+                return compact;
+            };
+
+            const xyzBank = buildCompactedBank(data.trajectory || data.xyzBank, data.keyframes || 0, 3);
+            const rotBank = buildCompactedBank(data.rotTrajectory || data.rotBank, data.rotKeyframes || 0, 4);
+            const dcBank = buildCompactedBank(data.dcTrajectory || data.dcBank, data.dcKeyframes || 0, 3);
+
+            if (xyzBank) saveFloat32('raw_xyz_bank.bin', xyzBank);
+            if (rotBank) saveFloat32('raw_rot_bank.bin', rotBank);
+            if (dcBank) saveFloat32('raw_dc_bank.bin', dcBank);
+
+            meta.total_frames = data.frames || 1;
+            meta.custom = Object.assign({}, data.custom || overrides.custom || {}, {
+                raw_float_payload: {
+                    version: 1,
+                    total_frames: data.frames || 1,
+                    static: {
+                        file: 'raw_static.bin',
+                        row_floats: staticRowFloats,
+                        f_rest_count: fRestNames.length
+                    },
+                    xyz_bank: xyzBank ? {
+                        file: 'raw_xyz_bank.bin',
+                        keyframes: data.keyframes || 0,
+                        stride: data.xyzStride || 1
+                    } : null,
+                    rot_bank: rotBank ? {
+                        file: 'raw_rot_bank.bin',
+                        keyframes: data.rotKeyframes || 0,
+                        stride: data.rotStride || 1
+                    } : null,
+                    dc_bank: dcBank ? {
+                        file: 'raw_dc_bank.bin',
+                        keyframes: data.dcKeyframes || 0,
+                        stride: data.dcStride || 1
+                    } : null
+                }
+            });
+
+            zip.file('meta.json', JSON.stringify(meta, null, 2));
+            progress?.(98, "Zipping Raw SOG4...");
+            const result = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
+            progress?.(100, "Done");
+            return result;
+        }
         // #WDD 2026-03-30: Mark scales as log-transformed for backward compatible decoding.
         meta.custom = Object.assign({}, data.custom || overrides.custom || meta.custom || {}, { scales_log: true });
 
@@ -79,7 +178,6 @@ export class SOG4Encoder {
         const saveTex = async (tex: any, name: string) => {
             zip.file(name, await renderTex(tex));
         };
-        const getSourceIndex = (i: number) => sourceIndices ? sourceIndices[i] : i;
         const maxParallel = Math.max(1, Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency)
             ? Math.floor(navigator.hardwareConcurrency / 2)
             : 2));

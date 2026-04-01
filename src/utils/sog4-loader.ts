@@ -37,6 +37,13 @@ export class SOG4Loader {
         if (!metaFile) throw new Error("Invalid .sog4 format: missing meta.json");
         const meta = JSON.parse(await metaFile.async('string'));
 
+        if (meta?.custom?.raw_float_payload) {
+            progressCallback?.(5, "Loading Raw Float Payload");
+            this.lastResult = await this.loadRawFloatPayload(zip, meta, buffer, progressCallback);
+            console.log("[SOG4] Load Complete", this.lastResult);
+            return this.lastResult;
+        }
+
         console.log("[SOG4] Meta:", meta);
         const count = meta.count;
 
@@ -523,6 +530,134 @@ export class SOG4Loader {
 
         console.log("[SOG4] Load Complete", this.lastResult);
         return this.lastResult;
+    }
+
+    private async loadRawFloatPayload(zip: JSZip, meta: any, sourceBuffer: ArrayBuffer, progressCallback?: (progress: number, message: string) => void) {
+        const payload = meta.custom.raw_float_payload;
+        const count = meta.count;
+        const staticInfo = payload.static;
+        const staticFile = zip.file(staticInfo.file);
+        if (!staticFile) throw new Error(`Invalid raw SOG4 format: missing ${staticInfo.file}`);
+
+        const staticBuffer = await staticFile.async('arraybuffer');
+        const staticData = new Float32Array(staticBuffer);
+        const fRestCount = staticInfo.f_rest_count || 0;
+        const rowFloats = staticInfo.row_floats || (17 + fRestCount);
+        if (staticData.length !== count * rowFloats) {
+            throw new Error(`Invalid raw static payload length: got ${staticData.length}, expected ${count * rowFloats}`);
+        }
+
+        progressCallback?.(20, "Decoding Raw Static Data");
+        const data: any = {
+            x: new Float32Array(count), y: new Float32Array(count), z: new Float32Array(count),
+            rot_0: new Float32Array(count), rot_1: new Float32Array(count), rot_2: new Float32Array(count), rot_3: new Float32Array(count),
+            scale_0: new Float32Array(count), scale_1: new Float32Array(count), scale_2: new Float32Array(count),
+            opacity: new Float32Array(count),
+            f_dc_0: new Float32Array(count), f_dc_1: new Float32Array(count), f_dc_2: new Float32Array(count),
+            lifetime_mu: new Float32Array(count), lifetime_w: new Float32Array(count), lifetime_k: new Float32Array(count),
+            t_start: new Float32Array(count), duration: new Float32Array(count),
+            original_index: new Float32Array(count)
+        };
+        for (let i = 0; i < fRestCount; i++) data[`f_rest_${i}`] = new Float32Array(count);
+
+        for (let i = 0; i < count; i++) {
+            let off = i * rowFloats;
+            data.x[i] = staticData[off++];
+            data.y[i] = staticData[off++];
+            data.z[i] = staticData[off++];
+            data.rot_0[i] = staticData[off++];
+            data.rot_1[i] = staticData[off++];
+            data.rot_2[i] = staticData[off++];
+            data.rot_3[i] = staticData[off++];
+            data.scale_0[i] = staticData[off++];
+            data.scale_1[i] = staticData[off++];
+            data.scale_2[i] = staticData[off++];
+            data.opacity[i] = staticData[off++];
+            data.f_dc_0[i] = staticData[off++];
+            data.f_dc_1[i] = staticData[off++];
+            data.f_dc_2[i] = staticData[off++];
+            data.lifetime_mu[i] = staticData[off++];
+            data.lifetime_w[i] = staticData[off++];
+            data.lifetime_k[i] = staticData[off++];
+            data.t_start[i] = data.lifetime_mu[i] - data.lifetime_w[i];
+            data.duration[i] = 2.0 * data.lifetime_w[i];
+            for (let j = 0; j < fRestCount; j++) data[`f_rest_${j}`][i] = staticData[off++];
+            data.original_index[i] = i;
+        }
+
+        const loadFloatArray = async (entry: any, components: number) => {
+            if (!entry?.file || !entry?.keyframes) return null;
+            const file = zip.file(entry.file);
+            if (!file) throw new Error(`Invalid raw SOG4 format: missing ${entry.file}`);
+            const buffer = await file.async('arraybuffer');
+            const arr = new Float32Array(buffer);
+            const expected = count * entry.keyframes * components;
+            if (arr.length !== expected) {
+                throw new Error(`Invalid raw payload length for ${entry.file}: got ${arr.length}, expected ${expected}`);
+            }
+            return arr;
+        };
+
+        progressCallback?.(55, "Decoding Raw Temporal Data");
+        const xyzData = await loadFloatArray(payload.xyz_bank, 3);
+        const rotData = await loadFloatArray(payload.rot_bank, 4);
+        const dcData = await loadFloatArray(payload.dc_bank, 3);
+
+        const plyProperties: any[] = [
+            { name: 'x', type: 'float', storage: data.x },
+            { name: 'y', type: 'float', storage: data.y },
+            { name: 'z', type: 'float', storage: data.z },
+            { name: 'rot_0', type: 'float', storage: data.rot_0 },
+            { name: 'rot_1', type: 'float', storage: data.rot_1 },
+            { name: 'rot_2', type: 'float', storage: data.rot_2 },
+            { name: 'rot_3', type: 'float', storage: data.rot_3 },
+            { name: 'scale_0', type: 'float', storage: data.scale_0 },
+            { name: 'scale_1', type: 'float', storage: data.scale_1 },
+            { name: 'scale_2', type: 'float', storage: data.scale_2 },
+            { name: 'opacity', type: 'float', storage: data.opacity },
+            { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
+            { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
+            { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
+            { name: 'original_index', type: 'float', storage: data.original_index },
+            { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
+            { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
+            { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
+            { name: 't_start', type: 'float', storage: data.t_start },
+            { name: 'duration', type: 'float', storage: data.duration },
+        ];
+        for (let i = 0; i < fRestCount; i++) {
+            plyProperties.push({ name: `f_rest_${i}`, type: 'float', storage: data[`f_rest_${i}`] });
+        }
+
+        progressCallback?.(95, "Assembling Raw SOG4 Result");
+        return {
+            count,
+            plyData: {
+                elements: [{
+                    name: 'vertex',
+                    count,
+                    properties: plyProperties
+                }]
+            },
+            frames: payload.total_frames || meta.total_frames || 1,
+            trajectory: xyzData,
+            rotTrajectory: rotData,
+            dcTrajectory: dcData,
+            keyframes: payload.xyz_bank?.keyframes || 0,
+            rotKeyframes: payload.rot_bank?.keyframes || 0,
+            dcKeyframes: payload.dc_bank?.keyframes || 0,
+            xyzStride: payload.xyz_bank?.stride || 1,
+            rotStride: payload.rot_bank?.stride || 1,
+            dcStride: payload.dc_bank?.stride || 1,
+            bands: fRestCount >= 45 ? 3 : (fRestCount >= 24 ? 2 : (fRestCount >= 9 ? 1 : 0)),
+            model_transform: meta.model_transform,
+            cameras: meta.cameras,
+            postProcessing: meta.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 },
+            opacitySemantic: 'logit',
+            rotationSemantic: 'wxyz',
+            sogBuffer: sourceBuffer,
+            isSOG4: true
+        };
     }
 
     static async save(

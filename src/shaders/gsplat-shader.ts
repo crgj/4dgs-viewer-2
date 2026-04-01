@@ -225,10 +225,25 @@ export const splatMainVS = `
     uniform float uContrast;   // #WDD 2026-01-30 PostProcess
     uniform float uExposure;   // #WDD 2026-01-30 PostProcess
 
-        // Simple NLERP for quaternions
-        vec4 nlerp(vec4 a, vec4 b, float t) {
-            if (dot(a, b) < 0.0) b = -b; // Shortest path
-            return normalize(mix(a, b, t));
+        vec4 slerp(vec4 a, vec4 b, float t) {
+            a = normalize(a);
+            b = normalize(b);
+            float cosTheta = dot(a, b);
+            if (cosTheta < 0.0) {
+                b = -b;
+                cosTheta = -cosTheta;
+            }
+            cosTheta = clamp(cosTheta, 0.0, 1.0);
+
+            if (cosTheta > 0.9995) {
+                return normalize(mix(a, b, t));
+            }
+
+            float theta0 = acos(cosTheta);
+            float sinTheta0 = sin(theta0);
+            float s0 = sin((1.0 - t) * theta0) / (sinTheta0 + 1e-10);
+            float s1 = sin(t * theta0) / (sinTheta0 + 1e-10);
+            return normalize(s0 * a + s1 * b);
         }
 
         mat3 quatToMat3(vec4 q) {
@@ -266,7 +281,7 @@ export const splatMainVS = `
             // Mu and W are now RAW frame values (no scaling needed) #WDD 2026-01-16
             float mu = val.r;
             float w = val.g;     
-            float k = val.b;
+            float k = 10.0;
 
             float argLeft = k * (t - (mu - w));
             float left = 1.0 / (1.0 + exp(-argLeft));
@@ -274,14 +289,7 @@ export const splatMainVS = `
             float argRight = -k * (t - (mu + w));
             float right = 1.0 / (1.0 + exp(-argRight));
             
-            float visibility = left * right;
-
-            // #WDD 2026-01-16: HARD CUTOFF
-            if (t < (mu - w) || t > (mu + w)) {
-                visibility = 0.0;
-            }
-
-            return visibility;
+            return left * right;
              
         #else
             return 1.0;
@@ -387,7 +395,7 @@ export const splatMainVS = `
             ivec2 ruv1 = ivec2((rBaseIdx + uint(rk1)) % uint(rWidth), (rBaseIdx + uint(rk1)) / uint(rWidth));
             vec4 rq1 = texelFetch(uRotationTexture, ruv1, 0);
 
-            vec4 finalRot = nlerp(rq0, rq1, rt);
+            vec4 finalRot = slerp(rq0, rq1, rt);
 
             // 2. Fetch Scale (Static)
             // SplatID -> UV for Static textures
@@ -395,11 +403,7 @@ export const splatMainVS = `
             ivec2 sUV = ivec2(splatId % uint(sWidth), splatId / uint(sWidth));
             vec3 scales = exp(texelFetch(uScalesTexture, sUV, 0).rgb); // Apply exp() for log-scale
 
-            // 3. Compute Covariance Matrix M = R * S
-            // Texture is likely WXYZ, but comp is XYZW. Swizzle if needed.
-            // Standard 3DGS is WXYZ. 
-            // Our nlerp returns a mfinalScaleix.
-            // quatToMat3 expects x,y,z,w in that variable naming.
+            // 3. Compute covariance using the same formulation as PlayCanvas' native GSplat path.
             
             vec4 q;
             if (uSwizzleMode > 1.5) {
@@ -419,34 +423,15 @@ export const splatMainVS = `
                 q = finalRot; 
             }
             
-            mat3 R = quatToMat3(q);
-            mat3 M = R * mat3(
-                scales.x, 0.0, 0.0,
-                0.0, scales.y, 0.0,
-                0.0, 0.0, scales.z
-            );
-            mat3 Sigma = M * transpose(M); // M * Mt
+            mat3 rot = quatToMat3(q);
+            mat3 M = transpose(mat3(
+                scales.x * rot[0],
+                scales.y * rot[1],
+                scales.z * rot[2]
+            ));
 
-            // 4. Extract covA, covB for calcV1V2
-            // Sigma is symmetric: 
-            // [0][0] [0][1] [0][2]
-            // [1][0] [1][1] [1][2]
-            // [2][0] [2][1] [2][2]
-            // covA = (00, 01, 02)
-            // covB = (11, 12, 22)  <-- wait, calcV1V2 expects specific packing
-            
-            // Re-checking calcV1V2:
-            // mat3 Vrk = mat3(covA.x, covA.y, covA.z,  covA.y, covB.x, covB.y,  covA.z, covB.y, covB.z)
-            // So:
-            // covA.x = Sigma[0][0]
-            // covA.y = Sigma[0][1]
-            // covA.z = Sigma[0][2]
-            // covB.x = Sigma[1][1]
-            // covB.y = Sigma[1][2]
-            // covB.z = Sigma[2][2]
-            
-            covA = vec3(Sigma[0][0], Sigma[0][1], Sigma[0][2]);
-            covB = vec3(Sigma[1][1], Sigma[1][2], Sigma[2][2]);
+            covA = vec3(dot(M[0], M[0]), dot(M[0], M[1]), dot(M[0], M[2]));
+            covB = vec3(dot(M[1], M[1]), dot(M[1], M[2]), dot(M[2], M[2]));
         #else
             // Fallback to static covariance
             getCovariance(covA, covB);

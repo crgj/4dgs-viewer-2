@@ -1,6 +1,50 @@
 
 import * as pc from 'playcanvas';
 
+const safeLogit = (v: number) => {
+    const p = Math.max(1e-7, Math.min(1.0 - 1e-7, v));
+    return Math.log(p / (1.0 - p));
+};
+
+const normalizeOpacityToLogit = (v: number, semantic?: string) => {
+    if (!Number.isFinite(v)) {
+        return 0;
+    }
+    if (semantic === 'logit') {
+        return v;
+    }
+    if (semantic === 'probability') {
+        return safeLogit(v);
+    }
+    // Some loader paths keep opacity as linear probability, while PLY/PlayCanvas
+    // expect the persisted attribute to be raw logit. Normalize here so PLY4
+    // always stores the same semantic value when explicit metadata is unavailable.
+    if (v >= 0 && v <= 1) {
+        return safeLogit(v);
+    }
+    return v;
+};
+
+const extractTrailingIndex = (name: string) => {
+    const match = name.match(/_(\d+)$/);
+    return match ? parseInt(match[1], 10) : -1;
+};
+
+const sortIndexedNames = (names: string[]) => {
+    return [...names].sort((a, b) => extractTrailingIndex(a) - extractTrailingIndex(b));
+};
+
+const collectIndexedNames = (source: any, regex: RegExp) => {
+    return sortIndexedNames(Object.keys(source).filter((name) => regex.test(name)));
+};
+
+const convertQuatToWxyz = (quat: [number, number, number, number], semantic?: string) => {
+    if (semantic === 'xyzw') {
+        return [quat[3], quat[0], quat[1], quat[2]];
+    }
+    return quat;
+};
+
 /**
  * PLY4Encoder: Lossless exporter for 4D Gaussian Splatting data.
  * #WDD 2026-03-31: Created for high-fidelity comparison with SOG4.
@@ -41,9 +85,28 @@ export class PLY4Encoder {
         const K_rot = data.rotKeyframes || 0;
         const K_dc = data.dcKeyframes || 0;
 
+        const p: any = {};
+        if (data.plyData?.elements?.[0]?.properties) {
+            data.plyData.elements[0].properties.forEach((prop: any) => p[prop.name] = prop.storage);
+        } else {
+            p.x = data.x; p.y = data.y; p.z = data.z;
+            p.opacity = data.opacity;
+            p.scale_0 = data.scale_0; p.scale_1 = data.scale_1; p.scale_2 = data.scale_2;
+            p.rot_0 = data.rot_0; p.rot_1 = data.rot_1; p.rot_2 = data.rot_2; p.rot_3 = data.rot_3;
+            p.lifetime_mu = data.lifetime_mu;
+            p.lifetime_w = data.lifetime_w;
+            p.lifetime_k = data.lifetime_k;
+            for (const key of Object.keys(data)) {
+                if ((/^f_dc_\d+$/).test(key) || (/^f_rest_\d+$/).test(key)) {
+                    p[key] = data[key];
+                }
+            }
+        }
+
+        const fdcNames = collectIndexedNames(p, /^f_dc_\d+$/);
+        const frestNames = collectIndexedNames(p, /^f_rest_\d+$/);
+
         // 3. Define Property Structure & Header
-        // Basic: x,y,z, opacity, scale_0..2, rot_0..3, f_dc_0..2, f_rest_0..44
-        // Plus Banks
         let header = `ply\nformat binary_little_endian 1.0\n`;
         header += `comment total_frames ${totalFrames}\n`;
         if (K_xyz > 0) header += `comment xyz_bank_keyframe_stride ${xyzStride}\n`;
@@ -66,11 +129,11 @@ export class PLY4Encoder {
         header += `property float opacity\n`;
         header += `property float scale_0\nproperty float scale_1\nproperty float scale_2\n`;
         header += `property float rot_0\nproperty float rot_1\nproperty float rot_2\nproperty float rot_3\n`;
-        header += `property float f_dc_0\nproperty float f_dc_1\nproperty float f_dc_2\n`;
-        
-        // SH3 (45 coefficients)
-        for (let i = 0; i < 45; i++) {
-            header += `property float f_rest_${i}\n`;
+        for (const name of fdcNames) {
+            header += `property float ${name}\n`;
+        }
+        for (const name of frestNames) {
+            header += `property float ${name}\n`;
         }
 
         // Lifetime params
@@ -97,34 +160,18 @@ export class PLY4Encoder {
 
         // 4. Calculate Binary Size
         // Each property is a float (4 bytes).
-        // Row = (3 + 1 + 3 + 4 + 3 + 45 + 3) * 4 + (K_xyz*3 + K_rot*4 + K_dc*3) * 4
-        const staticPropsCount = 3 + 1 + 3 + 4 + 3 + 45 + 3; // 62 props
+        const staticPropsCount = 3 + 1 + 3 + 4 + fdcNames.length + frestNames.length + 3;
         const bankPropsCount = K_xyz * 3 + K_rot * 4 + K_dc * 3;
         const rowSize = (staticPropsCount + bankPropsCount) * 4;
         
         const outBuffer = new ArrayBuffer(finalCount * rowSize);
         const view = new DataView(outBuffer);
         
-        // 5. Unpack Source Arrays
-        const p: any = {};
-        if (data.plyData?.elements?.[0]?.properties) {
-            data.plyData.elements[0].properties.forEach((prop: any) => p[prop.name] = prop.storage);
-        } else {
-            // Handle flat storage
-            p.x = data.x; p.y = data.y; p.z = data.z;
-            p.opacity = data.opacity;
-            p.scale_0 = data.scale_0; p.scale_1 = data.scale_1; p.scale_2 = data.scale_2;
-            p.rot_0 = data.rot_0; p.rot_1 = data.rot_1; p.rot_2 = data.rot_2; p.rot_3 = data.rot_3;
-            p.f_dc_0 = data.f_dc_0; p.f_dc_1 = data.f_dc_1; p.f_dc_2 = data.f_dc_2;
-            for (let j = 0; j < 45; j++) p[`f_rest_${j}`] = data[`f_rest_${j}`];
-            p.lifetime_mu = data.lifetime_mu;
-            p.lifetime_w = data.lifetime_w;
-            p.lifetime_k = data.lifetime_k;
-        }
-
         const xyzBank = data.trajectory || data.xyzBank;
         const rotBank = data.rotTrajectory || data.rotBank;
         const dcBank = data.dcTrajectory || data.dcBank;
+        const opacitySemantic = data.opacitySemantic;
+        const rotationSemantic = data.rotationSemantic;
 
         // 6. Fill Binary Data
         for (let i = 0; i < finalCount; i++) {
@@ -140,25 +187,32 @@ export class PLY4Encoder {
             // Basic
             writeF(p.x[orgIdx]); writeF(p.y[orgIdx]); writeF(p.z[orgIdx]);
             
-            // #WDD 2026-03-31: Use raw opacity value. 
-            // The viewer's data already contains the correct logit or sigmoid values.
-            let opac = p.opacity[orgIdx];
-            writeF(opac);
+            // Persist opacity as raw logit, matching PLY reference semantics.
+            writeF(normalizeOpacityToLogit(p.opacity[orgIdx], opacitySemantic));
 
             // #WDD 2026-03-31: 直接写入原始 scale 值，内部已是 log-space，不需要再次 log()
             writeF(p.scale_0[orgIdx]);
             writeF(p.scale_1[orgIdx]);
             writeF(p.scale_2[orgIdx]);
             
-            // #WDD 2026-03-31: 内部格式 rot_0=x, rot_1=y, rot_2=z, rot_3=w，直接对应 PLY 属性名，无需 Swizzle
-            writeF(p.rot_0[orgIdx]); // x
-            writeF(p.rot_1[orgIdx]); // y
-            writeF(p.rot_2[orgIdx]); // z
-            writeF(p.rot_3[orgIdx]); // w
-            writeF(p.f_dc_0[orgIdx]); writeF(p.f_dc_1[orgIdx]); writeF(p.f_dc_2[orgIdx]);
+            // Persist static quaternion properties in PlayCanvas/PLY order: w, x, y, z.
+            const staticQuat = convertQuatToWxyz([
+                p.rot_0?.[orgIdx] ?? 1,
+                p.rot_1?.[orgIdx] ?? 0,
+                p.rot_2?.[orgIdx] ?? 0,
+                p.rot_3?.[orgIdx] ?? 0
+            ], rotationSemantic);
+            writeF(staticQuat[0]);
+            writeF(staticQuat[1]);
+            writeF(staticQuat[2]);
+            writeF(staticQuat[3]);
 
-            for (let j = 0; j < 45; j++) {
-                writeF(p[`f_rest_${j}`] ? p[`f_rest_${j}`][orgIdx] : 0);
+            for (const name of fdcNames) {
+                writeF(p[name] ? p[name][orgIdx] : 0);
+            }
+
+            for (const name of frestNames) {
+                writeF(p[name] ? p[name][orgIdx] : 0);
             }
 
             writeF(p.lifetime_mu[orgIdx]); writeF(p.lifetime_w[orgIdx]); writeF(p.lifetime_k ? p.lifetime_k[orgIdx] : 10.0);
@@ -172,12 +226,18 @@ export class PLY4Encoder {
                 const base = orgIdx * K_rot * 4;
                 for (let k = 0; k < K_rot; k++) {
                     const off = base + k * 4;
-                    // #WDD 2026-03-31: 内部 rotBank 格式是 [x, y, z, w]，直接按顺序写入
-                    // rot_bank_k_x / rot_bank_k_y / rot_bank_k_z / rot_bank_k_w
-                    writeF(rotBank[off + 0]); // x
-                    writeF(rotBank[off + 1]); // y
-                    writeF(rotBank[off + 2]); // z
-                    writeF(rotBank[off + 3]); // w
+                    const bankQuat = convertQuatToWxyz([
+                        rotBank[off + 0],
+                        rotBank[off + 1],
+                        rotBank[off + 2],
+                        rotBank[off + 3]
+                    ], rotationSemantic);
+                    // PLY4 bank naming is historical; write values in the same semantic order
+                    // that the loader returns so encode/decode remain lossless.
+                    writeF(bankQuat[0]);
+                    writeF(bankQuat[1]);
+                    writeF(bankQuat[2]);
+                    writeF(bankQuat[3]);
                 }
             }
             if (K_dc > 0 && dcBank) {

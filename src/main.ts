@@ -54,6 +54,7 @@ class Viewer {
     originalFrames: number | null = null;
     private isPlaying = false;
     private currentTime = 0;
+    private playbackTime = 0;
     private currentPresetIndex = -1;
 
     // Cache for Selection Tool
@@ -128,6 +129,7 @@ class Viewer {
     private sortingTaskID = 0;
     private lastCompletedSortTaskID = 0;
     private sorterUpdateInterval = 1;
+    private pendingSortedFrame: number | null = null;
 
     private sorterUpdateFrame = 0;
 
@@ -1008,13 +1010,17 @@ class Viewer {
         if (timeSlider) timeSlider.step = "1";
 
         timeSlider?.addEventListener('input', () => {
-            // When scrubbing, we explicitly set currentTime
-            this.currentTime = parseFloat(timeSlider.value);
+            const requestedFrame = parseFloat(timeSlider.value);
+            this.playbackTime = requestedFrame;
+            if (this.is4DGS && this.trajectoryData && !this.isSequenceMode) {
+                this.requestSortedFrame(requestedFrame);
+            } else {
+                this.currentTime = requestedFrame;
+            }
             const total = Math.ceil(this.duration);
-            if (timeLabel) timeLabel.innerText = `${Math.floor(this.currentTime)} / ${total}`;
+            if (timeLabel) timeLabel.innerText = `${Math.floor(requestedFrame)} / ${total}`;
 
-            // Immediate visual update
-            if (this.splatEntity?.gsplat) {
+            if (this.splatEntity?.gsplat && !(this.is4DGS && this.trajectoryData && !this.isSequenceMode)) {
                 (this.splatEntity.gsplat as any).time = Math.floor(this.currentTime);
             }
         });
@@ -1415,23 +1421,29 @@ class Viewer {
             }
 
             if (this.isPlaying) {
-                // #WDD 2026-03-31: Sort-Before-Render - Pause time advancement if waiting for a sort responding to a frame jump
-                if (!this.isWaitingForSort) {
-                    this.currentTime += dt * this.fps;
-                }
-
-                // Loop logic
-
-                // Loop logic #WDD 2026-01-16
-                // If total frames is 50, indices are 0..49. Duration is 50 (count).
-                // We should loop when we hit the last frame index.
-                
                 const totalFrames = this.isSog4SequenceMode ? (this.sog4SequenceTotalFrames || this.duration) : this.duration;
                 const maxTime = Math.max(0, totalFrames - 1.0);
-                if (this.currentTime > maxTime) {
-                    this.currentTime = 0;
-                    if (this.isSog4SequenceMode) {
-                        void this.activateSog4SequenceSegment(0);
+
+                if (this.is4DGS && this.trajectoryData && !this.isSog4SequenceMode && !this.isSequenceMode) {
+                    this.playbackTime += dt * this.fps;
+                    if (this.playbackTime > maxTime) {
+                        this.playbackTime = 0;
+                    }
+                    if (!this.isWaitingForSort) {
+                        const nextFrame = Math.floor(this.playbackTime);
+                        if (nextFrame !== Math.floor(this.currentTime)) {
+                            this.requestSortedFrame(nextFrame);
+                        }
+                    }
+                } else {
+                    if (!this.isWaitingForSort) {
+                        this.currentTime += dt * this.fps;
+                    }
+                    if (this.currentTime > maxTime) {
+                        this.currentTime = 0;
+                        if (this.isSog4SequenceMode) {
+                            void this.activateSog4SequenceSegment(0);
+                        }
                     }
                 }
 
@@ -1980,6 +1992,9 @@ class Viewer {
 
     private togglePlay() {
         this.isPlaying = !this.isPlaying;
+        if (this.isPlaying) {
+            this.playbackTime = this.currentTime;
+        }
         const playBtn = document.getElementById('play-pause');
         const simplePlayBtn = document.getElementById('simple-play-pause');
 
@@ -3045,6 +3060,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         this.duration = assets.length;
         this.totalFrames = assets.length;
         this.currentTime = 0;
+        this.playbackTime = 0;
 
         const preloadAll = this.shouldPreloadAllSequenceFrames(assets.length);
         if (preloadAll) {
@@ -3260,6 +3276,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
             if (!this.sog4SequenceSegments.length) throw new Error('No SOG4 segments parsed');
             await this.activateSog4SequenceSegment(0);
             this.currentTime = 0;
+            this.playbackTime = 0;
 
             const first = this.sog4SequenceSegments[0];
             if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
@@ -3449,6 +3466,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         try {
             await this.activateSog4SequenceSegment(nextIndex);
             this.currentTime = this.sog4SequenceOffsets[nextIndex] || 0;
+            this.playbackTime = this.currentTime;
         } catch (err) {
             console.error('SOG4 segment switch failed', err);
             alert('Failed to switch SOG4 segment: ' + (err instanceof Error ? err.message : String(err)));
@@ -3681,6 +3699,41 @@ const duration = parsed.frames || parsed.maxMu || 100;
     // #WDD 2026-01-17: Dynamic Sorting Update
     // #WDD 2026-01-17: Dynamic Sorting Update
     private lastUpdatedFrame = -1;
+    private applyVisible4DFrame(frame: number) {
+        const clamped = Math.max(0, Math.floor(frame));
+        this.currentTime = clamped;
+        if (!this.isPlaying) {
+            this.playbackTime = clamped;
+        }
+        if (this.splatEntity?.gsplat) {
+            const material = (this.splatEntity.gsplat as any).instance?.material;
+            if (material) {
+                material.setParameter('uTime', clamped);
+                material.setParameter('uGlobalTotalFrames', this.duration);
+            }
+        }
+    }
+
+    private requestSortedFrame(frame: number) {
+        if (!this.is4DGS || !this.trajectoryData || this.isSequenceMode) {
+            const target = Math.max(0, Math.floor(frame));
+            this.currentTime = target;
+            this.playbackTime = target;
+            return;
+        }
+
+        const targetFrame = Math.max(0, Math.floor(frame));
+        if (this.isWaitingForSort) {
+            return;
+        }
+        if (targetFrame === Math.floor(this.currentTime)) {
+            return;
+        }
+
+        this.pendingSortedFrame = targetFrame;
+        this.updateDynamicPositions(targetFrame);
+    }
+
     private updateDynamicPositions(time: number) {
         if (!this.posArrays || !this.trajectoryData || !this.is4DGS) return;
         if (!this.splatEntity || !this.splatEntity.gsplat) return;
@@ -3804,6 +3857,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
         if (res?.colorTexture) width = res.colorTexture.width;
         else if (res?.transformATexture) width = res.transformATexture.width;
         const height = Math.ceil(numSplats / width);
+
+        if (parsed?.trajectory || parsed?.rotTrajectory || parsed?.dcTrajectory) {
+            this.ensure4DTextureBudget(numSplats, width, parsed);
+        }
 
         // --- Cache Positions for Selection ---
         const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
@@ -3950,7 +4007,9 @@ const duration = parsed.frames || parsed.maxMu || 100;
             const texHeight = Math.ceil(totalPixels / texWidth);
             const texData = new Float32Array(texWidth * texHeight * 4);
 
-            // #WDD 2026-01-16: Standardize to [x, y, z, w] with reorder alignment
+            // PLY4 / GSplatData stores quaternion properties as [w, x, y, z]
+            // (rot_0 is w). The runtime shader expects [x, y, z, w], so swizzle
+            // here while packing the rotation texture.
             const origIndices = splatData.getProp('original_index');
             if (origIndices) {
                 console.log(`[Debug] 'original_index' detected. First 5: ${origIndices.slice(0, 5).join(', ')}`);
@@ -4076,11 +4135,15 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 const self = this;
                 const oldOnMessage = worker.onmessage;
                 worker.onmessage = function(e: MessageEvent) {
+                    if (oldOnMessage) oldOnMessage.call(worker, e);
                     if (self.isWaitingForSort) {
                         self.isWaitingForSort = false;
                         self.lastCompletedSortTaskID = self.sortingTaskID;
+                        if (self.pendingSortedFrame !== null) {
+                            self.applyVisible4DFrame(self.pendingSortedFrame);
+                            self.pendingSortedFrame = null;
+                        }
                     }
-                    if (oldOnMessage) oldOnMessage.call(worker, e);
                 };
             }
 
@@ -4543,6 +4606,54 @@ const duration = parsed.frames || parsed.maxMu || 100;
         }
     }
 
+    private formatMemoryMB(bytes: number): string {
+        return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+    }
+
+    private ensure4DTextureBudget(numSplats: number, width: number, parsed: any) {
+        const maxTextureSize = this.app.graphicsDevice.maxTextureSize || 4096;
+        const rgba32fBytesPerPixel = 16;
+        let estimatedBytes = width * Math.ceil(numSplats / width) * rgba32fBytesPerPixel * 2; // lifetime + scales
+
+        const checks: { label: string; height: number }[] = [];
+        if (parsed?.keyframes > 0) {
+            const trajHeight = Math.ceil((numSplats * parsed.keyframes) / 4096);
+            checks.push({ label: 'trajectoryTexture', height: trajHeight });
+            estimatedBytes += 4096 * trajHeight * rgba32fBytesPerPixel;
+        }
+        if (parsed?.rotKeyframes > 0) {
+            const rotHeight = Math.ceil((numSplats * parsed.rotKeyframes) / 4096);
+            checks.push({ label: 'rotationTexture', height: rotHeight });
+            estimatedBytes += 4096 * rotHeight * rgba32fBytesPerPixel;
+        }
+        if (parsed?.dcKeyframes > 0) {
+            const dcHeight = Math.ceil((numSplats * parsed.dcKeyframes) / 4096);
+            checks.push({ label: 'dcTrajectoryTexture', height: dcHeight });
+            estimatedBytes += 4096 * dcHeight * rgba32fBytesPerPixel;
+        }
+
+        const oversize = checks.find((entry) => entry.height > maxTextureSize);
+        if (oversize) {
+            throw new Error(
+                `4D texture '${oversize.label}' would be ${4096}x${oversize.height}, ` +
+                `exceeding this GPU's max texture size ${maxTextureSize}.`
+            );
+        }
+
+        // Browser-side RGBA32F allocations are heavy, but a fixed 1 GB cap turned out
+        // to be too conservative for valid 4D PLY workloads on this viewer.
+        // Keep the texture-size guard above, and allow larger datasets to attempt loading
+        // up to a more practical soft budget.
+        const gpuBudgetBytes = 1536 * 1024 * 1024;
+        if (estimatedBytes > gpuBudgetBytes) {
+            throw new Error(
+                `4D textures are too large for browser/GPU memory. ` +
+                `Estimated RGBA32F texture allocation: ${this.formatMemoryMB(estimatedBytes)} ` +
+                `(limit ${this.formatMemoryMB(gpuBudgetBytes)}).`
+            );
+        }
+    }
+
     private onUpdate(dt: number) {
         if (this.arHandler) this.arHandler.update();
 
@@ -4578,8 +4689,9 @@ const duration = parsed.frames || parsed.maxMu || 100;
             return;
         }
 
-        // #WDD 2026-03-31: Back to forced integer frames as requested. 
-        if (this.is4DGS && this.trajectoryData) {
+        // Keep CPU-side centers aligned for paused scrubbing, but during playback
+        // we switch frames only after the sorter confirms completion.
+        if (this.is4DGS && this.trajectoryData && !this.isPlaying && !this.isWaitingForSort) {
             this.updateDynamicPositions(Math.floor(this.currentTime));
         }
     }

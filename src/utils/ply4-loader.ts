@@ -1,12 +1,10 @@
 
 import * as pc from 'playcanvas';
 
-// Helper to sigmoid (matches Python/Shader)
-const sigmoid = (v: number) => 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, v))));
-
 export class PLY4Loader {
     private static readonly HEADER_PROBE_BYTES = 1024 * 1024;
     private static readonly BODY_CHUNK_BYTES = 64 * 1024 * 1024;
+    private static readonly MAX_ESTIMATED_CPU_BYTES = 1536 * 1024 * 1024;
 
     constructor() { }
 
@@ -23,7 +21,8 @@ export class PLY4Loader {
         const headerChunk = await file.slice(0, PLY4Loader.HEADER_PROBE_BYTES).arrayBuffer();
         const { headerEnd, headerText } = this.extractHeaderFromBuffer(headerChunk);
         const parsedHeader = this.parseHeaderText(headerText);
-        const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc);
+        this.ensureWithinBrowserMemoryBudget(parsedHeader);
+        const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames, parsedHeader.frestNames);
 
         if (!parsedHeader.isBinary) {
             throw new Error("PLY4 Loader: ASCII PLY not supported yet (optimization needed). Please use binary.");
@@ -43,8 +42,6 @@ export class PLY4Loader {
         const xyzBankNames = this.buildXYZBankNames(parsedHeader.K_xyz);
         const rotBankNames = this.buildRotBankNames(parsedHeader.K_rot);
         const dcBankNames = this.buildDCBankNames(parsedHeader.K_dc);
-        const fRestNames = this.buildFRestNames();
-
         const rowsPerChunk = Math.max(1, Math.floor(PLY4Loader.BODY_CHUNK_BYTES / rowSize));
         const totalChunks = Math.max(1, Math.ceil(parsedHeader.vertexCount / rowsPerChunk));
 
@@ -70,7 +67,8 @@ export class PLY4Loader {
                 xyzBankNames,
                 rotBankNames,
                 dcBankNames,
-                fRestNames,
+                parsedHeader.fdcNames,
+                parsedHeader.frestNames,
                 startRow
             );
 
@@ -89,7 +87,8 @@ export class PLY4Loader {
 
         const { headerEnd, headerText } = this.extractHeaderFromBuffer(buffer);
         const parsedHeader = this.parseHeaderText(headerText);
-        const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc);
+        this.ensureWithinBrowserMemoryBudget(parsedHeader);
+        const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames, parsedHeader.frestNames);
 
         if (!parsedHeader.isBinary) {
             throw new Error("PLY4 Loader: ASCII PLY not supported yet (optimization needed). Please use binary.");
@@ -117,8 +116,6 @@ export class PLY4Loader {
         const xyzBankNames = this.buildXYZBankNames(parsedHeader.K_xyz);
         const rotBankNames = this.buildRotBankNames(parsedHeader.K_rot);
         const dcBankNames = this.buildDCBankNames(parsedHeader.K_dc);
-        const fRestNames = this.buildFRestNames();
-
         this.parseRowsIntoData(
             view,
             bodyStart,
@@ -133,7 +130,8 @@ export class PLY4Loader {
             xyzBankNames,
             rotBankNames,
             dcBankNames,
-            fRestNames,
+            parsedHeader.fdcNames,
+            parsedHeader.frestNames,
             0
         );
 
@@ -179,6 +177,8 @@ export class PLY4Loader {
         let modelPos: pc.Vec3 | null = null;
         let modelRot: pc.Quat | null = null;
         let modelScale: pc.Vec3 | null = null;
+        const fdcNames: string[] = [];
+        const frestNames: string[] = [];
 
         for (const line of headerLines) {
             const parts = line.trim().split(/\s+/);
@@ -203,6 +203,11 @@ export class PLY4Loader {
                 else if (type === 'int' || type === 'uint' || type === 'int32' || type === 'uint32' || type === 'float' || type === 'float32') size = 4;
                 else if (type === 'double' || type === 'float64') size = 8;
                 propertyTypes.push({ name, type, size, typeCode: type });
+                if (name.startsWith('f_dc_') && !name.startsWith('f_dc_bank_')) {
+                    fdcNames.push(name);
+                } else if (name.startsWith('f_rest_')) {
+                    frestNames.push(name);
+                }
             } else if (parts[0] === 'comment') {
                 if (line.includes('total_frames')) totalFrames = parseInt(parts[parts.indexOf('total_frames') + 1], 10);
                 if (line.includes('xyz_bank_keyframe_stride')) xyzStride = parseInt(parts[parts.indexOf('xyz_bank_keyframe_stride') + 1], 10);
@@ -241,29 +246,62 @@ export class PLY4Loader {
             }
         });
 
+        fdcNames.sort((a, b) => this.extractTrailingIndex(a) - this.extractTrailingIndex(b));
+        frestNames.sort((a, b) => this.extractTrailingIndex(a) - this.extractTrailingIndex(b));
+
         const K_xyz = maxK_xyz + 1;
         const K_rot = maxK_rot > -1 ? maxK_rot + 1 : 0;
         const K_dc = maxK_dc > -1 ? maxK_dc + 1 : 0;
 
         console.log(`[PLY4] Meta: Frames=${totalFrames}, K_xyz=${K_xyz} (Stride ${xyzStride}), K_rot=${K_rot} (Stride ${rotStride}), K_dc=${K_dc} (Stride ${dcStride})`);
 
-        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, K_xyz, K_rot, K_dc };
+        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, K_xyz, K_rot, K_dc, fdcNames, frestNames };
     }
 
-    private createDataArrays(count: number, K_xyz: number, K_rot: number, K_dc: number) {
+    private createDataArrays(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcNames: string[], frestNames: string[]) {
         const data: any = {
             x: new Float32Array(count), y: new Float32Array(count), z: new Float32Array(count),
             opacity: new Float32Array(count),
             scale_0: new Float32Array(count), scale_1: new Float32Array(count), scale_2: new Float32Array(count),
             rot_0: new Float32Array(count), rot_1: new Float32Array(count), rot_2: new Float32Array(count), rot_3: new Float32Array(count),
-            f_dc_0: new Float32Array(count), f_dc_1: new Float32Array(count), f_dc_2: new Float32Array(count),
             lifetime_mu: new Float32Array(count), lifetime_w: new Float32Array(count), lifetime_k: new Float32Array(count),
             xyzBank: K_xyz > 0 ? new Float32Array(count * K_xyz * 3) : null,
             rotBank: K_rot > 0 ? new Float32Array(count * K_rot * 4) : null,
             dcBank: K_dc > 0 ? new Float32Array(count * K_dc * 3) : null
         };
-        for (let i = 0; i < 45; i++) data[`f_rest_${i}`] = new Float32Array(count);
+        for (const name of fdcNames) data[name] = new Float32Array(count);
+        for (const name of frestNames) data[name] = new Float32Array(count);
         return data;
+    }
+
+    private ensureWithinBrowserMemoryBudget(parsedHeader: { vertexCount: number; K_xyz: number; K_rot: number; K_dc: number; fdcNames: string[]; frestNames: string[] }) {
+        const estimatedBytes = this.estimateCpuAllocationBytes(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames.length, parsedHeader.frestNames.length);
+        if (estimatedBytes > PLY4Loader.MAX_ESTIMATED_CPU_BYTES) {
+            throw new Error(
+                `PLY4 is too large for browser memory in this viewer. ` +
+                `Estimated decode memory: ${this.formatBytes(estimatedBytes)} ` +
+                `(limit ${this.formatBytes(PLY4Loader.MAX_ESTIMATED_CPU_BYTES)}).`
+            );
+        }
+    }
+
+    private estimateCpuAllocationBytes(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcCount: number, frestCount: number) {
+        const bytesPerFloat = 4;
+        const baseFloats = count * (14 + fdcCount);
+        const fRestFloats = count * frestCount;
+        const xyzFloats = count * K_xyz * 3;
+        const rotFloats = count * K_rot * 4;
+        const dcFloats = count * K_dc * 3;
+        return (baseFloats + fRestFloats + xyzFloats + rotFloats + dcFloats) * bytesPerFloat;
+    }
+
+    private extractTrailingIndex(name: string) {
+        const match = name.match(/_(\d+)$/);
+        return match ? parseInt(match[1], 10) : -1;
+    }
+
+    private formatBytes(bytes: number) {
+        return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
     }
 
     private buildPropertyOffsets(propertyTypes: { name: string; size: number }[]) {
@@ -288,10 +326,6 @@ export class PLY4Loader {
         return Array.from({ length: K_dc }, (_, k) => [`f_dc_bank_${k}_0`, `f_dc_bank_${k}_1`, `f_dc_bank_${k}_2`]);
     }
 
-    private buildFRestNames() {
-        return Array.from({ length: 45 }, (_, i) => `f_rest_${i}`);
-    }
-
     private parseRowsIntoData(
         view: DataView,
         bodyStart: number,
@@ -306,7 +340,8 @@ export class PLY4Loader {
         xyzBankNames: string[][],
         rotBankNames: string[][],
         dcBankNames: string[][],
-        fRestNames: string[],
+        fdcNames: string[],
+        frestNames: string[],
         globalStartRow: number
     ) {
         const getFloat = (name: string, rowBase: number) => {
@@ -316,6 +351,8 @@ export class PLY4Loader {
             return view.getFloat32(offset, isLittleEndian);
         };
 
+        const hasProp = (name: string) => propOffsets[name] !== undefined;
+
         for (let localRow = 0; localRow < rowCount; localRow++) {
             const i = globalStartRow + localRow;
             const rowBase = bodyStart + localRow * rowSize;
@@ -323,21 +360,23 @@ export class PLY4Loader {
             data.x[i] = getFloat('x', rowBase);
             data.y[i] = getFloat('y', rowBase);
             data.z[i] = getFloat('z', rowBase);
-            data.opacity[i] = sigmoid(getFloat('opacity', rowBase));
+            // Keep raw logit opacity from PLY4. PlayCanvas GSplatData will apply sigmoid
+            // when building the splat color texture, matching the Python reference path.
+            data.opacity[i] = getFloat('opacity', rowBase);
             data.scale_0[i] = getFloat('scale_0', rowBase);
             data.scale_1[i] = getFloat('scale_1', rowBase);
             data.scale_2[i] = getFloat('scale_2', rowBase);
-            data.f_dc_0[i] = getFloat('f_dc_0', rowBase);
-            data.f_dc_1[i] = getFloat('f_dc_1', rowBase);
-            data.f_dc_2[i] = getFloat('f_dc_2', rowBase);
+            for (const name of fdcNames) {
+                data[name][i] = getFloat(name, rowBase);
+            }
 
-            for (let j = 0; j < 45; j++) {
-                data[`f_rest_${j}`][i] = getFloat(fRestNames[j], rowBase);
+            for (const name of frestNames) {
+                data[name][i] = getFloat(name, rowBase);
             }
 
             data.lifetime_mu[i] = getFloat('lifetime_mu', rowBase);
             data.lifetime_w[i] = getFloat('lifetime_w', rowBase);
-            data.lifetime_k[i] = 10.0;
+            data.lifetime_k[i] = hasProp('lifetime_k') ? getFloat('lifetime_k', rowBase) : 10.0;
 
             if (K_xyz > 0) {
                 for (let k = 0; k < K_xyz; k++) {
@@ -361,10 +400,10 @@ export class PLY4Loader {
                 data.rot_2[i] = data.rotBank[i * K_rot * 4 + 2];
                 data.rot_3[i] = data.rotBank[i * K_rot * 4 + 3];
             } else {
-                data.rot_0[i] = getFloat('rot_0', rowBase) || 1;
-                data.rot_1[i] = getFloat('rot_1', rowBase) || 0;
-                data.rot_2[i] = getFloat('rot_2', rowBase) || 0;
-                data.rot_3[i] = getFloat('rot_3', rowBase) || 0;
+                data.rot_0[i] = hasProp('rot_0') ? getFloat('rot_0', rowBase) : 1;
+                data.rot_1[i] = hasProp('rot_1') ? getFloat('rot_1', rowBase) : 0;
+                data.rot_2[i] = hasProp('rot_2') ? getFloat('rot_2', rowBase) : 0;
+                data.rot_3[i] = hasProp('rot_3') ? getFloat('rot_3', rowBase) : 0;
             }
 
             if (K_dc > 0) {
@@ -379,6 +418,9 @@ export class PLY4Loader {
     }
 
     private buildResult(data: any, parsedHeader: any) {
+        const fdcNames = Object.keys(data).filter((name) => /^f_dc_\d+$/.test(name)).sort((a, b) => this.extractTrailingIndex(a) - this.extractTrailingIndex(b));
+        const frestNames = Object.keys(data).filter((name) => /^f_rest_\d+$/.test(name)).sort((a, b) => this.extractTrailingIndex(a) - this.extractTrailingIndex(b));
+
         const properties: any[] = [
             { name: 'x', type: 'float', storage: data.x },
             { name: 'y', type: 'float', storage: data.y },
@@ -391,20 +433,22 @@ export class PLY4Loader {
             { name: 'rot_1', type: 'float', storage: data.rot_1 },
             { name: 'rot_2', type: 'float', storage: data.rot_2 },
             { name: 'rot_3', type: 'float', storage: data.rot_3 },
-            { name: 'f_dc_0', type: 'float', storage: data.f_dc_0 },
-            { name: 'f_dc_1', type: 'float', storage: data.f_dc_1 },
-            { name: 'f_dc_2', type: 'float', storage: data.f_dc_2 },
             { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
             { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
             { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
         ];
-        for (let i = 0; i < 45; i++) {
-            properties.push({ name: `f_rest_${i}`, type: 'float', storage: data[`f_rest_${i}`] });
+        for (const name of fdcNames) {
+            properties.push({ name, type: 'float', storage: data[name] });
+        }
+        for (const name of frestNames) {
+            properties.push({ name, type: 'float', storage: data[name] });
         }
 
         return {
             x: data.x, y: data.y, z: data.z,
             opacity: data.opacity,
+            opacitySemantic: 'logit',
+            rotationSemantic: 'wxyz',
             scale_0: data.scale_0, scale_1: data.scale_1, scale_2: data.scale_2,
             rot_0: data.rot_0, rot_1: data.rot_1, rot_2: data.rot_2, rot_3: data.rot_3,
             f_dc_0: data.f_dc_0, f_dc_1: data.f_dc_1, f_dc_2: data.f_dc_2,
@@ -427,7 +471,7 @@ export class PLY4Loader {
             dcTrajectory: data.dcBank,
             dcKeyframes: parsedHeader.K_dc,
             dcStride: parsedHeader.dcStride,
-            bands: data.f_rest_44 ? 3 : (data.f_rest_23 ? 2 : (data.f_rest_8 ? 1 : 0)),
+            bands: frestNames.length >= 45 ? 3 : (frestNames.length >= 24 ? 2 : (frestNames.length >= 9 ? 1 : 0)),
             meta: {
                 modelPos: parsedHeader.modelPos,
                 modelRot: parsedHeader.modelRot,
