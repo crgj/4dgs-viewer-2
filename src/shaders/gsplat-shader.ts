@@ -186,6 +186,7 @@ export const splatMainVS = `
     uniform sampler2D splatColor;
     
     out mediump vec2 texCoord;
+    out mediump vec2 centerOffsetPx;
     out mediump vec4 color;
     out mediump float vFinalScale;
     
@@ -599,9 +600,11 @@ export const splatMainVS = `
             return;
         }
 
-        gl_Position = splat_proj + vec4((vertex_position.x * v1v2.xy + vertex_position.y * v1v2.zw) / viewport * splat_proj.w, 0, 0);
+        vec2 screenOffsetPx = vertex_position.x * v1v2.xy + vertex_position.y * v1v2.zw;
+        gl_Position = splat_proj + vec4(screenOffsetPx / viewport * splat_proj.w, 0, 0);
         
         texCoord = vertex_position.xy * finalScale / 2.0;
+        centerOffsetPx = screenOffsetPx;
         vFinalScale = finalScale; 
         #ifdef PICK_PASS
             uvec4 bits = (uvec4(splatId) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u);
@@ -735,6 +738,7 @@ export const splatMainVS = `
 
 export const splatMainPS = `
     in mediump vec2 texCoord;
+    in mediump vec2 centerOffsetPx;
     in mediump vec4 color;
     in mediump float vFinalScale;
     uniform float uOpacityScale;
@@ -779,9 +783,10 @@ export const splatMainPS = `
             if (A > 1.0) {
                 discard;
             }
-            mediump float centerRadius = 0.035;
-            mediump float centerFeather = max(fwidth(A) * 2.0, 0.002);
-            mediump float centerMask = 1.0 - smoothstep(centerRadius, centerRadius + centerFeather, A);
+            mediump float centerDistPx = length(centerOffsetPx);
+            mediump float centerRadiusPx = 2.5;
+            mediump float centerFeatherPx = max(fwidth(centerDistPx) * 1.5, 1.0);
+            mediump float centerMask = 1.0 - smoothstep(centerRadiusPx, centerRadiusPx + centerFeatherPx, centerDistPx);
             mediump float centerAlpha = centerMask * max(color.a, 0.85);
             if (centerAlpha < (1.0 / 255.0)) {
                 discard;
