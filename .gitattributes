@@ -2,4 +2,4 @@
 # *.ply filter=lfs diff=lfs merge=lfs -text
 # *.gszip filter=lfs diff=lfs merge=lfs -text
 # *.bin filter=lfs diff=lfs merge=lfs -text
-
+*.sog4 filter=lfs diff=lfs merge=lfs -text
