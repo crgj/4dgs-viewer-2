@@ -4,7 +4,7 @@ import * as pc from 'playcanvas';
 export class PLY4Loader {
     private static readonly HEADER_PROBE_BYTES = 1024 * 1024;
     private static readonly BODY_CHUNK_BYTES = 64 * 1024 * 1024;
-    private static readonly MAX_ESTIMATED_CPU_BYTES = 1536 * 1024 * 1024;
+    private static readonly MAX_ESTIMATED_CPU_BYTES = 5000 * 1024 * 1024;
 
     constructor() { }
 

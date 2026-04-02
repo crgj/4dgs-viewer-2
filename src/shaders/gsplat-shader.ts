@@ -280,13 +280,30 @@ export const splatMainVS = `
             
             // Mu and W are now RAW frame values (no scaling needed) #WDD 2026-01-16
             float mu = val.r;
-            float w = val.g;     
-            float k = 10.0;
+            float w = max(val.g, 0.0);
+            float k = max(val.b, 1.0);
 
-            float argLeft = k * (t - (mu - w));
+            float segmentMax = (uGlobalTotalFrames > 0.0) ? max(0.0, uGlobalTotalFrames - 1.0) : 1e20;
+            if (t < 0.0 || t > segmentMax) {
+                return 0.0;
+            }
+
+            // Segment visibility is hard-clipped, but the lifetime sigmoid itself
+            // must use the original interval. If we clamp lifeStart to 0.0, any
+            // splat that is already alive at frame 0 gets forced to half-opacity
+            // at t=0, which creates an artificial 0->1 alpha jump.
+            float lifeStart = mu - w;
+            float lifeEnd = mu + w;
+
+            // No overlap with the active segment at all.
+            if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) {
+                return 0.0;
+            }
+
+            float argLeft = k * (t - lifeStart);
             float left = 1.0 / (1.0 + exp(-argLeft));
 
-            float argRight = -k * (t - (mu + w));
+            float argRight = -k * (t - lifeEnd);
             float right = 1.0 / (1.0 + exp(-argRight));
             
             return left * right;

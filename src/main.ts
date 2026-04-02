@@ -160,7 +160,7 @@ class Viewer {
     // --- SOG4 Segment Sequence (temporal-per-segment) ---
     private isSog4SequenceMode = false;
     private sog4SequenceFiles: File[] = [];
-    private sog4SequenceSegments: { name: string; parsed: any; asset: pc.Asset; entity: pc.Entity; duration: number }[] = [];
+    private sog4SequenceSegments: { name: string; parsed: any; asset: pc.Asset | null; entity: pc.Entity | null; duration: number }[] = [];
     private sog4SequenceName: string | null = null;
     private sog4SequenceSharedTransform: { pos: number[]; rot: number[]; scale: number[] } | null = null;
     private sog4SequenceIndex = 0;
@@ -213,15 +213,19 @@ class Viewer {
         return totalFrames > 0 && totalFrames <= this.sequencePreloadAllMaxFrames;
     }
 
-    private async waitForSequenceGsplatMaterial(ent: pc.Entity, timeoutMs: number = 15000): Promise<any | null> {
+    private async waitForGsplatMaterial(ent: pc.Entity, shouldContinue: () => boolean, timeoutMs: number = 15000): Promise<any | null> {
         const start = performance.now();
         while (performance.now() - start < timeoutMs) {
-            if (!this.isSequenceMode) return null;
+            if (!shouldContinue()) return null;
             const inst = (ent.gsplat as any)?.instance;
             if (inst?.material) return inst;
             await new Promise((r) => setTimeout(r, 16));
         }
         return null;
+    }
+
+    private async waitForSequenceGsplatMaterial(ent: pc.Entity, timeoutMs: number = 15000): Promise<any | null> {
+        return this.waitForGsplatMaterial(ent, () => this.isSequenceMode, timeoutMs);
     }
 
     private async waitRafs(count: number): Promise<void> {
@@ -2754,7 +2758,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         material.update();
     }
 
-    private ensureSequenceSelectionTextureForAsset(asset: pc.Asset) {
+    private ensureSequenceSelectionTextureForAsset(asset: pc.Asset, forceReset: boolean = false) {
         try {
             const resource = asset.resource as pc.GSplatResource;
             const splatData = resource.splatData;
@@ -2765,7 +2769,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
             const texHeight = Math.ceil(numSplats / texWidth);
 
             const existing = this.selectionTool?.selectionTexture;
-            const needsRecreate = !existing || existing.width !== texWidth || existing.height !== texHeight;
+            const needsRecreate = forceReset || !existing || existing.width !== texWidth || existing.height !== texHeight;
             if (needsRecreate) {
                 // Match the gsplat UV addressing to avoid undefined texelFetch results.
                 (this.selectionTool as any).initWithSize(numSplats, texWidth, texHeight);
@@ -3267,13 +3271,18 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
                 progress(step, 'LOADING', `Parsing ${file.name}`);
                 const parsed = await loader.load(file, () => { });
-                const { asset, entity, duration } = await this.applyParsedSog4Segment(parsed, file.name, { preload: true, hideEntity: true });
+                const duration = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || 100));
                 this.sog4SequenceOffsets.push(this.sog4SequenceTotalFrames);
-                this.sog4SequenceTotalFrames += Math.max(1, Math.floor(duration));
-                this.sog4SequenceSegments.push({ name: file.name, parsed, asset, entity, duration: Math.max(1, Math.floor(duration)) });
+                this.sog4SequenceTotalFrames += duration;
+                this.sog4SequenceSegments.push({ name: file.name, parsed, asset: null, entity: null, duration });
             }
 
             if (!this.sog4SequenceSegments.length) throw new Error('No SOG4 segments parsed');
+            for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
+                const step = Math.min(8, 4 + Math.floor((i / Math.max(1, this.sog4SequenceSegments.length - 1)) * 4));
+                progress(step, 'PREPARING', `Preparing ${this.sog4SequenceSegments[i].name}`);
+                await this.prepareSog4SequenceSegment(i);
+            }
             await this.activateSog4SequenceSegment(0);
             this.currentTime = 0;
             this.playbackTime = 0;
@@ -3366,6 +3375,9 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
         const entity = new pc.Entity('GSplat');
         entity.addComponent('gsplat', { asset: asset });
+        if (options.hideEntity) {
+            entity.enabled = false;
+        }
 
         let arScaleFactor = 1.0;
         this.app.root.addChild(entity);
@@ -3417,10 +3429,6 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
         const duration = parsed.frames || parsed.maxMu || 100;
         this.finalizeGSplatLoad(asset, count, null, duration, parsed, { suppressUI: options.preload });
-
-        if (options.hideEntity) {
-            entity.enabled = false;
-        }
 
         if (!options.preload && !this.isSog4SequenceMode && parsed.postProcessing) {
             console.log('[Viewer] Applying postProcessing from file:', parsed.postProcessing);
@@ -3499,14 +3507,112 @@ const duration = parsed.frames || parsed.maxMu || 100;
     }
 
     private applySog4LocalTime(localTime: number) {
+        const shaderTime = Math.floor(localTime);
+        // SOG4 multi-segment playback still uses dynamic 4DGS trajectories, so the
+        // depth sorter must be updated with the segment-local frame as well.
+        // Otherwise the shader moves splats to the correct XYZ, but blending keeps
+        // using stale centers from the previous segment/frame, which shows up as
+        // black speckles / opacity corruption.
+        if (this.is4DGS && this.trajectoryData && !this.isWaitingForSort) {
+            this.updateDynamicPositions(shaderTime);
+        }
         if (this.splatEntity?.gsplat) {
             const material = (this.splatEntity.gsplat as any).instance.material;
             if (material) {
-                const shaderTime = Math.floor(localTime);
+                material.setParameter('uTransitionFactor', 0.0);
+                material.setParameter('uRotationFactor', 0.0);
                 material.setParameter('uTime', shaderTime);
                 material.setParameter('uGlobalTotalFrames', this.duration);
             }
         }
+    }
+
+    private setSog4SequenceVisibleSegment(activeIndex: number | null) {
+        for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
+            const entity = this.sog4SequenceSegments[i]?.entity;
+            if (!entity) continue;
+            entity.enabled = activeIndex !== null && i === activeIndex;
+        }
+    }
+
+    private attachSog4SequenceEntity(entity: pc.Entity, parsed: any) {
+        this.app.root.addChild(entity);
+        if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) {
+            this.arHandler.arAnchor.addChild(entity);
+            entity.setLocalPosition(0, 0, 0);
+            entity.setLocalRotation(new pc.Quat().setFromEulerAngles(0, 0, 0));
+        }
+
+        const shared = this.sog4SequenceSharedTransform;
+        if (shared) {
+            if (shared.pos) entity.setLocalPosition(shared.pos[0], shared.pos[1], shared.pos[2]);
+            if (shared.rot) entity.setLocalRotation(new pc.Quat(shared.rot[0], shared.rot[1], shared.rot[2], shared.rot[3]));
+            if (shared.scale) entity.setLocalScale(shared.scale[0], shared.scale[1], shared.scale[2]);
+            return;
+        }
+
+        if (parsed?.model_transform) {
+            const t = parsed.model_transform;
+            this.sog4SequenceSharedTransform = { pos: t.pos || [0, 0, 0], rot: t.rot || [0, 0, 0, 1], scale: t.scale || [1, 1, 1] };
+            if (t.pos) entity.setLocalPosition(t.pos[0], t.pos[1], t.pos[2]);
+            if (t.rot) entity.setLocalRotation(new pc.Quat(t.rot[0], t.rot[1], t.rot[2], t.rot[3]));
+            if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
+        }
+    }
+
+    private createSog4SegmentAsset(parsed: any, name: string): pc.Asset {
+        const vertexElement = parsed.plyData.elements[0];
+        const splatData = new (pc.GSplatData as any)([vertexElement]);
+        const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
+
+        const blob = new Blob([parsed.sogBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const asset = new pc.Asset(name, 'gsplat', { url });
+        asset.resource = resource;
+        asset.loaded = true;
+        this.app.assets.add(asset);
+        return asset;
+    }
+
+    private async prepareSog4SequenceSegment(index: number): Promise<void> {
+        const segment = this.sog4SequenceSegments[index];
+        if (!segment) return;
+        if (segment.asset && segment.entity) return;
+
+        const asset = this.createSog4SegmentAsset(segment.parsed, segment.name);
+        segment.asset = asset;
+
+        const entity = new pc.Entity('GSplat');
+        entity.addComponent('gsplat', { asset });
+        this.attachSog4SequenceEntity(entity, segment.parsed);
+        entity.enabled = true;
+        segment.entity = entity;
+
+        const inst = await this.waitForGsplatMaterial(
+            entity,
+            () => this.isSog4SequenceMode && this.sog4SequenceSegments[index]?.entity === entity
+        );
+        if (!inst) return;
+        entity.enabled = false;
+    }
+
+    private clearActiveSog4SequenceRenderState() {
+        this.splatEntity = null;
+        this.is4DGS = false;
+        this.trajectoryData = null;
+        this.keyframes = 0;
+        this.xyzStride = 1;
+        this.rotTrajectoryData = null;
+        this.rotKeyframes = 0;
+        this.rotStride = 1;
+        this.dcTrajectoryData = null;
+        this.dcKeyframes = 0;
+        this.dcStride = 1;
+        this.posArrays = null;
+        this.originalIndices = null;
+        this.lastUpdatedFrame = -1;
+        this.pendingSortedFrame = null;
+        this.isWaitingForSort = false;
     }
 
     private updateSog4SequenceTime() {
@@ -3515,51 +3621,45 @@ const duration = parsed.frames || parsed.maxMu || 100;
         const t = Math.max(0, Math.min(this.currentTime, maxTime));
         const segIndex = this.getSog4SegmentIndex(t);
         if (segIndex !== this.sog4SequenceIndex) {
-            void this.activateSog4SequenceSegment(segIndex);
+            this.activateSog4SequenceSegment(segIndex);
         }
         const offset = this.sog4SequenceOffsets[segIndex] || 0;
         const localTime = t - offset;
+        this.setSog4SequenceVisibleSegment(segIndex);
         this.applySog4LocalTime(localTime);
         return { displayFrame: Math.floor(t), total };
     }
 
-    private async activateSog4SequenceSegment(index: number): Promise<void> {
+    private activateSog4SequenceSegment(index: number): void {
         const segment = this.sog4SequenceSegments[index];
         if (!segment) return;
-        if (this.sog4SequenceIndex === index && this.splatEntity === segment.entity) return;
-
-        if (this.splatEntity && this.splatEntity !== segment.entity) {
-            this.splatEntity.enabled = false;
+        if (this.sog4SequenceIndex === index && this.splatEntity && this.lastParsedData === segment.parsed) {
+            this.setSog4SequenceVisibleSegment(index);
+            return;
         }
+        if (!segment.asset || !segment.entity) {
+            console.warn('[SOG4 Sequence] Segment was not prepared before activation:', index, segment.name);
+            return;
+        }
+
+        this.clearActiveSog4SequenceRenderState();
 
         this.sog4SequenceIndex = index;
         this.currentFileName = this.sog4SequenceName || segment.name;
         this.currentTransformCacheKey = this.currentFileName;
         this.splatEntity = segment.entity;
-        this.splatEntity.enabled = true;
         this.lastParsedData = segment.parsed;
 
-        const asset = segment.asset;
-        const splatData = (asset.resource as pc.GSplatResource).splatData;
-        const x = splatData.getProp('x'), y = splatData.getProp('y'), z = splatData.getProp('z');
-        if (x && y && z) {
-            this.posArrays = { x: x as Float32Array, y: y as Float32Array, z: z as Float32Array };
+        // Always reset selection/deleted mask per segment. If two segments share the
+        // same texture dimensions, reusing the previous selectionTexture would leak
+        // deleted/hidden flags into the next segment and look like opacity bleed.
+        this.ensureSequenceSelectionTextureForAsset(segment.asset, true);
+        this.finalizeGSplatLoad(segment.asset, segment.parsed.count, null, segment.duration, segment.parsed, { suppressUI: true });
+        if (this.selectionTool?.selectionTexture) {
+            this.updateSelectionUniform(this.selectionTool.selectionTexture);
+            this.updateSelectionModeParams(false);
         }
-        const origIndices = splatData.getProp('original_index');
-        this.originalIndices = origIndices ? (origIndices as Float32Array) : null;
 
-        this.is4DGS = !!segment.parsed.trajectory;
-        this.trajectoryData = segment.parsed.trajectory || null;
-        this.keyframes = segment.parsed.keyframes || 0;
-        this.xyzStride = segment.parsed.xyzStride || 1;
-        this.rotTrajectoryData = segment.parsed.rotTrajectory || null;
-        this.rotKeyframes = segment.parsed.rotKeyframes || 0;
-        this.rotStride = segment.parsed.rotStride || 1;
-        this.dcTrajectoryData = segment.parsed.dcTrajectory || null;
-        this.dcKeyframes = segment.parsed.dcKeyframes || 0;
-        this.dcStride = segment.parsed.dcStride || 1;
-
-        
         this.duration = segment.duration;
         this.totalFrames = this.duration;
         this.originalFrames = this.duration;
@@ -3571,8 +3671,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
             slider.max = maxIdx.toString();
             slider.step = "0.1";
         }
+        this.setSog4SequenceVisibleSegment(index);
+        this.applySog4LocalTime(0);
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
-        this.updateStats(asset);
+        this.updateStats(segment.asset);
     }
 
     private async loadSogSequence(files: File[]): Promise<void> {
@@ -3878,7 +3980,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 this.cachedPositions[i * 3 + 2] = z[i];
             }
         }
-        if (this.cachedPositions) {
+        if (this.cachedPositions && !(options.suppressUI && this.isSog4SequenceMode)) {
             // #WDD 2026-03-31: Use initWithSize to ensure selectionTexture matches GSplat textures dimension.
             // This is critical for correct UV mapping in the shader (using splatId).
             this.selectionTool.initWithSize(this.cachedPositions.length / 3, width, height);
@@ -4232,6 +4334,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         const material = instance.material;
         material.setParameter('uTime', 0.0);
         material.setParameter('uTransitionFactor', 0.0);
+        material.setParameter('uRotationFactor', 0.0);
         material.setParameter('uSwizzleMode', this.swizzleMode); // #WDD 2026-01-15 Init
         material.setParameter('uOpacityScale', 1.0);
         material.setParameter('uRenderMode', this.gaussianRenderMode);
@@ -4644,7 +4747,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         // to be too conservative for valid 4D PLY workloads on this viewer.
         // Keep the texture-size guard above, and allow larger datasets to attempt loading
         // up to a more practical soft budget.
-        const gpuBudgetBytes = 1536 * 1024 * 1024;
+        const gpuBudgetBytes = 5000 * 1024 * 1024;
         if (estimatedBytes > gpuBudgetBytes) {
             throw new Error(
                 `4D textures are too large for browser/GPU memory. ` +
@@ -5079,11 +5182,12 @@ const duration = parsed.frames || parsed.maxMu || 100;
             const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
             const hasDeletes = deletedIndices.length > 0;
             const isNativeSog4 = !!(this.lastParsedData.isSOG4 && this.lastParsedData.sogBuffer);
+            const needsSog4Rewrite = !!this.lastParsedData.needsSOG4Rewrite;
             let buffer: Uint8Array;
 
-            if (!isNativeSog4) {
+            if (!isNativeSog4 || needsSog4Rewrite) {
                 usedDirectEncode = true;
-                setExportProgress(8, 'Encoding final SOG4 archive...');
+                setExportProgress(8, needsSog4Rewrite ? 'Repairing and re-encoding SOG4 archive...' : 'Encoding final SOG4 archive...');
                 const encodeOverrides: any = {
                     model_transform: transform,
                     cameras: cameras,
@@ -5103,6 +5207,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 });
                 this.lastParsedData.sogBuffer = buffer;
                 this.lastParsedData.isSOG4 = true;
+                this.lastParsedData.needsSOG4Rewrite = false;
                 setExportProgress(92, 'Final archive ready');
             } else {
                 setExportProgress(12, hasDeletes ? 'Updating native SOG4 with deletion compaction...' : 'Updating native SOG4 metadata...');

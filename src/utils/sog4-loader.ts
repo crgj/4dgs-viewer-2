@@ -534,7 +534,7 @@ export class SOG4Loader {
 
     private async loadRawFloatPayload(zip: JSZip, meta: any, sourceBuffer: ArrayBuffer, progressCallback?: (progress: number, message: string) => void) {
         const payload = meta.custom.raw_float_payload;
-        const count = meta.count;
+        const metaCount = meta.count;
         const staticInfo = payload.static;
         const staticFile = zip.file(staticInfo.file);
         if (!staticFile) throw new Error(`Invalid raw SOG4 format: missing ${staticInfo.file}`);
@@ -542,26 +542,74 @@ export class SOG4Loader {
         const staticBuffer = await staticFile.async('arraybuffer');
         const staticData = new Float32Array(staticBuffer);
         const fRestCount = staticInfo.f_rest_count || 0;
-        const rowFloats = staticInfo.row_floats || (17 + fRestCount);
-        if (staticData.length !== count * rowFloats) {
-            throw new Error(`Invalid raw static payload length: got ${staticData.length}, expected ${count * rowFloats}`);
+        const canonicalRowFloats = staticInfo.row_floats || (17 + fRestCount);
+
+        let recovered = false;
+        const recoveryWarnings: string[] = [];
+        let staticCount = metaCount;
+        let inputRowFloats = canonicalRowFloats;
+        const staticExpected = metaCount * canonicalRowFloats;
+        if (staticData.length !== staticExpected) {
+            let resolved = false;
+
+            if (metaCount > 0 && staticData.length % metaCount === 0) {
+                const inferredRowFloats = staticData.length / metaCount;
+                if (inferredRowFloats >= canonicalRowFloats && inferredRowFloats <= canonicalRowFloats + 8) {
+                    inputRowFloats = inferredRowFloats;
+                    recovered = true;
+                    recoveryWarnings.push(
+                        `Recovered raw static payload using legacy row width ${inferredRowFloats} instead of ${canonicalRowFloats}.`
+                    );
+                    resolved = true;
+                }
+            }
+
+            if (!resolved && canonicalRowFloats > 0 && staticData.length % canonicalRowFloats === 0) {
+                staticCount = staticData.length / canonicalRowFloats;
+                inputRowFloats = canonicalRowFloats;
+                recovered = true;
+                recoveryWarnings.push(
+                    `Recovered raw static payload using actual row count ${staticCount} instead of meta.count ${metaCount}.`
+                );
+                resolved = true;
+            }
+
+            if (!resolved) {
+                for (let extra = 0; extra <= 8 && !resolved; extra++) {
+                    const candidateRowFloats = canonicalRowFloats + extra;
+                    if (candidateRowFloats <= 0 || staticData.length % candidateRowFloats !== 0) continue;
+                    const inferredCount = staticData.length / candidateRowFloats;
+                    if (!Number.isFinite(inferredCount) || inferredCount <= 0) continue;
+                    staticCount = inferredCount;
+                    inputRowFloats = candidateRowFloats;
+                    recovered = true;
+                    recoveryWarnings.push(
+                        `Recovered raw static payload using inferred count ${inferredCount} and row width ${candidateRowFloats}.`
+                    );
+                    resolved = true;
+                }
+            }
+
+            if (!resolved) {
+                throw new Error(`Invalid raw static payload length: got ${staticData.length}, expected ${staticExpected}`);
+            }
         }
 
         progressCallback?.(20, "Decoding Raw Static Data");
         const data: any = {
-            x: new Float32Array(count), y: new Float32Array(count), z: new Float32Array(count),
-            rot_0: new Float32Array(count), rot_1: new Float32Array(count), rot_2: new Float32Array(count), rot_3: new Float32Array(count),
-            scale_0: new Float32Array(count), scale_1: new Float32Array(count), scale_2: new Float32Array(count),
-            opacity: new Float32Array(count),
-            f_dc_0: new Float32Array(count), f_dc_1: new Float32Array(count), f_dc_2: new Float32Array(count),
-            lifetime_mu: new Float32Array(count), lifetime_w: new Float32Array(count), lifetime_k: new Float32Array(count),
-            t_start: new Float32Array(count), duration: new Float32Array(count),
-            original_index: new Float32Array(count)
+            x: new Float32Array(staticCount), y: new Float32Array(staticCount), z: new Float32Array(staticCount),
+            rot_0: new Float32Array(staticCount), rot_1: new Float32Array(staticCount), rot_2: new Float32Array(staticCount), rot_3: new Float32Array(staticCount),
+            scale_0: new Float32Array(staticCount), scale_1: new Float32Array(staticCount), scale_2: new Float32Array(staticCount),
+            opacity: new Float32Array(staticCount),
+            f_dc_0: new Float32Array(staticCount), f_dc_1: new Float32Array(staticCount), f_dc_2: new Float32Array(staticCount),
+            lifetime_mu: new Float32Array(staticCount), lifetime_w: new Float32Array(staticCount), lifetime_k: new Float32Array(staticCount),
+            t_start: new Float32Array(staticCount), duration: new Float32Array(staticCount),
+            original_index: new Float32Array(staticCount)
         };
-        for (let i = 0; i < fRestCount; i++) data[`f_rest_${i}`] = new Float32Array(count);
+        for (let i = 0; i < fRestCount; i++) data[`f_rest_${i}`] = new Float32Array(staticCount);
 
-        for (let i = 0; i < count; i++) {
-            let off = i * rowFloats;
+        for (let i = 0; i < staticCount; i++) {
+            let off = i * inputRowFloats;
             data.x[i] = staticData[off++];
             data.y[i] = staticData[off++];
             data.z[i] = staticData[off++];
@@ -582,7 +630,11 @@ export class SOG4Loader {
             data.t_start[i] = data.lifetime_mu[i] - data.lifetime_w[i];
             data.duration[i] = 2.0 * data.lifetime_w[i];
             for (let j = 0; j < fRestCount; j++) data[`f_rest_${j}`][i] = staticData[off++];
-            data.original_index[i] = i;
+            if (inputRowFloats - canonicalRowFloats >= 1) {
+                data.original_index[i] = staticData[off];
+            } else {
+                data.original_index[i] = i;
+            }
         }
 
         const loadFloatArray = async (entry: any, components: number) => {
@@ -591,17 +643,67 @@ export class SOG4Loader {
             if (!file) throw new Error(`Invalid raw SOG4 format: missing ${entry.file}`);
             const buffer = await file.async('arraybuffer');
             const arr = new Float32Array(buffer);
-            const expected = count * entry.keyframes * components;
-            if (arr.length !== expected) {
-                throw new Error(`Invalid raw payload length for ${entry.file}: got ${arr.length}, expected ${expected}`);
+            const stride = entry.keyframes * components;
+            if (!Number.isFinite(stride) || stride <= 0) return null;
+            if (arr.length % stride !== 0) {
+                throw new Error(`Invalid raw payload length for ${entry.file}: got ${arr.length}, expected a multiple of ${stride}`);
             }
-            return arr;
+            const inferredCount = arr.length / stride;
+            if (inferredCount !== staticCount) {
+                recovered = true;
+                recoveryWarnings.push(
+                    `Recovered raw bank ${entry.file} with count ${inferredCount}; static payload count is ${staticCount}.`
+                );
+            }
+            return { arr, inferredCount };
         };
 
         progressCallback?.(55, "Decoding Raw Temporal Data");
-        const xyzData = await loadFloatArray(payload.xyz_bank, 3);
-        const rotData = await loadFloatArray(payload.rot_bank, 4);
-        const dcData = await loadFloatArray(payload.dc_bank, 3);
+        const xyzBankLoaded = await loadFloatArray(payload.xyz_bank, 3);
+        const rotBankLoaded = await loadFloatArray(payload.rot_bank, 4);
+        const dcBankLoaded = await loadFloatArray(payload.dc_bank, 3);
+
+        const counts = [staticCount];
+        if (xyzBankLoaded) counts.push(xyzBankLoaded.inferredCount);
+        if (rotBankLoaded) counts.push(rotBankLoaded.inferredCount);
+        if (dcBankLoaded) counts.push(dcBankLoaded.inferredCount);
+        const count = Math.min(...counts);
+        if (count <= 0 || !Number.isFinite(count)) {
+            throw new Error('Failed to recover any valid raw payload rows.');
+        }
+        if (count !== staticCount) {
+            recovered = true;
+            recoveryWarnings.push(`Using common recovered count ${count} across raw payload segments.`);
+        }
+
+        const trimArray = (arr: Float32Array | null | undefined, rowWidth: number) => {
+            if (!arr) return null;
+            return arr.length === count * rowWidth ? arr : arr.subarray(0, count * rowWidth);
+        };
+        const xyzData = trimArray(xyzBankLoaded?.arr || null, (payload.xyz_bank?.keyframes || 0) * 3);
+        const rotData = trimArray(rotBankLoaded?.arr || null, (payload.rot_bank?.keyframes || 0) * 4);
+        const dcData = trimArray(dcBankLoaded?.arr || null, (payload.dc_bank?.keyframes || 0) * 3);
+
+        const crop = (arr: Float32Array) => arr.length === count ? arr : arr.subarray(0, count);
+        data.x = crop(data.x); data.y = crop(data.y); data.z = crop(data.z);
+        data.rot_0 = crop(data.rot_0); data.rot_1 = crop(data.rot_1); data.rot_2 = crop(data.rot_2); data.rot_3 = crop(data.rot_3);
+        data.scale_0 = crop(data.scale_0); data.scale_1 = crop(data.scale_1); data.scale_2 = crop(data.scale_2);
+        data.opacity = crop(data.opacity);
+        data.f_dc_0 = crop(data.f_dc_0); data.f_dc_1 = crop(data.f_dc_1); data.f_dc_2 = crop(data.f_dc_2);
+        data.lifetime_mu = crop(data.lifetime_mu); data.lifetime_w = crop(data.lifetime_w); data.lifetime_k = crop(data.lifetime_k);
+        data.t_start = crop(data.t_start); data.duration = crop(data.duration); data.original_index = crop(data.original_index);
+        for (let i = 0; i < fRestCount; i++) data[`f_rest_${i}`] = crop(data[`f_rest_${i}`]);
+
+        if (recovered) {
+            console.warn('[SOG4] Raw payload recovered with compatibility fallback.', {
+                metaCount,
+                staticCount,
+                finalCount: count,
+                canonicalRowFloats,
+                inputRowFloats,
+                warnings: recoveryWarnings
+            });
+        }
 
         const plyProperties: any[] = [
             { name: 'x', type: 'float', storage: data.x },
@@ -656,7 +758,9 @@ export class SOG4Loader {
             opacitySemantic: 'logit',
             rotationSemantic: 'wxyz',
             sogBuffer: sourceBuffer,
-            isSOG4: true
+            isSOG4: true,
+            needsSOG4Rewrite: recovered,
+            loadWarnings: recoveryWarnings
         };
     }
 
@@ -751,89 +855,142 @@ export class SOG4Loader {
                 // Keep mapped deleted indices in meta so loader can hide them if desired
                 meta.deleted_indices = mappedDeleted;
             } else {
-            // Build keep list once for faster compaction per texture
-            const keepIndices: number[] = [];
-            keepIndices.length = 0;
-            for (let i = 0; i < originalCount; i++) {
-                if (!deleted.has(i)) keepIndices.push(i);
-            }
-            const keepCount = keepIndices.length;
+                // Build keep list once for faster compaction per texture / payload
+                const keepIndices: number[] = [];
+                keepIndices.length = 0;
+                for (let i = 0; i < originalCount; i++) {
+                    if (!deleted.has(i)) keepIndices.push(i);
+                }
+                const keepCount = keepIndices.length;
 
-            report(2, `Deleting ${deleted.size} / ${originalCount} splats...`);
+                report(2, `Deleting ${deleted.size} / ${originalCount} splats...`);
 
-            const calcNewSize = (count: number, maxWidth: number) => {
-                const width = Math.max(1, Math.min(maxWidth, Math.ceil(Math.sqrt(count))));
-                const height = Math.max(1, Math.ceil(count / width));
-                return { width, height };
-            };
+                const rawPayload = meta?.custom?.raw_float_payload;
+                if (rawPayload?.static?.file) {
+                    const compactFloatFile = async (fileName: string, rowWidth: number) => {
+                        const file = zip.file(fileName);
+                        if (!file) throw new Error(`Invalid raw SOG4 format: missing ${fileName}`);
+                        const buffer = await file.async('arraybuffer');
+                        const src = new Float32Array(buffer);
+                        const expected = originalCount * rowWidth;
+                        if (src.length !== expected) {
+                            throw new Error(`Invalid raw payload length for ${fileName}: got ${src.length}, expected ${expected}`);
+                        }
+                        const dst = new Float32Array(keepCount * rowWidth);
+                        for (let i = 0; i < keepCount; i++) {
+                            const srcIndex = keepIndices[i];
+                            const srcBase = srcIndex * rowWidth;
+                            const dstBase = i * rowWidth;
+                            dst.set(src.subarray(srcBase, srcBase + rowWidth), dstBase);
+                        }
+                        zip.file(fileName, new Uint8Array(dst.buffer.slice(dst.byteOffset, dst.byteOffset + dst.byteLength)));
+                    };
 
-            const compactTexture = async (fileName: string) => {
-                const file = zip.file(fileName);
-                if (!file) return;
-                const buffer = await file.async('arraybuffer');
-                const { imageData: srcImage, width: srcWidth } = await decodeRgbaTexture(buffer);
-                const src = srcImage.data;
-                const { width, height } = calcNewSize(keepCount, srcWidth);
-                const canvas: any = (typeof OffscreenCanvas !== 'undefined')
-                    ? new OffscreenCanvas(width, height)
-                    : Object.assign(document.createElement('canvas'), { width, height });
-                const ctx = canvas.getContext('2d', { willReadFrequently: true });
-                if (!ctx) throw new Error("Failed to get 2D context for texture encode");
-                const dstImage = ctx.createImageData(width, height);
+                    const targets: Array<{ file: string; rowWidth: number; label: string }> = [];
+                    const staticRowFloats = rawPayload.static.row_floats || (17 + (rawPayload.static.f_rest_count || 0));
+                    targets.push({ file: rawPayload.static.file, rowWidth: staticRowFloats, label: rawPayload.static.file });
+                    if (rawPayload.xyz_bank?.file && rawPayload.xyz_bank?.keyframes) {
+                        targets.push({
+                            file: rawPayload.xyz_bank.file,
+                            rowWidth: rawPayload.xyz_bank.keyframes * 3,
+                            label: rawPayload.xyz_bank.file
+                        });
+                    }
+                    if (rawPayload.rot_bank?.file && rawPayload.rot_bank?.keyframes) {
+                        targets.push({
+                            file: rawPayload.rot_bank.file,
+                            rowWidth: rawPayload.rot_bank.keyframes * 4,
+                            label: rawPayload.rot_bank.file
+                        });
+                    }
+                    if (rawPayload.dc_bank?.file && rawPayload.dc_bank?.keyframes) {
+                        targets.push({
+                            file: rawPayload.dc_bank.file,
+                            rowWidth: rawPayload.dc_bank.keyframes * 3,
+                            label: rawPayload.dc_bank.file
+                        });
+                    }
 
-                // Copy only kept indices (faster than per-index delete checks for each texture)
-                for (let w = 0; w < keepCount; w++) {
-                    const i = keepIndices[w];
-                    const si = i * 4;
-                    const di = w * 4;
-                    dstImage.data[di + 0] = src[si + 0];
-                    dstImage.data[di + 1] = src[si + 1];
-                    dstImage.data[di + 2] = src[si + 2];
-                    dstImage.data[di + 3] = src[si + 3];
+                    for (let i = 0; i < targets.length; i++) {
+                        const target = targets[i];
+                        report((i / Math.max(targets.length, 1)) * 90, `Compressing ${i + 1}/${targets.length}: ${target.label}`);
+                        await compactFloatFile(target.file, target.rowWidth);
+                    }
+                } else {
+                    const calcNewSize = (count: number, maxWidth: number) => {
+                        const width = Math.max(1, Math.min(maxWidth, Math.ceil(Math.sqrt(count))));
+                        const height = Math.max(1, Math.ceil(count / width));
+                        return { width, height };
+                    };
+
+                    const compactTexture = async (fileName: string) => {
+                        const file = zip.file(fileName);
+                        if (!file) return;
+                        const buffer = await file.async('arraybuffer');
+                        const { imageData: srcImage, width: srcWidth } = await decodeRgbaTexture(buffer);
+                        const src = srcImage.data;
+                        const { width, height } = calcNewSize(keepCount, srcWidth);
+                        const canvas: any = (typeof OffscreenCanvas !== 'undefined')
+                            ? new OffscreenCanvas(width, height)
+                            : Object.assign(document.createElement('canvas'), { width, height });
+                        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                        if (!ctx) throw new Error("Failed to get 2D context for texture encode");
+                        const dstImage = ctx.createImageData(width, height);
+
+                        // Copy only kept indices (faster than per-index delete checks for each texture)
+                        for (let w = 0; w < keepCount; w++) {
+                            const i = keepIndices[w];
+                            const si = i * 4;
+                            const di = w * 4;
+                            dstImage.data[di + 0] = src[si + 0];
+                            dstImage.data[di + 1] = src[si + 1];
+                            dstImage.data[di + 2] = src[si + 2];
+                            dstImage.data[di + 3] = src[si + 3];
+                        }
+
+                        ctx.putImageData(dstImage, 0, 0);
+                        const updated = await encodeCanvasToImage(canvas, fileName);
+                        zip.file(fileName, updated);
+                    };
+
+                    const targets: string[] = [];
+                    if (meta.means?.files?.[0]) targets.push(meta.means.files[0]);
+                    if (meta.means?.files?.[1]) targets.push(meta.means.files[1]);
+                    if (meta.quats?.files?.[0]) targets.push(meta.quats.files[0]);
+                    if (meta.scales?.files?.[0]) targets.push(meta.scales.files[0]);
+                    if (meta.sh0?.files?.[0]) targets.push(meta.sh0.files[0]);
+                    if (meta.shN?.files?.[1]) targets.push(meta.shN.files[1]); // labels
+                    if (meta.opacity?.files?.[0]) targets.push(meta.opacity.files[0]);
+                    if (meta.lifetime?.files?.[0]) targets.push(meta.lifetime.files[0]);
+                    if (meta.params?.files?.[0]) targets.push(meta.params.files[0]);
+                    if (meta.xyz_bank && Array.isArray(meta.xyz_bank)) {
+                        meta.xyz_bank.forEach((bank: any) => {
+                            if (bank?.files?.[0]) targets.push(bank.files[0]);
+                            if (bank?.files?.[1]) targets.push(bank.files[1]);
+                        });
+                    }
+                    if (meta.rot_bank && Array.isArray(meta.rot_bank)) {
+                        meta.rot_bank.forEach((bank: any) => {
+                            if (bank?.files?.[0]) targets.push(bank.files[0]);
+                        });
+                    }
+                    if (meta.f_dc_bank && Array.isArray(meta.f_dc_bank)) {
+                        meta.f_dc_bank.forEach((bank: any) => {
+                            if (bank?.files?.[0]) targets.push(bank.files[0]);
+                            if (bank?.files?.[1]) targets.push(bank.files[1]);
+                        });
+                    }
+
+                    const total = targets.length;
+                    for (let i = 0; i < total; i++) {
+                        const fileName = targets[i];
+                        report((i / Math.max(total, 1)) * 90, `Compressing ${i + 1}/${total}: ${fileName}`);
+                        await compactTexture(fileName);
+                    }
                 }
 
-                ctx.putImageData(dstImage, 0, 0);
-                const updated = await encodeCanvasToImage(canvas, fileName);
-                zip.file(fileName, updated);
-            };
-
-            const targets: string[] = [];
-            if (meta.means?.files?.[0]) targets.push(meta.means.files[0]);
-            if (meta.means?.files?.[1]) targets.push(meta.means.files[1]);
-            if (meta.quats?.files?.[0]) targets.push(meta.quats.files[0]);
-            if (meta.scales?.files?.[0]) targets.push(meta.scales.files[0]);
-            if (meta.sh0?.files?.[0]) targets.push(meta.sh0.files[0]);
-            if (meta.shN?.files?.[1]) targets.push(meta.shN.files[1]); // labels
-            if (meta.opacity?.files?.[0]) targets.push(meta.opacity.files[0]);
-            if (meta.lifetime?.files?.[0]) targets.push(meta.lifetime.files[0]);
-            if (meta.params?.files?.[0]) targets.push(meta.params.files[0]);
-            if (meta.xyz_bank && Array.isArray(meta.xyz_bank)) {
-                meta.xyz_bank.forEach((bank: any) => {
-                    if (bank?.files?.[0]) targets.push(bank.files[0]);
-                    if (bank?.files?.[1]) targets.push(bank.files[1]);
-                });
-            }
-            if (meta.rot_bank && Array.isArray(meta.rot_bank)) {
-                meta.rot_bank.forEach((bank: any) => {
-                    if (bank?.files?.[0]) targets.push(bank.files[0]);
-                });
-            }
-            if (meta.f_dc_bank && Array.isArray(meta.f_dc_bank)) {
-                meta.f_dc_bank.forEach((bank: any) => {
-                    if (bank?.files?.[0]) targets.push(bank.files[0]);
-                    if (bank?.files?.[1]) targets.push(bank.files[1]);
-                });
-            }
-
-            const total = targets.length;
-            for (let i = 0; i < total; i++) {
-                const fileName = targets[i];
-                report((i / Math.max(total, 1)) * 90, `Compressing ${i + 1}/${total}: ${fileName}`);
-                await compactTexture(fileName);
-            }
-
-            meta.count = keepCount;
-            meta.deleted_indices = [];
+                meta.count = keepCount;
+                meta.deleted_indices = [];
             }
         }
 
