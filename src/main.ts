@@ -12,7 +12,7 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
-import { SOG4Encoder } from './utils/sog4-encoder';
+import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder';
 import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
 
 // --- Configuration & State ---
@@ -4109,22 +4109,9 @@ const duration = parsed.frames || parsed.maxMu || 100;
             const totalPixels = numSplats * Kvar;
             const texHeight = Math.ceil(totalPixels / texWidth);
             const texData = new Float32Array(texWidth * texHeight * 4);
-            const readQuatAsXYZW = (array: Float32Array, offset: number) => {
-                if (rotationSemantic === 'xyzw') {
-                    return [
-                        array[offset + 0],
-                        array[offset + 1],
-                        array[offset + 2],
-                        array[offset + 3]
-                    ] as const;
-                }
-                return [
-                    array[offset + 1],
-                    array[offset + 2],
-                    array[offset + 3],
-                    array[offset + 0]
-                ] as const;
-            };
+
+            // The shader samples quaternions as [x, y, z, w]. Older payloads store
+            // banks as [w, x, y, z], while newer saved PLY4 files annotate XYZW.
             const origIndices = splatData.getProp('original_index');
             if (origIndices) {
                 console.log(`[Debug] 'original_index' detected. First 5: ${origIndices.slice(0, 5).join(', ')}`);
@@ -4141,11 +4128,18 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 for (let k = 0; k < Kvar; k++) {
                     const srcOff = (oidx * Kvar + k) * 4; // Source from Original Index (BIN)
                     const dstOff = (i * Kvar + k) * 4;    // Destination to Sorted Index (Texture)
-                    const xyzw = readQuatAsXYZW(rotData, srcOff);
-                    texData[dstOff + 0] = xyzw[0];
-                    texData[dstOff + 1] = xyzw[1];
-                    texData[dstOff + 2] = xyzw[2];
-                    texData[dstOff + 3] = xyzw[3];
+
+                    if (rotationSemantic === 'xyzw') {
+                        texData[dstOff + 0] = rotData[srcOff + 0]; // x
+                        texData[dstOff + 1] = rotData[srcOff + 1]; // y
+                        texData[dstOff + 2] = rotData[srcOff + 2]; // z
+                        texData[dstOff + 3] = rotData[srcOff + 3]; // w
+                    } else {
+                        texData[dstOff + 0] = rotData[srcOff + 1]; // x
+                        texData[dstOff + 1] = rotData[srcOff + 2]; // y
+                        texData[dstOff + 2] = rotData[srcOff + 3]; // z
+                        texData[dstOff + 3] = rotData[srcOff + 0]; // w
+                    }
                 }
             }
 
@@ -4160,7 +4154,6 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 const dynRot = [this.rotTrajectoryData[0], this.rotTrajectoryData[1], this.rotTrajectoryData[2], this.rotTrajectoryData[3]];
                 const texRot = [texData[0], texData[1], texData[2], texData[3]];
                 console.log(`[Debug] Point 0 Rotation Comparison:`);
-                console.log(`  Parsed semantic: ${rotationSemantic}`);
                 console.log(`  Static (PLY): [${staticRot.map(v => v.toFixed(3))}]`);
                 console.log(`  Dynamic (BIN): [${dynRot.map(v => v.toFixed(3))}]`);
                 console.log(`  Texture (XYZW): [${texRot.map(v => v.toFixed(3))}]`);
@@ -5104,14 +5097,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 selectionData: this.selectionTool?.selectionData,
                 model_pos: this.splatEntity?.getLocalPosition(),
                 model_rot: this.splatEntity?.getLocalRotation(),
-                model_scale: this.splatEntity?.getLocalScale(),
-                cameras: this.cameraPresets.map((camera) => ({
-                    name: camera.name,
-                    pos: [camera.pos.x, camera.pos.y, camera.pos.z],
-                    pitch: camera.pitch,
-                    yaw: camera.yaw,
-                    textObjects: camera.textObjects
-                }))
+                model_scale: this.splatEntity?.getLocalScale()
             };
 
             const buffer = await PLY4Encoder.encode(this.lastParsedData, encodeOverrides, (pct, msg) => {
@@ -5154,10 +5140,126 @@ const duration = parsed.frames || parsed.maxMu || 100;
             const statusEl = document.getElementById('loading-status');
             const detailEl = document.getElementById('loading-detail');
             const bar = document.getElementById('loading-step-progress');
+            const substepsEl = document.getElementById('loading-substeps');
             const squares = Array.from(document.querySelectorAll('.step-square'));
-            const setExportProgress = (pct: number, detail: string) => {
+            const propertyNames = this.lastParsedData?.plyData?.elements?.[0]?.properties?.map((prop: any) => prop.name) || [];
+            const hasShn = propertyNames.some((name: string) => /^f_rest_\d+$/.test(name)) ||
+                Object.keys(this.lastParsedData || {}).some((name) => /^f_rest_\d+$/.test(name));
+            const hasXyzBank = Boolean(
+                (this.lastParsedData?.keyframes > 0 && this.lastParsedData?.trajectory) ||
+                this.lastParsedData?.xyzBank
+            );
+            const hasColorBank = Boolean(this.lastParsedData?.dcKeyframes > 0 && this.lastParsedData?.dcTrajectory);
+            const hasRotationBank = Boolean(
+                (this.lastParsedData?.rotKeyframes > 0 && this.lastParsedData?.rotTrajectory) ||
+                this.lastParsedData?.rotBank
+            );
+            const hasParams = Boolean(this.lastParsedData?.lifetime_mu && this.lastParsedData?.lifetime_w);
+            const stepDefinitions = [
+                { id: 'prepare', label: 'Prepare Export', enabled: true },
+                { id: 'filter', label: 'Filter Deleted', enabled: true },
+                { id: 'means', label: 'Means (XYZ)', enabled: true },
+                { id: 'rotations', label: 'Rotations', enabled: true },
+                { id: 'scales_opacity', label: 'Scales & Opacity', enabled: true },
+                { id: 'shn', label: 'SHN Palette', enabled: hasShn },
+                { id: 'xyz_bank', label: 'XYZ Bank', enabled: hasXyzBank },
+                { id: 'color_bank', label: 'Color Bank', enabled: hasColorBank },
+                { id: 'rotation_bank', label: 'Rotation Bank', enabled: hasRotationBank },
+                { id: 'params', label: 'Params', enabled: hasParams },
+                { id: 'zip', label: 'Package ZIP', enabled: true },
+                { id: 'finalize', label: 'Finalize Download', enabled: true }
+            ].filter((step) => step.enabled);
+            const stepNodes = new Map<string, {
+                row: HTMLDivElement;
+                detail: HTMLDivElement;
+                pct: HTMLDivElement;
+                fill: HTMLDivElement;
+            }>();
+            const resetSubsteps = () => {
+                if (!substepsEl) return;
+                substepsEl.innerHTML = '';
+                substepsEl.classList.add('hidden');
+                substepsEl.classList.remove('flex');
+                stepNodes.clear();
+            };
+            const initializeSubsteps = () => {
+                if (!substepsEl) return;
+                substepsEl.innerHTML = '';
+                substepsEl.classList.remove('hidden');
+                substepsEl.classList.add('flex');
+                stepDefinitions.forEach((step) => {
+                    const row = document.createElement('div');
+                    // #WDD 2026-04-03 默认隐藏所有子任务，只显示正在进行的
+                    row.className = 'loading-substep rounded-lg px-3 py-2 hidden flex-col gap-1';
+                    row.dataset.stepId = step.id;
+
+                    const header = document.createElement('div');
+                    header.className = 'flex items-center justify-between gap-3';
+
+                    const label = document.createElement('div');
+                    label.className = 'text-[9px] font-bold uppercase tracking-[0.18rem] ui-text-primary';
+                    label.innerText = step.label;
+
+                    const pct = document.createElement('div');
+                    pct.className = 'text-[9px] font-mono uppercase ui-text-secondary opacity-80';
+                    pct.innerText = '0%';
+
+                    header.appendChild(label);
+                    header.appendChild(pct);
+
+                    const detail = document.createElement('div');
+                    detail.className = 'text-[8px] font-mono uppercase tracking-tight ui-text-secondary opacity-60';
+                    detail.innerText = 'Pending';
+
+                    const barWrap = document.createElement('div');
+                    barWrap.className = 'loading-substep-bar h-[4px] rounded-full overflow-hidden';
+
+                    const fill = document.createElement('div');
+                    fill.className = 'loading-substep-fill h-full rounded-full transition-all duration-200';
+                    fill.style.width = '0%';
+
+                    barWrap.appendChild(fill);
+                    row.appendChild(header);
+                    row.appendChild(detail);
+                    row.appendChild(barWrap);
+                    substepsEl.appendChild(row);
+                    stepNodes.set(step.id, { row, detail, pct, fill });
+                });
+            };
+            const updateSubstep = (stepId: string, pctValue: number, detail: string, state: 'pending' | 'active' | 'done' = 'active') => {
+                const node = stepNodes.get(stepId);
+                if (!node) return;
+                const clamped = Math.min(Math.max(pctValue, 0), 100);
+                node.fill.style.width = `${clamped}%`;
+                node.pct.innerText = `${Math.round(clamped)}%`;
+                node.detail.innerText = detail || 'Working';
+                node.row.classList.toggle('is-active', state === 'active');
+                node.row.classList.toggle('is-done', state === 'done');
+                
+                // #WDD 2026-04-03 动态显示/隐藏：只显示 state === 'active' 的任务
+                if (state === 'active') {
+                    node.row.classList.remove('hidden');
+                    node.row.classList.add('flex');
+                } else {
+                    node.row.classList.remove('flex');
+                    node.row.classList.add('hidden');
+                }
+            };
+            const completeMissingIntermediateSteps = (currentStepId: string) => {
+                const currentIndex = stepDefinitions.findIndex((step) => step.id === currentStepId);
+                if (currentIndex <= 0) return;
+                for (let i = 0; i < currentIndex; i++) {
+                    const prev = stepDefinitions[i];
+                    const node = stepNodes.get(prev.id);
+                    if (!node) continue;
+                    if (node.fill.style.width !== '100%') {
+                        updateSubstep(prev.id, 100, 'Done', 'done');
+                    }
+                }
+            };
+            const setExportProgress = (pct: number, detail: string, meta?: SOG4EncodeProgressMeta) => {
                 overlay?.classList.remove('hidden');
-                if (statusEl) statusEl.innerText = 'EXPORTING';
+                if (statusEl) statusEl.innerText = 'EXPORTING SOG4';
                 if (detailEl) detailEl.innerText = detail || '';
                 if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
                 const stepMax = Math.max(squares.length - 1, 1);
@@ -5166,9 +5268,25 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     if (idx <= step) square.classList.add('reached');
                     else square.classList.remove('reached');
                 });
+                if (meta?.stageId) {
+                    completeMissingIntermediateSteps(meta.stageId);
+                    updateSubstep(
+                        meta.stageId,
+                        meta.stagePct,
+                        meta.detail || detail,
+                        meta.stagePct >= 100 ? 'done' : 'active'
+                    );
+                }
             };
 
-            setExportProgress(0, 'Preparing export');
+            initializeSubsteps();
+            setExportProgress(0, 'Preparing export', {
+                stageId: 'prepare',
+                stageLabel: 'Prepare Export',
+                stagePct: 0,
+                overallPct: 0,
+                detail: 'Collecting export inputs'
+            });
 
             const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
             if (this.splatEntity) {
@@ -5193,13 +5311,27 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     if (selData[i * 4 + 1] > 0) deletedIndices.push(i);
                 }
             }
-            setExportProgress(5, `Deleted splats: ${deletedIndices.length}`);
+            setExportProgress(5, `Deleted splats: ${deletedIndices.length}`, {
+                stageId: 'prepare',
+                stageLabel: 'Prepare Export',
+                stagePct: 100,
+                overallPct: 5,
+                detail: `Transform, cameras, and source state ready`
+            });
+            setExportProgress(6, `Deleted splats: ${deletedIndices.length}`, {
+                stageId: 'filter',
+                stageLabel: 'Filter Deleted',
+                stagePct: deletedIndices.length > 0 ? 10 : 100,
+                overallPct: 6,
+                detail: deletedIndices.length > 0
+                    ? `Marked ${deletedIndices.length} deleted splats`
+                    : 'No deleted splats'
+            });
 
             const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
             const hasDeletes = deletedIndices.length > 0;
             let buffer: Uint8Array;
 
-            setExportProgress(8, 'Re-encoding SOG4 archive...');
             const encodeOverrides: any = {
                 rawFloatPayload: false,
                 model_transform: transform,
@@ -5215,13 +5347,22 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 encodeOverrides.deleted_indices = deletedIndices;
                 if (origIndices) encodeOverrides.original_indices = origIndices;
             }
-            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string) => {
-                setExportProgress(8 + (pct * 0.8), `Encoding: ${msg}`);
+            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string, meta?: SOG4EncodeProgressMeta) => {
+                setExportProgress(8 + (pct * 0.84), `Encoding: ${msg}`, meta ? {
+                    ...meta,
+                    overallPct: 8 + (pct * 0.84)
+                } : undefined);
             });
             this.lastParsedData.sogBuffer = buffer;
             this.lastParsedData.isSOG4 = true;
             this.lastParsedData.needsSOG4Rewrite = false;
-            setExportProgress(92, 'Final archive ready');
+            setExportProgress(94, 'Final archive ready', {
+                stageId: 'finalize',
+                stageLabel: 'Finalize Download',
+                stagePct: 40,
+                overallPct: 94,
+                detail: 'Preparing browser download'
+            });
             const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
             const filename = `saved_${baseName}.sog4`;
 
@@ -5233,12 +5374,27 @@ const duration = parsed.frames || parsed.maxMu || 100;
             a.click();
             URL.revokeObjectURL(url);
             console.log(`[Export] Saved .sog4: ${filename}`);
-            setExportProgress(100, 'Export complete');
-            setTimeout(() => { overlay?.classList.add('hidden'); }, 600);
+            setExportProgress(100, 'Export complete', {
+                stageId: 'finalize',
+                stageLabel: 'Finalize Download',
+                stagePct: 100,
+                overallPct: 100,
+                detail: filename
+            });
+            setTimeout(() => {
+                overlay?.classList.add('hidden');
+                resetSubsteps();
+            }, 600);
         } catch (e: any) {
             console.error("[Export] Save SOG4 failed:", e);
             alert("Save failed: " + e.message);
             document.getElementById('loading-overlay')?.classList.add('hidden');
+            const substepsEl = document.getElementById('loading-substeps');
+            if (substepsEl) {
+                substepsEl.innerHTML = '';
+                substepsEl.classList.add('hidden');
+                substepsEl.classList.remove('flex');
+            }
         }
     }
 }

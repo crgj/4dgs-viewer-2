@@ -10,18 +10,17 @@ export class PLY4Loader {
 
     async load(file: File | ArrayBuffer, progressCallback?: (progress: number, message: string) => void): Promise<any> {
         if (file instanceof File) {
-            const strictPly4 = file.name.toLowerCase().endsWith('.ply4');
-            return this.parsePLYFile(file, progressCallback, strictPly4);
+            return this.parsePLYFile(file, progressCallback);
         }
         return this.parsePLYBuffer(file, progressCallback);
     }
 
-    private async parsePLYFile(file: File, onProgress?: (p: number, msg: string) => void, strictPly4 = false) {
+    private async parsePLYFile(file: File, onProgress?: (p: number, msg: string) => void) {
         if (onProgress) onProgress(0, "Parsing PLY Header");
 
         const headerChunk = await file.slice(0, PLY4Loader.HEADER_PROBE_BYTES).arrayBuffer();
         const { headerEnd, headerText } = this.extractHeaderFromBuffer(headerChunk);
-        const parsedHeader = this.parseHeaderText(headerText, { strictPly4 });
+        const parsedHeader = this.parseHeaderText(headerText);
         this.ensureWithinBrowserMemoryBudget(parsedHeader);
         const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames, parsedHeader.frestNames);
 
@@ -70,7 +69,8 @@ export class PLY4Loader {
                 dcBankNames,
                 parsedHeader.fdcNames,
                 parsedHeader.frestNames,
-                startRow
+                startRow,
+                parsedHeader.rotationSemantic
             );
 
             if (onProgress) {
@@ -133,7 +133,8 @@ export class PLY4Loader {
             dcBankNames,
             parsedHeader.fdcNames,
             parsedHeader.frestNames,
-            0
+            0,
+            parsedHeader.rotationSemantic
         );
 
         if (onProgress) onProgress(100, "Done");
@@ -165,7 +166,7 @@ export class PLY4Loader {
         throw new Error(`PLY4 Loader: Could not find end_header within first ${PLY4Loader.HEADER_PROBE_BYTES / 1024} KB.`);
     }
 
-    private parseHeaderText(headerText: string, options: { strictPly4?: boolean } = {}) {
+    private parseHeaderText(headerText: string) {
         const headerLines = headerText.split('\n');
         let isBinary = false;
         let isLittleEndian = true;
@@ -175,15 +176,10 @@ export class PLY4Loader {
         let xyzStride = 1;
         let rotStride = 1;
         let dcStride = 1;
-        let hasTotalFramesComment = false;
-        let hasXYZStrideComment = false;
-        let hasRotStrideComment = false;
-        let hasDCStrideComment = false;
         let modelPos: pc.Vec3 | null = null;
         let modelRot: pc.Quat | null = null;
         let modelScale: pc.Vec3 | null = null;
-        const cameras: any[] = [];
-        const extraComments: string[] = [];
+        let rotationSemantic: 'wxyz' | 'xyzw' = 'wxyz'; // #WDD 2026-04-03 Default to WXYZ per master_ply_format(1).md
         const fdcNames: string[] = [];
         const frestNames: string[] = [];
 
@@ -215,40 +211,29 @@ export class PLY4Loader {
                 } else if (name.startsWith('f_rest_')) {
                     frestNames.push(name);
                 }
-            } else if (parts[0] === 'comment' && parts.length >= 3) {
-                const key = parts[1];
-                const values = parts.slice(2);
-                if (key === 'total_frames') {
-                    hasTotalFramesComment = true;
-                    totalFrames = parseInt(values[0], 10);
-                } else if (key === 'xyz_bank_keyframe_stride') {
-                    hasXYZStrideComment = true;
-                    xyzStride = parseInt(values[0], 10);
-                } else if (key === 'rot_bank_keyframe_stride') {
-                    hasRotStrideComment = true;
-                    rotStride = parseInt(values[0], 10);
-                } else if (key === 'features_dc_bank_keyframe_stride') {
-                    hasDCStrideComment = true;
-                    dcStride = parseInt(values[0], 10);
-                } else if (key === 'model_pos' && values.length >= 3) {
-                    modelPos = new pc.Vec3(parseFloat(values[0]), parseFloat(values[1]), parseFloat(values[2]));
-                } else if (key === 'model_rot' && values.length >= 4) {
-                    modelRot = new pc.Quat(parseFloat(values[0]), parseFloat(values[1]), parseFloat(values[2]), parseFloat(values[3]));
-                } else if (key === 'model_scale' && values.length >= 3) {
-                    modelScale = new pc.Vec3(parseFloat(values[0]), parseFloat(values[1]), parseFloat(values[2]));
-                } else if (key === 'camera_preset') {
-                    const jsonText = line.trim().slice('comment camera_preset '.length);
-                    try {
-                        const preset = JSON.parse(jsonText);
-                        if (preset && typeof preset === 'object') {
-                            cameras.push(preset);
-                        }
-                    } catch (err) {
-                        console.warn('[PLY4] Failed to parse camera preset comment:', err);
-                        extraComments.push(line.trim().slice('comment '.length));
+            } else if (parts[0] === 'comment') {
+                if (line.includes('total_frames')) totalFrames = parseInt(parts[parts.indexOf('total_frames') + 1], 10);
+                if (line.includes('xyz_bank_keyframe_stride')) xyzStride = parseInt(parts[parts.indexOf('xyz_bank_keyframe_stride') + 1], 10);
+                if (line.includes('rot_bank_keyframe_stride')) rotStride = parseInt(parts[parts.indexOf('rot_bank_keyframe_stride') + 1], 10);
+                if (line.includes('rot_bank_component_order')) {
+                    const idx = parts.indexOf('rot_bank_component_order');
+                    const order = parts[idx + 1];
+                    if (order === 'xyzw' || order === 'wxyz') {
+                        rotationSemantic = order;
                     }
-                } else {
-                    extraComments.push(line.trim().slice('comment '.length));
+                }
+                if (line.includes('features_dc_bank_keyframe_stride')) dcStride = parseInt(parts[parts.indexOf('features_dc_bank_keyframe_stride') + 1], 10);
+                if (line.includes('model_pos')) {
+                    const idx = parts.indexOf('model_pos');
+                    modelPos = new pc.Vec3(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]));
+                }
+                if (line.includes('model_rot')) {
+                    const idx = parts.indexOf('model_rot');
+                    modelRot = new pc.Quat(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]), parseFloat(parts[idx + 4]));
+                }
+                if (line.includes('model_scale')) {
+                    const idx = parts.indexOf('model_scale');
+                    modelScale = new pc.Vec3(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]));
                 }
             }
         }
@@ -259,24 +244,15 @@ export class PLY4Loader {
         propertyTypes.forEach((p) => {
             if (p.name.startsWith('xyz_bank_')) {
                 const parts = p.name.split('_');
-                if (parts.length >= 4) {
-                    const index = parseInt(parts[2], 10);
-                    if (Number.isInteger(index)) maxK_xyz = Math.max(maxK_xyz, index);
-                }
+                if (parts.length >= 4) maxK_xyz = Math.max(maxK_xyz, parseInt(parts[2], 10) || -1);
             }
             if (p.name.startsWith('rot_bank_')) {
                 const parts = p.name.split('_');
-                if (parts.length >= 4) {
-                    const index = parseInt(parts[2], 10);
-                    if (Number.isInteger(index)) maxK_rot = Math.max(maxK_rot, index);
-                }
+                if (parts.length >= 4) maxK_rot = Math.max(maxK_rot, parseInt(parts[2], 10) || -1);
             }
             if (p.name.startsWith('f_dc_bank_')) {
                 const parts = p.name.split('_');
-                if (parts.length >= 5) {
-                    const index = parseInt(parts[3], 10);
-                    if (Number.isInteger(index)) maxK_dc = Math.max(maxK_dc, index);
-                }
+                if (parts.length >= 5) maxK_dc = Math.max(maxK_dc, parseInt(parts[3], 10) || -1);
             }
         });
 
@@ -286,130 +262,15 @@ export class PLY4Loader {
         const K_xyz = maxK_xyz + 1;
         const K_rot = maxK_rot > -1 ? maxK_rot + 1 : 0;
         const K_dc = maxK_dc > -1 ? maxK_dc + 1 : 0;
-        const hasPly4Metadata = hasTotalFramesComment || hasXYZStrideComment || hasRotStrideComment || hasDCStrideComment;
-        const hasBankProperties = K_xyz > 0 || K_rot > 0 || K_dc > 0;
-        const isStrictPly4 = options.strictPly4 || hasPly4Metadata || hasBankProperties;
-
-        if (isStrictPly4) {
-            this.validateStrictPly4({
-                isBinary,
-                isLittleEndian,
-                vertexCount,
-                propertyTypes,
-                totalFrames,
-                xyzStride,
-                rotStride,
-                dcStride,
-                hasTotalFramesComment,
-                hasXYZStrideComment,
-                hasRotStrideComment,
-                hasDCStrideComment,
-                K_xyz,
-                K_rot,
-                K_dc,
-                fdcNames,
-                frestNames
-            });
-        }
 
         console.log(`[PLY4] Meta: Frames=${totalFrames}, K_xyz=${K_xyz} (Stride ${xyzStride}), K_rot=${K_rot} (Stride ${rotStride}), K_dc=${K_dc} (Stride ${dcStride})`);
 
-        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, cameras, extraComments, K_xyz, K_rot, K_dc, fdcNames, frestNames, isStrictPly4 };
-    }
-
-    private validateStrictPly4(parsedHeader: {
-        isBinary: boolean;
-        isLittleEndian: boolean;
-        vertexCount: number;
-        propertyTypes: { name: string; type: string }[];
-        totalFrames: number;
-        xyzStride: number;
-        rotStride: number;
-        dcStride: number;
-        hasTotalFramesComment: boolean;
-        hasXYZStrideComment: boolean;
-        hasRotStrideComment: boolean;
-        hasDCStrideComment: boolean;
-        K_xyz: number;
-        K_rot: number;
-        K_dc: number;
-        fdcNames: string[];
-        frestNames: string[];
-    }) {
-        if (!parsedHeader.isBinary || !parsedHeader.isLittleEndian) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires format `binary_little_endian 1.0`.');
-        }
-        if (parsedHeader.vertexCount < 0) {
-            throw new Error('PLY4 Loader: Invalid vertex count.');
-        }
-
-        const invalidType = parsedHeader.propertyTypes.find((prop) => prop.type !== 'float' && prop.type !== 'float32');
-        if (invalidType) {
-            throw new Error(`PLY4 Loader: Strict PLY4 requires all vertex properties to be float32. Invalid property: ${invalidType.name} (${invalidType.type}).`);
-        }
-
-        if (!parsedHeader.hasTotalFramesComment || !Number.isInteger(parsedHeader.totalFrames) || parsedHeader.totalFrames < 1) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires `comment total_frames <int>` with value >= 1.');
-        }
-        if (parsedHeader.K_xyz < 1) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires at least one XYZ bank keyframe group.');
-        }
-        if (!parsedHeader.hasXYZStrideComment || !Number.isInteger(parsedHeader.xyzStride) || parsedHeader.xyzStride < 1) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires `comment xyz_bank_keyframe_stride <int>` with value >= 1.');
-        }
-        if (parsedHeader.K_rot > 0 && (!parsedHeader.hasRotStrideComment || !Number.isInteger(parsedHeader.rotStride) || parsedHeader.rotStride < 1)) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires `comment rot_bank_keyframe_stride <int>` when ROT bank properties exist.');
-        }
-        if (parsedHeader.K_dc > 0 && (!parsedHeader.hasDCStrideComment || !Number.isInteger(parsedHeader.dcStride) || parsedHeader.dcStride < 1)) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires `comment features_dc_bank_keyframe_stride <int>` when DC bank properties exist.');
-        }
-
-        const expectedDC = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
-        if (parsedHeader.fdcNames.length !== expectedDC.length || parsedHeader.fdcNames.some((name, index) => name !== expectedDC[index])) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires exactly `f_dc_0`, `f_dc_1`, `f_dc_2` in order.');
-        }
-        if (parsedHeader.frestNames.some((name, index) => name !== `f_rest_${index}`)) {
-            throw new Error('PLY4 Loader: Strict PLY4 requires contiguous `f_rest_0 ... f_rest_N` properties.');
-        }
-
-        const expectedPropertyNames: string[] = [
-            'x', 'y', 'z',
-            'nx', 'ny', 'nz',
-            ...expectedDC,
-            ...parsedHeader.frestNames,
-            'opacity',
-            'scale_0', 'scale_1', 'scale_2',
-            'lifetime_mu', 'lifetime_w'
-        ];
-        for (let k = 0; k < parsedHeader.K_xyz; k++) {
-            expectedPropertyNames.push(`xyz_bank_${k}_x`, `xyz_bank_${k}_y`, `xyz_bank_${k}_z`);
-        }
-        for (let k = 0; k < parsedHeader.K_rot; k++) {
-            expectedPropertyNames.push(`rot_bank_${k}_x`, `rot_bank_${k}_y`, `rot_bank_${k}_z`, `rot_bank_${k}_w`);
-        }
-        for (let k = 0; k < parsedHeader.K_dc; k++) {
-            expectedPropertyNames.push(`f_dc_bank_${k}_0`, `f_dc_bank_${k}_1`, `f_dc_bank_${k}_2`);
-        }
-
-        const actualPropertyNames = parsedHeader.propertyTypes.map((prop) => prop.name);
-        if (actualPropertyNames.length !== expectedPropertyNames.length) {
-            throw new Error(
-                `PLY4 Loader: Strict PLY4 property count mismatch. Expected ${expectedPropertyNames.length}, got ${actualPropertyNames.length}.`
-            );
-        }
-        const mismatchIndex = expectedPropertyNames.findIndex((name, index) => actualPropertyNames[index] !== name);
-        if (mismatchIndex !== -1) {
-            throw new Error(
-                `PLY4 Loader: Strict PLY4 property order mismatch at index ${mismatchIndex}. ` +
-                `Expected \`${expectedPropertyNames[mismatchIndex]}\`, got \`${actualPropertyNames[mismatchIndex]}\`.`
-            );
-        }
+        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, rotationSemantic, K_xyz, K_rot, K_dc, fdcNames, frestNames };
     }
 
     private createDataArrays(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcNames: string[], frestNames: string[]) {
         const data: any = {
             x: new Float32Array(count), y: new Float32Array(count), z: new Float32Array(count),
-            nx: new Float32Array(count), ny: new Float32Array(count), nz: new Float32Array(count),
             opacity: new Float32Array(count),
             scale_0: new Float32Array(count), scale_1: new Float32Array(count), scale_2: new Float32Array(count),
             rot_0: new Float32Array(count), rot_1: new Float32Array(count), rot_2: new Float32Array(count), rot_3: new Float32Array(count),
@@ -436,7 +297,7 @@ export class PLY4Loader {
 
     private estimateCpuAllocationBytes(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcCount: number, frestCount: number) {
         const bytesPerFloat = 4;
-        const baseFloats = count * (17 + fdcCount);
+        const baseFloats = count * (14 + fdcCount);
         const fRestFloats = count * frestCount;
         const xyzFloats = count * K_xyz * 3;
         const rotFloats = count * K_rot * 4;
@@ -468,7 +329,8 @@ export class PLY4Loader {
     }
 
     private buildRotBankNames(K_rot: number) {
-        return Array.from({ length: K_rot }, (_, k) => [`rot_bank_${k}_x`, `rot_bank_${k}_y`, `rot_bank_${k}_z`, `rot_bank_${k}_w`]);
+        // #WDD 2026-04-03 Updated order to WXYZ to match master_ply_format(1).md
+        return Array.from({ length: K_rot }, (_, k) => [`rot_bank_${k}_w`, `rot_bank_${k}_x`, `rot_bank_${k}_y`, `rot_bank_${k}_z`]);
     }
 
     private buildDCBankNames(K_dc: number) {
@@ -491,7 +353,8 @@ export class PLY4Loader {
         dcBankNames: string[][],
         fdcNames: string[],
         frestNames: string[],
-        globalStartRow: number
+        globalStartRow: number,
+        rotationSemantic: 'wxyz' | 'xyzw'
     ) {
         const getFloat = (name: string, rowBase: number) => {
             if (propOffsets[name] === undefined) return 0;
@@ -525,6 +388,7 @@ export class PLY4Loader {
 
             data.lifetime_mu[i] = getFloat('lifetime_mu', rowBase);
             data.lifetime_w[i] = getFloat('lifetime_w', rowBase);
+            // #WDD 2026-04-03 Default k=10.0 per master_ply_format(1).md
             data.lifetime_k[i] = hasProp('lifetime_k') ? getFloat('lifetime_k', rowBase) : 10.0;
 
             if (K_xyz > 0) {
@@ -539,33 +403,30 @@ export class PLY4Loader {
             if (K_rot > 0) {
                 for (let k = 0; k < K_rot; k++) {
                     const bIdx = (i * K_rot + k) * 4;
-                    const qx = getFloat(rotBankNames[k][0], rowBase);
-                    const qy = getFloat(rotBankNames[k][1], rowBase);
-                    const qz = getFloat(rotBankNames[k][2], rowBase);
-                    const qw = getFloat(rotBankNames[k][3], rowBase);
-                    data.rotBank[bIdx + 0] = qx;
-                    data.rotBank[bIdx + 1] = qy;
-                    data.rotBank[bIdx + 2] = qz;
-                    data.rotBank[bIdx + 3] = qw;
+                    data.rotBank[bIdx + 0] = getFloat(rotBankNames[k][0], rowBase);
+                    data.rotBank[bIdx + 1] = getFloat(rotBankNames[k][1], rowBase);
+                    data.rotBank[bIdx + 2] = getFloat(rotBankNames[k][2], rowBase);
+                    data.rotBank[bIdx + 3] = getFloat(rotBankNames[k][3], rowBase);
                 }
-            }
-
-            if (hasProp('rot_0')) {
-                data.rot_0[i] = getFloat('rot_0', rowBase);
-                data.rot_1[i] = getFloat('rot_1', rowBase);
-                data.rot_2[i] = getFloat('rot_2', rowBase);
-                data.rot_3[i] = getFloat('rot_3', rowBase);
-            } else if (K_rot > 0) {
-                const base = i * K_rot * 4;
-                data.rot_0[i] = data.rotBank[base + 3];
-                data.rot_1[i] = data.rotBank[base + 0];
-                data.rot_2[i] = data.rotBank[base + 1];
-                data.rot_3[i] = data.rotBank[base + 2];
+                const staticBase = i * K_rot * 4;
+                // #WDD 2026-04-03 Handles internal representation conversion. 
+                // PLY4 stores WXYZ. Shader/Main expects to correctly map this to the GPU texture.
+                if (rotationSemantic === 'xyzw') {
+                    data.rot_0[i] = data.rotBank[staticBase + 3];
+                    data.rot_1[i] = data.rotBank[staticBase + 0];
+                    data.rot_2[i] = data.rotBank[staticBase + 1];
+                    data.rot_3[i] = data.rotBank[staticBase + 2];
+                } else {
+                    data.rot_0[i] = data.rotBank[staticBase + 0];
+                    data.rot_1[i] = data.rotBank[staticBase + 1];
+                    data.rot_2[i] = data.rotBank[staticBase + 2];
+                    data.rot_3[i] = data.rotBank[staticBase + 3];
+                }
             } else {
-                data.rot_0[i] = 1;
-                data.rot_1[i] = 0;
-                data.rot_2[i] = 0;
-                data.rot_3[i] = 0;
+                data.rot_0[i] = hasProp('rot_0') ? getFloat('rot_0', rowBase) : 1;
+                data.rot_1[i] = hasProp('rot_1') ? getFloat('rot_1', rowBase) : 0;
+                data.rot_2[i] = hasProp('rot_2') ? getFloat('rot_2', rowBase) : 0;
+                data.rot_3[i] = hasProp('rot_3') ? getFloat('rot_3', rowBase) : 0;
             }
 
             if (K_dc > 0) {
@@ -587,17 +448,6 @@ export class PLY4Loader {
             { name: 'x', type: 'float', storage: data.x },
             { name: 'y', type: 'float', storage: data.y },
             { name: 'z', type: 'float', storage: data.z },
-            { name: 'nx', type: 'float', storage: data.nx },
-            { name: 'ny', type: 'float', storage: data.ny },
-            { name: 'nz', type: 'float', storage: data.nz },
-        ];
-        for (const name of fdcNames) {
-            properties.push({ name, type: 'float', storage: data[name] });
-        }
-        for (const name of frestNames) {
-            properties.push({ name, type: 'float', storage: data[name] });
-        }
-        properties.push(
             { name: 'opacity', type: 'float', storage: data.opacity },
             { name: 'scale_0', type: 'float', storage: data.scale_0 },
             { name: 'scale_1', type: 'float', storage: data.scale_1 },
@@ -609,13 +459,19 @@ export class PLY4Loader {
             { name: 'lifetime_mu', type: 'float', storage: data.lifetime_mu },
             { name: 'lifetime_w', type: 'float', storage: data.lifetime_w },
             { name: 'lifetime_k', type: 'float', storage: data.lifetime_k },
-        );
+        ];
+        for (const name of fdcNames) {
+            properties.push({ name, type: 'float', storage: data[name] });
+        }
+        for (const name of frestNames) {
+            properties.push({ name, type: 'float', storage: data[name] });
+        }
 
         return {
             x: data.x, y: data.y, z: data.z,
             opacity: data.opacity,
             opacitySemantic: 'logit',
-            rotationSemantic: 'xyzw',
+            rotationSemantic: parsedHeader.rotationSemantic,
             scale_0: data.scale_0, scale_1: data.scale_1, scale_2: data.scale_2,
             rot_0: data.rot_0, rot_1: data.rot_1, rot_2: data.rot_2, rot_3: data.rot_3,
             f_dc_0: data.f_dc_0, f_dc_1: data.f_dc_1, f_dc_2: data.f_dc_2,
@@ -639,13 +495,10 @@ export class PLY4Loader {
             dcKeyframes: parsedHeader.K_dc,
             dcStride: parsedHeader.dcStride,
             bands: frestNames.length >= 45 ? 3 : (frestNames.length >= 24 ? 2 : (frestNames.length >= 9 ? 1 : 0)),
-            strictPly4: parsedHeader.isStrictPly4,
-            cameras: parsedHeader.cameras,
             meta: {
                 modelPos: parsedHeader.modelPos,
                 modelRot: parsedHeader.modelRot,
-                modelScale: parsedHeader.modelScale,
-                extraComments: parsedHeader.extraComments
+                modelScale: parsedHeader.modelScale
             }
         };
     }

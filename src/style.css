@@ -548,6 +548,33 @@ body.theme-light {
     box-shadow: 0 0 15px var(--accent-glow);
 }
 
+#loading-substeps {
+    max-height: 240px;
+}
+
+.loading-substep {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.loading-substep.is-active {
+    border-color: rgba(16, 185, 129, 0.45);
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.12);
+}
+
+.loading-substep.is-done {
+    border-color: rgba(16, 185, 129, 0.28);
+}
+
+.loading-substep-bar {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.loading-substep-fill {
+    background: linear-gradient(90deg, rgba(16, 185, 129, 0.7), rgba(110, 231, 183, 0.95));
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+}
+
 /* Text Object Styles #WDD 2026-01-15 */
 .text-object {
     position: absolute;
