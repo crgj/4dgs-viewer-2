@@ -4103,15 +4103,28 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.rotStride = parsed.rotStride || 1;
 
             const rotData = parsed.rotTrajectory as Float32Array;
+            const rotationSemantic = parsed.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz';
             const Kvar = parsed.rotKeyframes || 0;
             const texWidth = 4096;
             const totalPixels = numSplats * Kvar;
             const texHeight = Math.ceil(totalPixels / texWidth);
             const texData = new Float32Array(texWidth * texHeight * 4);
-
-            // PLY4 / GSplatData stores quaternion properties as [w, x, y, z]
-            // (rot_0 is w). The runtime shader expects [x, y, z, w], so swizzle
-            // here while packing the rotation texture.
+            const readQuatAsXYZW = (array: Float32Array, offset: number) => {
+                if (rotationSemantic === 'xyzw') {
+                    return [
+                        array[offset + 0],
+                        array[offset + 1],
+                        array[offset + 2],
+                        array[offset + 3]
+                    ] as const;
+                }
+                return [
+                    array[offset + 1],
+                    array[offset + 2],
+                    array[offset + 3],
+                    array[offset + 0]
+                ] as const;
+            };
             const origIndices = splatData.getProp('original_index');
             if (origIndices) {
                 console.log(`[Debug] 'original_index' detected. First 5: ${origIndices.slice(0, 5).join(', ')}`);
@@ -4128,11 +4141,11 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 for (let k = 0; k < Kvar; k++) {
                     const srcOff = (oidx * Kvar + k) * 4; // Source from Original Index (BIN)
                     const dstOff = (i * Kvar + k) * 4;    // Destination to Sorted Index (Texture)
-
-                    texData[dstOff + 0] = rotData[srcOff + 1]; // x
-                    texData[dstOff + 1] = rotData[srcOff + 2]; // y
-                    texData[dstOff + 2] = rotData[srcOff + 3]; // z
-                    texData[dstOff + 3] = rotData[srcOff + 0]; // w
+                    const xyzw = readQuatAsXYZW(rotData, srcOff);
+                    texData[dstOff + 0] = xyzw[0];
+                    texData[dstOff + 1] = xyzw[1];
+                    texData[dstOff + 2] = xyzw[2];
+                    texData[dstOff + 3] = xyzw[3];
                 }
             }
 
@@ -4147,6 +4160,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 const dynRot = [this.rotTrajectoryData[0], this.rotTrajectoryData[1], this.rotTrajectoryData[2], this.rotTrajectoryData[3]];
                 const texRot = [texData[0], texData[1], texData[2], texData[3]];
                 console.log(`[Debug] Point 0 Rotation Comparison:`);
+                console.log(`  Parsed semantic: ${rotationSemantic}`);
                 console.log(`  Static (PLY): [${staticRot.map(v => v.toFixed(3))}]`);
                 console.log(`  Dynamic (BIN): [${dynRot.map(v => v.toFixed(3))}]`);
                 console.log(`  Texture (XYZW): [${texRot.map(v => v.toFixed(3))}]`);
@@ -5090,7 +5104,14 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 selectionData: this.selectionTool?.selectionData,
                 model_pos: this.splatEntity?.getLocalPosition(),
                 model_rot: this.splatEntity?.getLocalRotation(),
-                model_scale: this.splatEntity?.getLocalScale()
+                model_scale: this.splatEntity?.getLocalScale(),
+                cameras: this.cameraPresets.map((camera) => ({
+                    name: camera.name,
+                    pos: [camera.pos.x, camera.pos.y, camera.pos.z],
+                    pitch: camera.pitch,
+                    yaw: camera.yaw,
+                    textObjects: camera.textObjects
+                }))
             };
 
             const buffer = await PLY4Encoder.encode(this.lastParsedData, encodeOverrides, (pct, msg) => {
