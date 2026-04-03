@@ -800,10 +800,10 @@ export class SOG4Loader {
         };
 
         const encodeCanvasToImage = async (canvas: any, fileName: string): Promise<ArrayBuffer> => {
-            // #WDD 2026-03-26 Fix SOG4 save corruption: force lossless PNG even for .webp files
-            const preferredType = 'image/png';
+            const prefersWebp = fileName.toLowerCase().endsWith('.webp');
+            const preferredType = prefersWebp ? 'image/webp' : 'image/png';
             if (typeof canvas.convertToBlob === 'function') {
-                let blob = await canvas.convertToBlob({ type: preferredType });
+                let blob = await canvas.convertToBlob({ type: preferredType, quality: 1 });
                 if (!blob || blob.size === 0) {
                     blob = await canvas.convertToBlob({ type: 'image/png' });
                 }
@@ -813,14 +813,14 @@ export class SOG4Loader {
                 const tryType = (type: string, fallback: boolean) => {
                     canvas.toBlob(async (blob: Blob | null) => {
                         if (!blob || blob.size === 0) {
-                            if (fallback) return tryType('image/png', false);
+                            if (fallback && type !== 'image/png') return tryType('image/png', false);
                             reject(new Error("Failed to encode texture"));
                             return;
                         }
                         resolve(await blob.arrayBuffer());
-                    }, type);
+                    }, type, 1);
                 };
-                tryType(preferredType, true);
+                tryType(preferredType, prefersWebp);
             });
         };
 

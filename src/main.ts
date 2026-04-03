@@ -5189,6 +5189,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 usedDirectEncode = true;
                 setExportProgress(8, needsSog4Rewrite ? 'Repairing and re-encoding SOG4 archive...' : 'Encoding final SOG4 archive...');
                 const encodeOverrides: any = {
+                    rawFloatPayload: false,
                     model_transform: transform,
                     cameras: cameras,
                     postProcessing: {

@@ -58,7 +58,7 @@ export class SOG4Encoder {
         };
         const fRestNames = Object.keys(p).filter((name) => /^f_rest_\d+$/.test(name)).sort((a, b) => extractTrailingIndex(a) - extractTrailingIndex(b));
         const opacitySemantic = data.opacitySemantic;
-        const rawMode = overrides.rawFloatPayload !== false;
+        const rawMode = overrides.rawFloatPayload === true;
 
         if (rawMode) {
             progress?.(5, "Encoding Raw Float Payload...");
@@ -165,18 +165,36 @@ export class SOG4Encoder {
             return { canvas, ctx, img, data: img.data };
         };
 
-        const renderTex = async (tex: any): Promise<ArrayBuffer> => {
+        const chooseImageType = (fileName: string) => fileName.toLowerCase().endsWith('.webp') ? 'image/webp' : 'image/png';
+
+        const renderTex = async (tex: any, fileName: string): Promise<ArrayBuffer> => {
             tex.ctx.putImageData(tex.img, 0, 0);
             let blob;
+            const preferredType = chooseImageType(fileName);
             if (typeof tex.canvas.convertToBlob === 'function') {
-                blob = await tex.canvas.convertToBlob({ type: 'image/png' });
+                blob = await tex.canvas.convertToBlob({ type: preferredType, quality: 1 });
+                if ((!blob || blob.size === 0) && preferredType !== 'image/png') {
+                    blob = await tex.canvas.convertToBlob({ type: 'image/png' });
+                }
             } else {
-                blob = await new Promise<Blob>((res, rej) => tex.canvas.toBlob((b: Blob) => b ? res(b) : rej(), 'image/png'));
+                blob = await new Promise<Blob>((res, rej) => {
+                    const tryType = (type: string, fallback: boolean) => {
+                        tex.canvas.toBlob((b: Blob) => {
+                            if (!b || b.size === 0) {
+                                if (fallback && type !== 'image/png') return tryType('image/png', false);
+                                rej();
+                                return;
+                            }
+                            res(b);
+                        }, type, 1);
+                    };
+                    tryType(preferredType, true);
+                });
             }
             return await blob.arrayBuffer();
         };
         const saveTex = async (tex: any, name: string) => {
-            zip.file(name, await renderTex(tex));
+            zip.file(name, await renderTex(tex, name));
         };
         const maxParallel = Math.max(1, Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency)
             ? Math.floor(navigator.hardwareConcurrency / 2)
@@ -195,7 +213,7 @@ export class SOG4Encoder {
             if (ly[i] < minY) minY = ly[i]; if (ly[i] > maxY) maxY = ly[i];
             if (lz[i] < minZ) minZ = lz[i]; if (lz[i] > maxZ) maxZ = lz[i];
         }
-        meta.means = { mins: [minX, minY, minZ], maxs: [maxX, maxY, maxZ], files: ['means_L.png', 'means_U.png'] };
+        meta.means = { mins: [minX, minY, minZ], maxs: [maxX, maxY, maxZ], files: ['means_L.webp', 'means_U.webp'] };
         const mL = createTex(), mU = createTex();
         for (let i = 0; i < count; i++) {
             const valX = Math.round(((lx[i] - minX) / (maxX - minX || 1)) * 65535);
@@ -207,11 +225,11 @@ export class SOG4Encoder {
             mL.data[di + 2] = valZ & 0xFF; mU.data[di + 2] = (valZ >> 8) & 0xFF;
             mL.data[di + 3] = 255; mU.data[di + 3] = 255;
         }
-        await saveTex(mL, 'means_L.png'); await saveTex(mU, 'means_U.png');
+        await saveTex(mL, 'means_L.webp'); await saveTex(mU, 'means_U.webp');
 
         progress?.(30, "Encoding Rotations...");
         // 2. QUATS
-        meta.quats = { files: ['rotation.png'] };
+        meta.quats = { files: ['rotation.webp'] };
         const qTex = createTex();
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
@@ -234,7 +252,7 @@ export class SOG4Encoder {
             }
             qTex.data[di + 3] = 252 + maxIdx;
         }
-        await saveTex(qTex, 'rotation.png');
+        await saveTex(qTex, 'rotation.webp');
 
         progress?.(45, "Encoding Scales & Opacity...");
         // 3. SCALES (Uniform 256 Codebook)
@@ -251,7 +269,7 @@ export class SOG4Encoder {
             if (ls2[i] < minS) minS = ls2[i]; if (ls2[i] > maxS) maxS = ls2[i];
         }
         const scaleCb = new Array(256).fill(0).map((_, i) => minS + (i / 255) * (maxS - minS || 1));
-        meta.scales = { codebook: scaleCb, files: ['scales.png'] };
+        meta.scales = { codebook: scaleCb, files: ['scales.webp'] };
         const sTex = createTex();
         for (let i = 0; i < count; i++) {
             // Encode using the logged values
@@ -260,7 +278,7 @@ export class SOG4Encoder {
             sTex.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(((ls2[i] - minS) / (maxS - minS || 1)) * 255)));
             sTex.data[i * 4 + 3] = 255;
         }
-        await saveTex(sTex, 'scales.png');
+        await saveTex(sTex, 'scales.webp');
 
         // 4. SH0 & OPACITY (Uniform 256 Codebook for SH0, Linear A channel for Opacity)
         let minSH = 1e9, maxSH = -1e9;
@@ -272,7 +290,7 @@ export class SOG4Encoder {
             if (p.f_dc_2[src] < minSH) minSH = p.f_dc_2[src]; if (p.f_dc_2[src] > maxSH) maxSH = p.f_dc_2[src];
         }
         const shCb = new Array(256).fill(0).map((_, i) => minSH + (i / 255) * (maxSH - minSH || 1));
-        meta.sh0 = { codebook: shCb, files: ['sh0.png'] };
+        meta.sh0 = { codebook: shCb, files: ['sh0.webp'] };
         const sh0Tex = createTex();
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
@@ -283,7 +301,7 @@ export class SOG4Encoder {
             if (opac > 1.0 || opac < 0.0) opac = sigmoid(opac); // Assuming if it's outside 0-1, it's logit
             sh0Tex.data[i * 4 + 3] = Math.max(0, Math.min(255, Math.round(opac * 255)));
         }
-        await saveTex(sh0Tex, 'sh0.png');
+        await saveTex(sh0Tex, 'sh0.webp');
 
         progress?.(60, "Encoding Temporal Banks...");
         // 5. BANKS (XYZ, ROT, DC)
@@ -341,15 +359,15 @@ export class SOG4Encoder {
                     bL.data[di + 2] = iz & 0xFF; bU.data[di + 2] = (iz >> 8) & 0xFF;
                     bL.data[di + 3] = 255; bU.data[di + 3] = 255;
                 }
-                const fnL = `${prefix}_${k}_L.png`;
-                const fnU = `${prefix}_${k}_U.png`;
+                const fnL = `${prefix}_${k}_L.webp`;
+                const fnU = `${prefix}_${k}_U.webp`;
                 return {
                     mins: [minB, minB, minB],
                     maxs: [maxB, maxB, maxB],
                     files: [fnL, fnU],
                     buffers: [
-                        { name: fnL, buffer: await renderTex(bL) },
-                        { name: fnU, buffer: await renderTex(bU) }
+                        { name: fnL, buffer: await renderTex(bL, fnL) },
+                        { name: fnU, buffer: await renderTex(bU, fnU) }
                     ]
                 };
             });
@@ -401,8 +419,8 @@ export class SOG4Encoder {
                     }
                     bTex.data[di + 3] = 252 + maxIdx;
                 }
-                const fn = `rot_bank_${k}.png`;
-                return { files: [fn], buffer: await renderTex(bTex), name: fn };
+                const fn = `rot_bank_${k}.webp`;
+                return { files: [fn], buffer: await renderTex(bTex, fn), name: fn };
             });
             meta.rot_bank = arr.map(({ files }) => ({ files }));
             arr.forEach(({ name, buffer }) => zip.file(name, buffer));
@@ -428,8 +446,8 @@ export class SOG4Encoder {
                 lTex.data[i * 4 + 2] = 0;
                 lTex.data[i * 4 + 3] = 255;
             }
-            meta.lifetime = { mins: [minMu, minW], maxs: [maxMu, maxW], files: ['lifetime.png'] };
-            await saveTex(lTex, 'lifetime.png');
+            meta.lifetime = { mins: [minMu, minW], maxs: [maxMu, maxW], files: ['lifetime.webp'] };
+            await saveTex(lTex, 'lifetime.webp');
         }
 
         // Apply any deletes if requested explicitly
