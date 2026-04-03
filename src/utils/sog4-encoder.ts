@@ -7,6 +7,155 @@ const extractTrailingIndex = (name: string) => {
     const match = name.match(/_(\d+)$/);
     return match ? parseInt(match[1], 10) : -1;
 };
+const clampU8 = (v: number) => Math.max(0, Math.min(255, Math.trunc(v)));
+const normalizeU16 = (val: number, minV: number, maxV: number) => {
+    const invRange = 1.0 / ((maxV - minV) + 1e-9);
+    const norm = (val - minV) * invRange;
+    return Math.max(0, Math.min(65535, Math.trunc(norm * 65535)));
+};
+const createPaddedSize = (count: number) => {
+    const width = Math.max(4, Math.ceil(Math.sqrt(count) / 4) * 4);
+    const height = Math.max(4, Math.ceil((count / width) / 4) * 4);
+    return { width, height, paddedSize: width * height };
+};
+const initializeCentroids1D = (data: Float32Array, k: number) => {
+    const sorted = Float32Array.from(data).sort();
+    const centroids = new Float32Array(k);
+    const n = sorted.length;
+    for (let i = 0; i < k; i++) {
+        const quantile = (2 * i + 1) / (2 * k);
+        const index = Math.min(Math.floor(quantile * n), n - 1);
+        centroids[i] = sorted[index];
+    }
+    return centroids;
+};
+const kmeans1D = (input: ArrayLike<number>, requestedK: number, iterations = 10) => {
+    const data = Float32Array.from(input);
+    const unique = new Set<number>();
+    for (let i = 0; i < data.length; i++) unique.add(data[i]);
+    const k = Math.min(requestedK, unique.size);
+    if (k === 0) return { centroids: new Float32Array(0), labels: new Uint32Array(0) };
+
+    let centroids = initializeCentroids1D(data, k);
+    let labels = new Uint32Array(data.length);
+
+    for (let iter = 0; iter < iterations; iter++) {
+        for (let i = 0; i < data.length; i++) {
+            let bestIdx = 0;
+            let bestDist = Infinity;
+            const value = data[i];
+            for (let j = 0; j < centroids.length; j++) {
+                const dist = Math.abs(value - centroids[j]);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIdx = j;
+                }
+            }
+            labels[i] = bestIdx;
+        }
+
+        const sums = new Float64Array(centroids.length);
+        const counts = new Uint32Array(centroids.length);
+        for (let i = 0; i < data.length; i++) {
+            const label = labels[i];
+            sums[label] += data[i];
+            counts[label]++;
+        }
+        for (let j = 0; j < centroids.length; j++) {
+            if (counts[j] > 0) {
+                centroids[j] = sums[j] / counts[j];
+            } else {
+                centroids[j] = data[Math.floor(Math.random() * data.length)];
+            }
+        }
+    }
+
+    const order = Array.from({ length: centroids.length }, (_, i) => i).sort((a, b) => centroids[a] - centroids[b]);
+    const sortedCentroids = new Float32Array(centroids.length);
+    for (let i = 0; i < order.length; i++) sortedCentroids[i] = centroids[order[i]];
+    centroids = sortedCentroids;
+
+    for (let i = 0; i < data.length; i++) {
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        const value = data[i];
+        for (let j = 0; j < centroids.length; j++) {
+            const dist = Math.abs(value - centroids[j]);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = j;
+            }
+        }
+        labels[i] = bestIdx;
+    }
+
+    return { centroids, labels };
+};
+const clusterSharedCodebook = (columns: Float32Array[], k: number, iterations = 10) => {
+    const rows = columns[0]?.length || 0;
+    const flattened = new Float32Array(rows * columns.length);
+    for (let c = 0; c < columns.length; c++) flattened.set(columns[c], c * rows);
+    const { centroids, labels } = kmeans1D(flattened, k, iterations);
+    const labelList = columns.map((_, c) => labels.subarray(c * rows, (c + 1) * rows));
+    return { centroids, labelsList: labelList };
+};
+const kmeansND = (input: Float32Array, n: number, d: number, requestedK: number, iterations = 10, batchSize = 1024) => {
+    const k = Math.min(requestedK, n);
+    const labels = new Uint32Array(n);
+    const chosen = new Set<number>();
+    while (chosen.size < k) chosen.add(Math.floor(Math.random() * n));
+    let centroids = new Float32Array(k * d);
+    Array.from(chosen).forEach((idx, c) => centroids.set(input.subarray(idx * d, idx * d + d), c * d));
+
+    for (let iter = 0; iter < iterations; iter++) {
+        const centroidNorms = new Float64Array(k);
+        for (let c = 0; c < k; c++) {
+            let sum = 0;
+            for (let j = 0; j < d; j++) {
+                const v = centroids[c * d + j];
+                sum += v * v;
+            }
+            centroidNorms[c] = sum;
+        }
+
+        for (let start = 0; start < n; start += batchSize) {
+            const end = Math.min(start + batchSize, n);
+            for (let i = start; i < end; i++) {
+                let bestIdx = 0;
+                let bestMetric = Infinity;
+                for (let c = 0; c < k; c++) {
+                    let dot = 0;
+                    for (let j = 0; j < d; j++) dot += input[i * d + j] * centroids[c * d + j];
+                    const metric = centroidNorms[c] - 2 * dot;
+                    if (metric < bestMetric) {
+                        bestMetric = metric;
+                        bestIdx = c;
+                    }
+                }
+                labels[i] = bestIdx;
+            }
+        }
+
+        const sums = new Float64Array(k * d);
+        const counts = new Uint32Array(k);
+        for (let i = 0; i < n; i++) {
+            const label = labels[i];
+            counts[label]++;
+            for (let j = 0; j < d; j++) sums[label * d + j] += input[i * d + j];
+        }
+        const next = new Float32Array(centroids.length);
+        for (let c = 0; c < k; c++) {
+            if (counts[c] > 0) {
+                for (let j = 0; j < d; j++) next[c * d + j] = sums[c * d + j] / counts[c];
+            } else {
+                next.set(centroids.subarray(c * d, c * d + d), c * d);
+            }
+        }
+        centroids = next;
+    }
+
+    return { centroids, labels };
+};
 
 export class SOG4Encoder {
     static async encode(data: any, overrides: any = {}, progress?: (pct: number, msg: string) => void): Promise<Uint8Array> {
@@ -51,6 +200,8 @@ export class SOG4Encoder {
         const zip = new JSZip();
         const getSourceIndex = (i: number) => sourceIndices ? sourceIndices[i] : i;
         const meta: any = {
+            version: 2,
+            asset: { generator: 'master_ply_to_sog_native' },
             count: count,
             model_transform: data.model_transform || overrides.model_transform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] },
             cameras: data.cameras || overrides.cameras || [],
@@ -150,11 +301,12 @@ export class SOG4Encoder {
             progress?.(100, "Done");
             return result;
         }
-        // #WDD 2026-03-30: Mark scales as log-transformed for backward compatible decoding.
-        meta.custom = Object.assign({}, data.custom || overrides.custom || meta.custom || {}, { scales_log: true });
+        if (data.custom || overrides.custom) {
+            meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {});
+        }
 
-        const width = Math.max(1, Math.min(2048, Math.ceil(Math.sqrt(count))));
-        const height = Math.max(1, Math.ceil(count / width));
+        const { width, height, paddedSize } = createPaddedSize(count);
+        const iterations = Number.isFinite(overrides.iterations) ? overrides.iterations : 5;
 
         const createTex = () => {
             const canvas: any = (typeof OffscreenCanvas !== 'undefined')
@@ -165,7 +317,7 @@ export class SOG4Encoder {
             return { canvas, ctx, img, data: img.data };
         };
 
-        const chooseImageType = (fileName: string) => fileName.toLowerCase().endsWith('.webp') ? 'image/webp' : 'image/png';
+        const chooseImageType = (fileName: string) => fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/webp';
 
         const renderTex = async (tex: any, fileName: string): Promise<ArrayBuffer> => {
             tex.ctx.putImageData(tex.img, 0, 0);
@@ -201,7 +353,6 @@ export class SOG4Encoder {
             : 2));
 
         progress?.(10, "Encoding Means (XYZ)...");
-        // 1. MEANS
         let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9, minZ = 1e9, maxZ = -1e9;
         const lx = new Float32Array(count), ly = new Float32Array(count), lz = new Float32Array(count);
         for (let i = 0; i < count; i++) {
@@ -213,28 +364,26 @@ export class SOG4Encoder {
             if (ly[i] < minY) minY = ly[i]; if (ly[i] > maxY) maxY = ly[i];
             if (lz[i] < minZ) minZ = lz[i]; if (lz[i] > maxZ) maxZ = lz[i];
         }
-        meta.means = { mins: [minX, minY, minZ], maxs: [maxX, maxY, maxZ], files: ['means_L.webp', 'means_U.webp'] };
+        meta.means = { mins: [minX, minY, minZ], maxs: [maxX, maxY, maxZ], files: ['means_l.webp', 'means_u.webp'] };
         const mL = createTex(), mU = createTex();
         for (let i = 0; i < count; i++) {
-            const valX = Math.round(((lx[i] - minX) / (maxX - minX || 1)) * 65535);
-            const valY = Math.round(((ly[i] - minY) / (maxY - minY || 1)) * 65535);
-            const valZ = Math.round(((lz[i] - minZ) / (maxZ - minZ || 1)) * 65535);
+            const valX = normalizeU16(lx[i], minX, maxX);
+            const valY = normalizeU16(ly[i], minY, maxY);
+            const valZ = normalizeU16(lz[i], minZ, maxZ);
             const di = i * 4;
             mL.data[di] = valX & 0xFF; mU.data[di] = (valX >> 8) & 0xFF;
             mL.data[di + 1] = valY & 0xFF; mU.data[di + 1] = (valY >> 8) & 0xFF;
             mL.data[di + 2] = valZ & 0xFF; mU.data[di + 2] = (valZ >> 8) & 0xFF;
             mL.data[di + 3] = 255; mU.data[di + 3] = 255;
         }
-        await saveTex(mL, 'means_L.webp'); await saveTex(mU, 'means_U.webp');
+        await saveTex(mL, 'means_l.webp'); await saveTex(mU, 'means_u.webp');
 
         progress?.(30, "Encoding Rotations...");
-        // 2. QUATS
-        meta.quats = { files: ['rotation.webp'] };
+        meta.quats = { files: ['quats'] };
         const qTex = createTex();
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
             const di = i * 4;
-            // #WDD 2026-03-30: Normalize quaternion to ensure smallest-three reconstruction is unit length
             const qr = p.rot_0?.[src] || 1, qi = p.rot_1?.[src] || 0, qj = p.rot_2?.[src] || 0, qk = p.rot_3?.[src] || 0;
             const qlen = Math.sqrt(qr*qr + qi*qi + qj*qj + qk*qk);
             const q = [qr/qlen, qi/qlen, qj/qlen, qk/qlen];
@@ -244,67 +393,110 @@ export class SOG4Encoder {
                 const absV = Math.abs(q[j]);
                 if (absV > maxVal) { maxVal = absV; maxIdx = j; }
             }
-            if (q[maxIdx] < 0) { for (let j = 0; j < 4; j++) q[j] = -q[j]; }
+            if (q[maxIdx] < 0) {
+                for (let j = 0; j < 4; j++) q[j] = -q[j];
+            }
             let writeIdx = 0;
             for (let j = 0; j < 4; j++) {
                 if (j === maxIdx) continue;
-                qTex.data[di + writeIdx++] = Math.max(0, Math.min(255, Math.round(((q[j] * Math.SQRT2) * 0.5 + 0.5) * 255)));
+                qTex.data[di + writeIdx++] = clampU8(255 * (((q[j] * Math.SQRT2) * 0.5) + 0.5));
             }
             qTex.data[di + 3] = 252 + maxIdx;
         }
-        await saveTex(qTex, 'rotation.webp');
+        await saveTex(qTex, 'quats');
 
         progress?.(45, "Encoding Scales & Opacity...");
-        // 3. SCALES (Uniform 256 Codebook)
-        let minS = 1e9, maxS = -1e9;
-        const ls0 = new Float32Array(count), ls1 = new Float32Array(count), ls2 = new Float32Array(count);
+        const scale0 = new Float32Array(count), scale1 = new Float32Array(count), scale2 = new Float32Array(count);
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
-            // #WDD 2026-03-30: Apply logTransform to scales to match SOG4Loader expectations for positions/colors
-            ls0[i] = logTransform(p.scale_0[src] || 0);
-            ls1[i] = logTransform(p.scale_1[src] || 0);
-            ls2[i] = logTransform(p.scale_2[src] || 0);
-            if (ls0[i] < minS) minS = ls0[i]; if (ls0[i] > maxS) maxS = ls0[i];
-            if (ls1[i] < minS) minS = ls1[i]; if (ls1[i] > maxS) maxS = ls1[i];
-            if (ls2[i] < minS) minS = ls2[i]; if (ls2[i] > maxS) maxS = ls2[i];
+            scale0[i] = p.scale_0?.[src] || 0;
+            scale1[i] = p.scale_1?.[src] || 0;
+            scale2[i] = p.scale_2?.[src] || 0;
         }
-        const scaleCb = new Array(256).fill(0).map((_, i) => minS + (i / 255) * (maxS - minS || 1));
-        meta.scales = { codebook: scaleCb, files: ['scales.webp'] };
+        const { centroids: scaleCb, labelsList: scaleLabels } = clusterSharedCodebook([scale0, scale1, scale2], 256, iterations);
+        meta.scales = { codebook: Array.from(scaleCb), files: ['scales'] };
         const sTex = createTex();
         for (let i = 0; i < count; i++) {
-            // Encode using the logged values
-            sTex.data[i * 4] = Math.max(0, Math.min(255, Math.round(((ls0[i] - minS) / (maxS - minS || 1)) * 255)));
-            sTex.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(((ls1[i] - minS) / (maxS - minS || 1)) * 255)));
-            sTex.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(((ls2[i] - minS) / (maxS - minS || 1)) * 255)));
+            sTex.data[i * 4] = scaleLabels[0][i];
+            sTex.data[i * 4 + 1] = scaleLabels[1][i];
+            sTex.data[i * 4 + 2] = scaleLabels[2][i];
             sTex.data[i * 4 + 3] = 255;
         }
-        await saveTex(sTex, 'scales.webp');
+        await saveTex(sTex, 'scales');
 
-        // 4. SH0 & OPACITY (Uniform 256 Codebook for SH0, Linear A channel for Opacity)
-        let minSH = 1e9, maxSH = -1e9;
-        const opacArray = p.opacity || new Float32Array((sourceIndices ? sourceIndices.length : count)).fill(1.0);
+        const sh0_0 = new Float32Array(count), sh0_1 = new Float32Array(count), sh0_2 = new Float32Array(count);
+        const opacArray = new Float32Array(count);
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
-            if (p.f_dc_0[src] < minSH) minSH = p.f_dc_0[src]; if (p.f_dc_0[src] > maxSH) maxSH = p.f_dc_0[src];
-            if (p.f_dc_1[src] < minSH) minSH = p.f_dc_1[src]; if (p.f_dc_1[src] > maxSH) maxSH = p.f_dc_1[src];
-            if (p.f_dc_2[src] < minSH) minSH = p.f_dc_2[src]; if (p.f_dc_2[src] > maxSH) maxSH = p.f_dc_2[src];
+            sh0_0[i] = p.f_dc_0?.[src] || 0;
+            sh0_1[i] = p.f_dc_1?.[src] || 0;
+            sh0_2[i] = p.f_dc_2?.[src] || 0;
+            opacArray[i] = p.opacity?.[src] ?? 0;
         }
-        const shCb = new Array(256).fill(0).map((_, i) => minSH + (i / 255) * (maxSH - minSH || 1));
-        meta.sh0 = { codebook: shCb, files: ['sh0.webp'] };
+        const { centroids: shCb, labelsList: shLabels } = clusterSharedCodebook([sh0_0, sh0_1, sh0_2], 256, iterations);
+        meta.sh0 = { codebook: Array.from(shCb), files: ['sh0'] };
         const sh0Tex = createTex();
         for (let i = 0; i < count; i++) {
-            const src = getSourceIndex(i);
-            sh0Tex.data[i * 4] = Math.max(0, Math.min(255, Math.round(((p.f_dc_0[src] - minSH) / (maxSH - minSH || 1)) * 255)));
-            sh0Tex.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(((p.f_dc_1[src] - minSH) / (maxSH - minSH || 1)) * 255)));
-            sh0Tex.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(((p.f_dc_2[src] - minSH) / (maxSH - minSH || 1)) * 255)));
-            let opac = opacArray[src];
-            if (opac > 1.0 || opac < 0.0) opac = sigmoid(opac); // Assuming if it's outside 0-1, it's logit
-            sh0Tex.data[i * 4 + 3] = Math.max(0, Math.min(255, Math.round(opac * 255)));
+            let opac = opacArray[i];
+            if (opac > 1.0 || opac < 0.0) opac = sigmoid(opac);
+            sh0Tex.data[i * 4] = shLabels[0][i];
+            sh0Tex.data[i * 4 + 1] = shLabels[1][i];
+            sh0Tex.data[i * 4 + 2] = shLabels[2][i];
+            sh0Tex.data[i * 4 + 3] = clampU8(opac * 255);
         }
-        await saveTex(sh0Tex, 'sh0.webp');
+        await saveTex(sh0Tex, 'sh0');
+
+        if (fRestNames.length > 0) {
+            progress?.(52, `Encoding SHN (${fRestNames.length})...`);
+            const numCoeffs = fRestNames.length;
+            const shData = new Float32Array(count * numCoeffs);
+            for (let i = 0; i < count; i++) {
+                const src = getSourceIndex(i);
+                for (let j = 0; j < numCoeffs; j++) shData[i * numCoeffs + j] = p[fRestNames[j]]?.[src] || 0;
+            }
+
+            const paletteScale = Math.pow(2, Math.floor(Math.log2(Math.max(count / 1024, Number.MIN_VALUE))));
+            const paletteSize = Math.max(Math.min(64, paletteScale) * 1024, 16);
+            const { centroids: shCentroids, labels: shLabelsND } = kmeansND(shData, count, numCoeffs, paletteSize, iterations);
+            const { centroids: shCodebook, labels: centroidLabels } = kmeans1D(shCentroids, 256, iterations);
+
+            const coeffsPerColor = numCoeffs / 3;
+            const cWidth = 64 * coeffsPerColor;
+            const cHeight = Math.ceil(paletteSize / 64);
+            const cCanvas: any = (typeof OffscreenCanvas !== 'undefined')
+                ? new OffscreenCanvas(cWidth, cHeight)
+                : Object.assign(document.createElement('canvas'), { width: cWidth, height: cHeight });
+            const cCtx = cCanvas.getContext('2d', { willReadFrequently: true });
+            const cImg = cCtx.createImageData(cWidth, cHeight);
+            for (let i = 0; i < paletteSize; i++) {
+                for (let j = 0; j < coeffsPerColor; j++) {
+                    const pixelIdx = Math.floor(i / 64) * cWidth + (i % 64) * coeffsPerColor + j;
+                    cImg.data[pixelIdx * 4 + 0] = centroidLabels[i * numCoeffs + coeffsPerColor * 0 + j];
+                    cImg.data[pixelIdx * 4 + 1] = centroidLabels[i * numCoeffs + coeffsPerColor * 1 + j];
+                    cImg.data[pixelIdx * 4 + 2] = centroidLabels[i * numCoeffs + coeffsPerColor * 2 + j];
+                    cImg.data[pixelIdx * 4 + 3] = 255;
+                }
+            }
+            cCtx.putImageData(cImg, 0, 0);
+            zip.file('shN_centroids.webp', await renderTex({ canvas: cCanvas, ctx: cCtx, img: cImg }, 'shN_centroids.webp'));
+
+            const labelsTex = createTex();
+            for (let i = 0; i < count; i++) {
+                labelsTex.data[i * 4 + 0] = shLabelsND[i] & 0xFF;
+                labelsTex.data[i * 4 + 1] = (shLabelsND[i] >> 8) & 0xFF;
+                labelsTex.data[i * 4 + 3] = 255;
+            }
+            await saveTex(labelsTex, 'shN_labels.webp');
+            const bandsMap: Record<number, number> = { 9: 1, 24: 2, 45: 3 };
+            meta.shN = {
+                count: paletteSize,
+                bands: bandsMap[numCoeffs] || 0,
+                codebook: Array.from(shCodebook),
+                files: ['shN_centroids.webp', 'shN_labels.webp']
+            };
+        }
 
         progress?.(60, "Encoding Temporal Banks...");
-        // 5. BANKS (XYZ, ROT, DC)
         const totalBankFrames =
             ((data.keyframes > 0 && (data.trajectory || data.xyzBank)) ? data.keyframes : 0) +
             ((data.dcKeyframes > 0 && data.dcTrajectory) ? data.dcKeyframes : 0) +
@@ -350,17 +542,17 @@ export class SOG4Encoder {
                 const bL = createTex(), bU = createTex();
                 for (let i = 0; i < count; i++) {
                     const si = i * 3;
-                    const ix = Math.round(((transformed[si] - minB) / (maxB - minB || 1)) * 65535);
-                    const iy = Math.round(((transformed[si + 1] - minB) / (maxB - minB || 1)) * 65535);
-                    const iz = Math.round(((transformed[si + 2] - minB) / (maxB - minB || 1)) * 65535);
+                    const ix = normalizeU16(transformed[si], minB, maxB);
+                    const iy = normalizeU16(transformed[si + 1], minB, maxB);
+                    const iz = normalizeU16(transformed[si + 2], minB, maxB);
                     const di = i * 4;
                     bL.data[di] = ix & 0xFF; bU.data[di] = (ix >> 8) & 0xFF;
                     bL.data[di + 1] = iy & 0xFF; bU.data[di + 1] = (iy >> 8) & 0xFF;
                     bL.data[di + 2] = iz & 0xFF; bU.data[di + 2] = (iz >> 8) & 0xFF;
                     bL.data[di + 3] = 255; bU.data[di + 3] = 255;
                 }
-                const fnL = `${prefix}_${k}_L.webp`;
-                const fnU = `${prefix}_${k}_U.webp`;
+                const fnL = `${prefix}_${k}_l.webp`;
+                const fnU = `${prefix}_${k}_u.webp`;
                 return {
                     mins: [minB, minB, minB],
                     maxs: [maxB, maxB, maxB],
@@ -415,11 +607,11 @@ export class SOG4Encoder {
                     let writeIdx = 0, di = i * 4;
                     for (let j = 0; j < 4; j++) {
                         if (j === maxIdx) continue;
-                        bTex.data[di + writeIdx++] = Math.max(0, Math.min(255, Math.round(((q[j] * Math.SQRT2) * 0.5 + 0.5) * 255)));
+                        bTex.data[di + writeIdx++] = clampU8(((q[j] * Math.SQRT2) * 0.5 + 0.5) * 255);
                     }
                     bTex.data[di + 3] = 252 + maxIdx;
                 }
-                const fn = `rot_bank_${k}.webp`;
+                const fn = `rot_bank_${k}`;
                 return { files: [fn], buffer: await renderTex(bTex, fn), name: fn };
             });
             meta.rot_bank = arr.map(({ files }) => ({ files }));
@@ -427,27 +619,34 @@ export class SOG4Encoder {
             meta.rot_bank_stride = data.rotStride;
         }
 
-        // Lifetime parameter fallback mappings
         if (p.lifetime_mu && p.lifetime_w) {
-            progress?.(85, "Encoding Lifetime Params...");
-            let minMu = 1e9, maxMu = -1e9, minW = 1e9, maxW = -1e9;
+            progress?.(85, "Encoding Params...");
+            const mu = new Float32Array(count);
+            const w = new Float32Array(count);
+            const isParam = new Float32Array(count);
             for (let i = 0; i < count; i++) {
                 const src = getSourceIndex(i);
-                if (p.lifetime_mu[src] < minMu) minMu = p.lifetime_mu[src];
-                if (p.lifetime_mu[src] > maxMu) maxMu = p.lifetime_mu[src];
-                if (p.lifetime_w[src] < minW) minW = p.lifetime_w[src];
-                if (p.lifetime_w[src] > maxW) maxW = p.lifetime_w[src];
+                mu[i] = p.lifetime_mu[src];
+                w[i] = p.lifetime_w[src];
+                isParam[i] = p.is_param?.[src] || 0;
             }
-            const lTex = createTex();
+            const { centroids: muCb, labels: muLabels } = kmeans1D(mu, 256, iterations);
+            const { centroids: wCb, labels: wLabels } = kmeans1D(w, 256, iterations);
+            const { centroids: pCb, labels: pLabels } = kmeans1D(isParam, 256, iterations);
+            const pTex = createTex();
             for (let i = 0; i < count; i++) {
-                const src = getSourceIndex(i);
-                lTex.data[i * 4] = Math.max(0, Math.min(255, Math.round(((p.lifetime_mu[src] - minMu) / (maxMu - minMu || 1)) * 255)));
-                lTex.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(((p.lifetime_w[src] - minW) / (maxW - minW || 1)) * 255)));
-                lTex.data[i * 4 + 2] = 0;
-                lTex.data[i * 4 + 3] = 255;
+                pTex.data[i * 4] = muLabels[i];
+                pTex.data[i * 4 + 1] = wLabels[i];
+                pTex.data[i * 4 + 2] = pLabels[i];
+                pTex.data[i * 4 + 3] = 255;
             }
-            meta.lifetime = { mins: [minMu, minW], maxs: [maxMu, maxW], files: ['lifetime.webp'] };
-            await saveTex(lTex, 'lifetime.webp');
+            meta.params = {
+                codebook_mu: Array.from(muCb),
+                codebook_w: Array.from(wCb),
+                codebook_is_param: Array.from(pCb),
+                files: ['params.webp']
+            };
+            await saveTex(pTex, 'params.webp');
         }
 
         // Apply any deletes if requested explicitly

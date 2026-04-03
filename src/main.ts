@@ -5148,11 +5148,6 @@ const duration = parsed.frames || parsed.maxMu || 100;
             };
 
             setExportProgress(0, 'Preparing export');
-            let usedDirectEncode = false;
-            const mapSaveProgress = (pct: number) => {
-                if (!usedDirectEncode) return Math.min(Math.max(pct, 0), 100);
-                return Math.min(100, 88 + (Math.min(Math.max(pct, 0), 100) * 0.12));
-            };
 
             const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
             if (this.splatEntity) {
@@ -5181,51 +5176,31 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
             const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
             const hasDeletes = deletedIndices.length > 0;
-            const isNativeSog4 = !!(this.lastParsedData.isSOG4 && this.lastParsedData.sogBuffer);
-            const needsSog4Rewrite = !!this.lastParsedData.needsSOG4Rewrite;
             let buffer: Uint8Array;
 
-            if (!isNativeSog4 || needsSog4Rewrite) {
-                usedDirectEncode = true;
-                setExportProgress(8, needsSog4Rewrite ? 'Repairing and re-encoding SOG4 archive...' : 'Encoding final SOG4 archive...');
-                const encodeOverrides: any = {
-                    rawFloatPayload: false,
-                    model_transform: transform,
-                    cameras: cameras,
-                    postProcessing: {
-                        exposure: this.postProcessingTool.exposure,
-                        brightness: this.postProcessingTool.brightness,
-                        contrast: this.postProcessingTool.contrast
-                    }
-                };
-                if (hasDeletes) {
-                    encodeOverrides.apply_deleted = true;
-                    encodeOverrides.deleted_indices = deletedIndices;
-                    if (origIndices) encodeOverrides.original_indices = origIndices;
+            setExportProgress(8, 'Re-encoding SOG4 archive...');
+            const encodeOverrides: any = {
+                rawFloatPayload: false,
+                model_transform: transform,
+                cameras: cameras,
+                postProcessing: {
+                    exposure: this.postProcessingTool.exposure,
+                    brightness: this.postProcessingTool.brightness,
+                    contrast: this.postProcessingTool.contrast
                 }
-                buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string) => {
-                    setExportProgress(8 + (pct * 0.8), `Encoding: ${msg}`);
-                });
-                this.lastParsedData.sogBuffer = buffer;
-                this.lastParsedData.isSOG4 = true;
-                this.lastParsedData.needsSOG4Rewrite = false;
-                setExportProgress(92, 'Final archive ready');
-            } else {
-                setExportProgress(12, hasDeletes ? 'Updating native SOG4 with deletion compaction...' : 'Updating native SOG4 metadata...');
-                buffer = await SOG4Loader.save(this.lastParsedData, {
-                    model_transform: transform,
-                    cameras: cameras,
-                    deleted_indices: deletedIndices,
-                    apply_deleted: hasDeletes,
-                    original_indices: origIndices,
-                    postProcessing: { // #WDD 2026-01-30
-                        exposure: this.postProcessingTool.exposure,
-                        brightness: this.postProcessingTool.brightness,
-                        contrast: this.postProcessingTool.contrast
-                    }
-                }, (pct: number, msg: string) => setExportProgress(mapSaveProgress(pct), msg));
-                this.lastParsedData.sogBuffer = buffer;
+            };
+            if (hasDeletes) {
+                encodeOverrides.apply_deleted = true;
+                encodeOverrides.deleted_indices = deletedIndices;
+                if (origIndices) encodeOverrides.original_indices = origIndices;
             }
+            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string) => {
+                setExportProgress(8 + (pct * 0.8), `Encoding: ${msg}`);
+            });
+            this.lastParsedData.sogBuffer = buffer;
+            this.lastParsedData.isSOG4 = true;
+            this.lastParsedData.needsSOG4Rewrite = false;
+            setExportProgress(92, 'Final archive ready');
             const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
             const filename = `saved_${baseName}.sog4`;
 

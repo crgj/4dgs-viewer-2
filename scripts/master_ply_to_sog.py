@@ -401,6 +401,37 @@ def convert_master_to_sog(master_ply, output_sog, iterations=10):
                     print(f"  XYZ Bank {k} done.")
                 except KeyError:
                     print(f"  Warning: xyz_bank_{k} missing columns.")
+                    
+        # F_DC Bank (New)
+        f_dc_bank_keys = [p.name for p in v.properties if p.name.startswith('f_dc_bank_')]
+        if f_dc_bank_keys:
+            print("Compressing F_DC Bank...")
+            max_k = 0
+            for k in f_dc_bank_keys:
+                max_k = max(max_k, int(k.split('_')[3]))
+            K_dc = max_k + 1
+            
+            meta['f_dc_bank'] = []
+            for k in range(K_dc):
+                try:
+                    # Compress as means (Log-Normalized 3-channel image)
+                    # Note: DC features are not spatial coords, but compress_means
+                    # works generic for any 3-channel float data.
+                    # It applies log transform, which might flatten color dynamic range?
+                    # DC is usually [-SH_C0*0.282, +...] ~ RGB.
+                    # RGB is roughly 0-1 (unbounded for HDR).
+                    # Log transform helps if dynamic range is large.
+                    
+                    dc_meta = compress_means(
+                        np.asarray(v[f'f_dc_bank_{k}_0']),
+                        np.asarray(v[f'f_dc_bank_{k}_1']),
+                        np.asarray(v[f'f_dc_bank_{k}_2']),
+                        width, height, f'f_dc_bank_{k}', zf
+                    )
+                    meta['f_dc_bank'].append(dc_meta)
+                    print(f"  F_DC Bank {k} done.")
+                except KeyError:
+                    print(f"  Warning: f_dc_bank_{k} missing columns.")
                 
         # ROT Bank
         rot_bank_keys = [p.name for p in v.properties if p.name.startswith('rot_bank_')]
@@ -446,7 +477,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Master PLY to SOG (Native)")
     parser.add_argument("input_ply", help="Master PLY file")
     parser.add_argument("output_sog", help="Output SOG file")
-    parser.add_argument("--iterations", type=int, default=10, help="K-Means iterations")
+    parser.add_argument("--iterations", type=int, default=5, help="K-Means iterations")
     
     args = parser.parse_args()
     
