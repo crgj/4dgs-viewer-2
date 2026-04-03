@@ -2722,7 +2722,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     const shaderPassInfo = (pc as any).ShaderPass?.get(device)?.getByIndex?.(options.pass);
                     let passDefines = shaderPassInfo?.shaderDefines ? `${shaderPassInfo.shaderDefines}\n` : '';
                     // Ensure PICK_PASS is defined for pick passes (some versions may not set shaderDefines correctly)
-                    if (options.pass === (pc as any).PASS_PICK || options.pass === 2) {
+                    if (options.pass === 2 /* pc.PASS_PICK */) { // #WDD 2026-04-03 修复 PlayCanvas 1.77 缺少 PASS_PICK 导出问题
                         if (!passDefines.includes('PICK_PASS')) {
                             passDefines += '#define PICK_PASS\n';
                         }
@@ -4439,7 +4439,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     const shaderPassInfo = (pc as any).ShaderPass?.get(device)?.getByIndex?.(options.pass);
                     let passDefines = shaderPassInfo?.shaderDefines ? `${shaderPassInfo.shaderDefines}\n` : '';
                     // Ensure PICK_PASS is defined for pick passes (some versions may not set shaderDefines correctly)
-                    if (options.pass === (pc as any).PASS_PICK || options.pass === 2) {
+                    if (options.pass === 2 /* pc.PASS_PICK */) { // #WDD 2026-04-03 修复 PlayCanvas 1.77 缺少 PASS_PICK 导出问题
                         if (!passDefines.includes('PICK_PASS')) {
                             passDefines += '#define PICK_PASS\n';
                         }
