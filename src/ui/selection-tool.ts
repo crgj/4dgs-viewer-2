@@ -10,6 +10,10 @@ const ICON_CLEAR = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path 
 const ICON_CENTER = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="3"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" opacity="0.5"/></svg>`;
 // Ellipse/Edge icon (circle with ring)
 const ICON_ELLIPSE = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3"/></svg>`;
+// Undo icon
+const ICON_UNDO = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>`;
+// Redo icon
+const ICON_REDO = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>`;
 
 
 // Export class
@@ -32,6 +36,11 @@ export class SelectionTool {
 
     // UI
     toolbar!: HTMLElement;
+
+    // #WDD 2026-04-10: Undo/Redo for deletion
+    private readonly MAX_HISTORY = 30;
+    private undoStack: Array<{ type: 'delete'; indices: number[] }> = [];
+    private redoStack: Array<{ type: 'delete'; indices: number[] }> = [];
 
     constructor(app: pc.Application, viewer: any) {
         this.app = app;
@@ -62,6 +71,7 @@ export class SelectionTool {
         });
 
         this.clearSelection();
+        this.clearHistory(); // #WDD 2026-04-10: Clear undo/redo history
     }
 
     // Sequence mode can require matching the gsplat internal texture dimensions (width/height),
@@ -84,6 +94,7 @@ export class SelectionTool {
         });
 
         this.clearSelection();
+        this.clearHistory(); // #WDD 2026-04-10: Clear undo/redo history
     }
 
     clearSelection() {
@@ -105,21 +116,32 @@ export class SelectionTool {
         if (!positions) return;
 
         const totalSplats = positions.length / 3;
-        let changed = false;
+        const deletedIndices: number[] = [];
 
         for (let i = 0; i < totalSplats; i++) {
             const idx = i * 4;
             // If selected (R > 0)
             if (this.selectionData[idx] > 0) {
+                // Record this index for undo
+                deletedIndices.push(i);
                 // Mark as Deleted (G = 255)
                 this.selectionData[idx + 1] = 255;
                 // Clear selection (R = 0)
                 this.selectionData[idx] = 0;
-                changed = true;
             }
         }
-        if (changed) {
+
+        if (deletedIndices.length > 0) {
+            // #WDD 2026-04-10: Push to undo stack
+            this.undoStack.push({ type: 'delete', indices: deletedIndices });
+            // Clear redo stack since we made a new change
+            this.redoStack = [];
+            // Limit undo stack size
+            if (this.undoStack.length > this.MAX_HISTORY) {
+                this.undoStack.shift();
+            }
             this.updateTexture();
+            console.log(`[Selection] Deleted ${deletedIndices.length} points. Undo stack: ${this.undoStack.length}`);
         }
     }
 
@@ -149,6 +171,64 @@ export class SelectionTool {
             }
         }
         this.updateTexture();
+    }
+
+    // #WDD 2026-04-10: Undo last deletion
+    undo() {
+        if (this.undoStack.length === 0) {
+            console.log('[Selection] Nothing to undo');
+            return;
+        }
+
+        const action = this.undoStack.pop()!;
+        
+        if (action.type === 'delete') {
+            // Restore deleted points (clear G channel)
+            for (const splatIdx of action.indices) {
+                const idx = splatIdx * 4;
+                if (idx < this.selectionData!.length) {
+                    this.selectionData![idx + 1] = 0; // Clear deleted flag
+                }
+            }
+            this.updateTexture();
+            
+            // Push to redo stack
+            this.redoStack.push(action);
+            console.log(`[Selection] Undo: restored ${action.indices.length} points. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
+        }
+    }
+
+    // #WDD 2026-04-10: Redo last undone action
+    redo() {
+        if (this.redoStack.length === 0) {
+            console.log('[Selection] Nothing to redo');
+            return;
+        }
+
+        const action = this.redoStack.pop()!;
+        
+        if (action.type === 'delete') {
+            // Delete again (set G channel to 255)
+            for (const splatIdx of action.indices) {
+                const idx = splatIdx * 4;
+                if (idx < this.selectionData!.length) {
+                    this.selectionData![idx + 1] = 255; // Mark as deleted
+                    this.selectionData![idx] = 0;       // Clear selection
+                }
+            }
+            this.updateTexture();
+            
+            // Push back to undo stack
+            this.undoStack.push(action);
+            console.log(`[Selection] Redo: deleted ${action.indices.length} points. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
+        }
+    }
+
+    // #WDD 2026-04-10: Clear undo/redo history (e.g., on new file load)
+    clearHistory() {
+        this.undoStack = [];
+        this.redoStack = [];
+        console.log('[Selection] History cleared');
     }
 
     updateTexture() {
@@ -201,6 +281,16 @@ export class SelectionTool {
                         <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
                 </div>
+
+                <!-- Undo/Redo Panel -->
+                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto items-center">
+                    <button id="action-undo" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Undo (Ctrl+Z)">
+                        ${ICON_UNDO}
+                    </button>
+                    <button id="action-redo" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Redo (Ctrl+Y)">
+                        ${ICON_REDO}
+                    </button>
+                </div>
             </div>
             
             <!-- Brush Settings (Hidden by default, shown on right) -->
@@ -247,6 +337,9 @@ export class SelectionTool {
         get('action-delete')?.addEventListener('click', () => {
             this.deleteSelected();
         });
+
+        get('action-undo')?.addEventListener('click', () => this.undo());
+        get('action-redo')?.addEventListener('click', () => this.redo());
 
         get('brush-size')?.addEventListener('input', (e: any) => {
             this.brushRadius = parseInt(e.target.value);
@@ -316,11 +409,52 @@ export class SelectionTool {
         window.addEventListener('mousemove', (e) => this.onMouseMove(e));
         window.addEventListener('mouseup', (e) => this.onMouseUp(e));
 
-        // Key events for Alt modifier
+        // Key events for Alt modifier, Delete, and Undo/Redo
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
                 this.isSubtracting = true;
                 this.updateCursorState();
+            }
+            
+            // #WDD 2026-04-10: Delete key to delete selected
+            if (e.key === 'Delete') {
+                this.deleteSelected();
+            }
+
+            // #WDD 2026-04-10: Number keys for tool selection
+            if (e.key === '1') {
+                // Toggle brush tool
+                if (this.currentTool === 'brush') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('brush');
+                }
+            }
+            if (e.key === '2') {
+                // Toggle rect tool
+                if (this.currentTool === 'rect') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('rect');
+                }
+            }
+            
+            // #WDD 2026-04-10: Undo/Redo keyboard shortcuts
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'z' || e.key === 'Z') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        // Ctrl+Shift+Z = Redo
+                        this.redo();
+                    } else {
+                        // Ctrl+Z = Undo
+                        this.undo();
+                    }
+                } else if (e.key === 'y' || e.key === 'Y') {
+                    // Ctrl+Y = Redo (alternative)
+                    e.preventDefault();
+                    this.redo();
+                }
             }
         });
         window.addEventListener('keyup', (e) => {
@@ -411,6 +545,60 @@ export class SelectionTool {
         return this.viewer.cachedPositions;
     }
 
+    // #WDD 2026-04-10: Get current time for time-based selection
+    getCurrentTime(): number {
+        return this.viewer.currentTime ?? 0;
+    }
+
+    // #WDD 2026-04-10: Check if a point is visible at current time based on lifetime
+    isVisibleAtCurrentTime(splatIdx: number): boolean {
+        // Get lifetime data from viewer
+        const lifeTexData = this.viewer.lifeTexData;
+        if (!lifeTexData) {
+            // No lifetime data, assume always visible
+            return true;
+        }
+
+        const idx = splatIdx * 4;
+        if (idx >= lifeTexData.length) {
+            return true; // Out of bounds, assume visible
+        }
+
+        const mu = lifeTexData[idx + 0];      // center time
+        const w = lifeTexData[idx + 1];       // half-width
+        const k = lifeTexData[idx + 2];       // steepness (default 10.0)
+        const t = this.getCurrentTime();
+        const duration = this.viewer.duration ?? 100;
+        const totalFrames = Math.ceil(duration);
+        const segmentMax = Math.max(0, totalFrames - 1);
+
+        // If time is outside valid range, not visible
+        if (t < 0.0 || t > segmentMax) {
+            return false;
+        }
+
+        // Calculate lifetime window
+        const lifeStart = mu - w;
+        const lifeEnd = mu + w;
+
+        // No overlap with the active segment at all
+        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) {
+            return false;
+        }
+
+        // Calculate sigmoid-based opacity (same as shader logic)
+        const argLeft = k * (t - lifeStart);
+        const left = 1.0 / (1.0 + Math.exp(-argLeft));
+
+        const argRight = -k * (t - lifeEnd);
+        const right = 1.0 / (1.0 + Math.exp(-argRight));
+
+        const alpha = left * right;
+
+        // Only select if alpha is significant (visible)
+        return alpha > 0.01;
+    }
+
     performBrush(cx: number, cy: number) {
         if (this.selectionMode === 'ellipse') {
             this.performBrushEllipse(cx, cy);
@@ -440,6 +628,9 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
+            // #WDD 2026-04-10: Skip if not visible at current time
+            if (!this.isVisibleAtCurrentTime(i)) continue;
+
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -505,6 +696,9 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
+            // #WDD 2026-04-10: Skip if not visible at current time
+            if (!this.isVisibleAtCurrentTime(i)) continue;
+
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -596,6 +790,9 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
+            // #WDD 2026-04-10: Skip if not visible at current time
+            if (!this.isVisibleAtCurrentTime(i)) continue;
+
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -661,6 +858,9 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
+            // #WDD 2026-04-10: Skip if not visible at current time
+            if (!this.isVisibleAtCurrentTime(i)) continue;
+
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],

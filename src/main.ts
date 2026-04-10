@@ -53,7 +53,7 @@ class Viewer {
     private currentTransformCacheKey: string | null = null;
     originalFrames: number | null = null;
     private isPlaying = false;
-    private currentTime = 0;
+    currentTime = 0;
     private playbackTime = 0;
     private currentPresetIndex = -1;
 
@@ -119,7 +119,7 @@ class Viewer {
     private rotKeyframes = 0;
     private rotStride = 1;
     private totalFrames = 0;
-    private lifeTexData: Float32Array | null = null;
+    lifeTexData: Float32Array | null = null;
     private scalesTexData: Float32Array | null = null;
     private originalIndices: Float32Array | null = null; // #WDD 2026-01-17
     private lastParsedData: any = null;
