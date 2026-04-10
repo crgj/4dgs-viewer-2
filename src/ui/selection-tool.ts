@@ -535,12 +535,25 @@ export class SelectionTool {
         window.addEventListener('mousemove', (e) => this.onMouseMove(e));
         window.addEventListener('mouseup', (e) => this.onMouseUp(e));
 
+        // #WDD 2026-04-10: Check if user is typing in an input field
+        const isTyping = () => {
+            const active = document.activeElement;
+            if (!active) return false;
+            const tagName = active.tagName.toLowerCase();
+            const isInput = tagName === 'input' || tagName === 'textarea';
+            const isEditable = active.getAttribute('contenteditable') === 'true';
+            return isInput || isEditable;
+        };
+
         // Key events for Alt modifier, Delete, and Undo/Redo
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
                 this.isSubtracting = true;
                 this.updateCursorState();
             }
+            
+            // #WDD 2026-04-10: Skip shortcuts when typing in input fields
+            if (isTyping()) return;
             
             // #WDD 2026-04-10: Delete key to delete selected
             if (e.key === 'Delete') {
