@@ -24,6 +24,10 @@ export class SelectionTool {
     viewer: any;
     selectionData: Uint8Array | null = null;
     selectionTexture: pc.Texture | null = null;
+    
+    // #WDD 2026-04-11: All-time selection for invert operation
+    // Stores points that are in selection area at ANY time (not just current time)
+    allTimeSelectionData: Uint8Array | null = null;
 
     // Tools
     currentTool: 'none' | 'brush' | 'rect' = 'none';
@@ -59,6 +63,7 @@ export class SelectionTool {
         console.log(`[Selection] Init for ${numSplats} splats. Texture: ${width}x${height}`);
 
         this.selectionData = new Uint8Array(width * height * 4); // RGBA8
+        this.allTimeSelectionData = new Uint8Array(width * height * 4); // RGBA8 for all-time selection
 
         this.selectionTexture = new pc.Texture(this.app.graphicsDevice, {
             width: width,
@@ -82,6 +87,7 @@ export class SelectionTool {
         console.log(`[Selection] InitWithSize for ${numSplats} splats. Texture: ${width}x${height}`);
 
         this.selectionData = new Uint8Array(width * height * 4); // RGBA8
+        this.allTimeSelectionData = new Uint8Array(width * height * 4); // RGBA8 for all-time selection
 
         this.selectionTexture = new pc.Texture(this.app.graphicsDevice, {
             width: width,
@@ -107,6 +113,14 @@ export class SelectionTool {
         const len = this.selectionData.length;
         for (let i = 0; i < len; i += 4) {
             this.selectionData[i] = 0;
+        }
+
+        // #WDD 2026-04-11: Clear all-time selection as well
+        if (this.allTimeSelectionData) {
+            const allTimeLen = this.allTimeSelectionData.length;
+            for (let i = 0; i < allTimeLen; i += 4) {
+                this.allTimeSelectionData[i] = 0;
+            }
         }
 
         this.updateTexture();
@@ -148,15 +162,56 @@ export class SelectionTool {
     }
 
     invertSelection(totalSplats: number) {
-        if (!this.selectionData) return;
-        for (let i = 0; i < totalSplats; i++) {
-            const idx = i * 4;
-            // Check if deleted (G > 0) - if so, skip
-            if (this.selectionData[idx + 1] > 0) continue;
-
-            // Invert R channel
-            this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
+        // #WDD 2026-04-11: Invert selection logic
+        // If allTimeSelection is not empty:
+        //   1) Invert allTimeSelection itself globally (selected->unselected, unselected->selected)
+        //   2) Copy inverted allTimeSelection to selection
+        //   3) Clear allTimeSelection
+        // If allTimeSelection is empty:
+        //   Invert selection globally
+        if (!this.selectionData || !this.allTimeSelectionData) return;
+        
+        // Check if allTimeSelection has any selected points
+        let hasAllTimeSelection = false;
+        for (let i = 0; i < this.allTimeSelectionData.length; i += 4) {
+            if (this.allTimeSelectionData[i] > 0) {
+                hasAllTimeSelection = true;
+                break;
+            }
         }
+        
+        if (hasAllTimeSelection) {
+            // Case 2: allTimeSelection is not empty
+            // Invert allTimeSelection globally and copy to selection
+            for (let i = 0; i < totalSplats; i++) {
+                const idx = i * 4;
+                // Check if deleted (G > 0) - if so, skip
+                if (this.selectionData[idx + 1] > 0) continue;
+                
+                // Invert allTimeSelection itself (selected->unselected, unselected->selected)
+                this.allTimeSelectionData[idx] = this.allTimeSelectionData[idx] > 0 ? 0 : 255;
+                
+                // Copy inverted allTimeSelection to selection
+                this.selectionData[idx] = this.allTimeSelectionData[idx];
+            }
+            
+            // Clear all-time selection after using it
+            const allTimeLen = this.allTimeSelectionData.length;
+            for (let i = 0; i < allTimeLen; i += 4) {
+                this.allTimeSelectionData[i] = 0;
+            }
+        } else {
+            // Case 3: allTimeSelection is empty, invert selection globally
+            for (let i = 0; i < totalSplats; i++) {
+                const idx = i * 4;
+                // Check if deleted (G > 0) - if so, skip
+                if (this.selectionData[idx + 1] > 0) continue;
+                
+                // Invert R channel for all non-deleted points
+                this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
+            }
+        }
+        
         this.updateTexture();
     }
 
@@ -751,7 +806,7 @@ export class SelectionTool {
         
         // Center mode (original)
         const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData) return;
+        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
 
         const camera = this.viewer.camera?.camera;
         if (!camera) return;
@@ -772,9 +827,6 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
-            // #WDD 2026-04-10: Skip if not visible at current time
-            if (!this.isVisibleAtCurrentTime(i)) continue;
-
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -795,15 +847,25 @@ export class SelectionTool {
                     // Skip if deleted
                     if (this.selectionData[idx + 1] > 0) continue;
 
+                    // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
                     if (this.isSubtracting) {
-                        if (this.selectionData[idx] > 0) {
-                            this.selectionData[idx] = 0;
-                            changed = true;
-                        }
+                        this.allTimeSelectionData[idx] = 0;
                     } else {
-                        if (this.selectionData[idx] === 0) {
-                            this.selectionData[idx] = 255;
-                            changed = true;
+                        this.allTimeSelectionData[idx] = 255;
+                    }
+
+                    // #WDD 2026-04-10: Only update current selection if visible at current time
+                    if (this.isVisibleAtCurrentTime(i)) {
+                        if (this.isSubtracting) {
+                            if (this.selectionData[idx] > 0) {
+                                this.selectionData[idx] = 0;
+                                changed = true;
+                            }
+                        } else {
+                            if (this.selectionData[idx] === 0) {
+                                this.selectionData[idx] = 255;
+                                changed = true;
+                            }
                         }
                     }
                 }
@@ -821,7 +883,7 @@ export class SelectionTool {
         
         // Center mode (original)
         const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData) return;
+        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
 
         const camera = this.viewer.camera?.camera;
         if (!camera) return;
@@ -840,9 +902,6 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
-            // #WDD 2026-04-10: Skip if not visible at current time
-            if (!this.isVisibleAtCurrentTime(i)) continue;
-
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -860,15 +919,25 @@ export class SelectionTool {
                     // Skip if deleted
                     if (this.selectionData[idx + 1] > 0) continue;
 
+                    // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
                     if (this.isSubtracting) {
-                        if (this.selectionData[idx] > 0) {
-                            this.selectionData[idx] = 0;
-                            changed = true;
-                        }
+                        this.allTimeSelectionData[idx] = 0;
                     } else {
-                        if (this.selectionData[idx] === 0) {
-                            this.selectionData[idx] = 255;
-                            changed = true;
+                        this.allTimeSelectionData[idx] = 255;
+                    }
+
+                    // #WDD 2026-04-10: Only update current selection if visible at current time
+                    if (this.isVisibleAtCurrentTime(i)) {
+                        if (this.isSubtracting) {
+                            if (this.selectionData[idx] > 0) {
+                                this.selectionData[idx] = 0;
+                                changed = true;
+                            }
+                        } else {
+                            if (this.selectionData[idx] === 0) {
+                                this.selectionData[idx] = 255;
+                                changed = true;
+                            }
                         }
                     }
                 }
@@ -917,7 +986,7 @@ export class SelectionTool {
     // Simple ellipse-brush intersection using screen-space approximation
     performBrushEllipse(cx: number, cy: number) {
         const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData) return;
+        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
 
         const camera = this.viewer.camera?.camera;
         if (!camera) return;
@@ -934,9 +1003,6 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
-            // #WDD 2026-04-10: Skip if not visible at current time
-            if (!this.isVisibleAtCurrentTime(i)) continue;
-
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -963,15 +1029,25 @@ export class SelectionTool {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue;
 
+                // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
                 if (this.isSubtracting) {
-                    if (this.selectionData[idx] > 0) {
-                        this.selectionData[idx] = 0;
-                        changed = true;
-                    }
+                    this.allTimeSelectionData[idx] = 0;
                 } else {
-                    if (this.selectionData[idx] === 0) {
-                        this.selectionData[idx] = 255;
-                        changed = true;
+                    this.allTimeSelectionData[idx] = 255;
+                }
+
+                // #WDD 2026-04-10: Only update current selection if visible at current time
+                if (this.isVisibleAtCurrentTime(i)) {
+                    if (this.isSubtracting) {
+                        if (this.selectionData[idx] > 0) {
+                            this.selectionData[idx] = 0;
+                            changed = true;
+                        }
+                    } else {
+                        if (this.selectionData[idx] === 0) {
+                            this.selectionData[idx] = 255;
+                            changed = true;
+                        }
                     }
                 }
             }
@@ -983,7 +1059,7 @@ export class SelectionTool {
     // Simple ellipse-rect intersection
     performRectEllipse(x1: number, y1: number, x2: number, y2: number) {
         const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData) return;
+        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
 
         const camera = this.viewer.camera?.camera;
         if (!camera) return;
@@ -1002,9 +1078,6 @@ export class SelectionTool {
         const worldPos = new pc.Vec3();
 
         for (let i = 0; i < numSplats; i++) {
-            // #WDD 2026-04-10: Skip if not visible at current time
-            if (!this.isVisibleAtCurrentTime(i)) continue;
-
             localPos.set(
                 positions[i * 3 + 0],
                 positions[i * 3 + 1],
@@ -1028,15 +1101,25 @@ export class SelectionTool {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue;
 
+                // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
                 if (this.isSubtracting) {
-                    if (this.selectionData[idx] > 0) {
-                        this.selectionData[idx] = 0;
-                        changed = true;
-                    }
+                    this.allTimeSelectionData[idx] = 0;
                 } else {
-                    if (this.selectionData[idx] === 0) {
-                        this.selectionData[idx] = 255;
-                        changed = true;
+                    this.allTimeSelectionData[idx] = 255;
+                }
+
+                // #WDD 2026-04-10: Only update current selection if visible at current time
+                if (this.isVisibleAtCurrentTime(i)) {
+                    if (this.isSubtracting) {
+                        if (this.selectionData[idx] > 0) {
+                            this.selectionData[idx] = 0;
+                            changed = true;
+                        }
+                    } else {
+                        if (this.selectionData[idx] === 0) {
+                            this.selectionData[idx] = 255;
+                            changed = true;
+                        }
                     }
                 }
             }

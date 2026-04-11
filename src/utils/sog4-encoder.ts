@@ -47,6 +47,36 @@ const createPaddedSize = (count: number) => {
     const height = Math.max(4, Math.ceil((count / width) / 4) * 4);
     return { width, height, paddedSize: width * height };
 };
+const roundPow2 = (value: number) => {
+    if (!Number.isFinite(value) || value <= 1) return 1;
+    return 2 ** Math.round(Math.log2(value));
+};
+const chooseShnPaletteSize = (count: number, numCoeffs: number) => {
+    const coeffPenalty = numCoeffs >= 45 ? 0.5 : (numCoeffs >= 24 ? 0.75 : 1.0);
+    const target = Math.sqrt(Math.max(count, 1)) * 8 * coeffPenalty;
+    const minPalette = count >= 16384 ? 512 : 256;
+    const maxPalette = numCoeffs >= 45 ? 4096 : 8192;
+    return Math.max(minPalette, Math.min(count, Math.min(maxPalette, roundPow2(target))));
+};
+const chooseShnIterations = (iterations: number, count: number, numCoeffs: number) => {
+    const cap = (count >= 120000 || numCoeffs >= 45) ? 3 : 4;
+    return Math.max(2, Math.min(iterations, cap));
+};
+const resolveTotalFrames = (data: any) => {
+    const explicit = Number(data?.frames ?? data?.total_frames ?? data?.custom?.total_frames);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.max(1, Math.round(explicit));
+    const calcFrames = (keyframes: number, stride: number) => {
+        const k = Number.isFinite(keyframes) ? Math.max(0, Math.round(keyframes)) : 0;
+        const s = Number.isFinite(stride) && stride > 0 ? stride : 1;
+        return k > 1 ? (k - 1) * s + 1 : (k === 1 ? 1 : 0);
+    };
+    return Math.max(
+        1,
+        calcFrames(data?.keyframes || 0, data?.xyzStride || 1),
+        calcFrames(data?.rotKeyframes || 0, data?.rotStride || 1),
+        calcFrames(data?.dcKeyframes || 0, data?.dcStride || 1)
+    );
+};
 const initializeCentroids1D = (data: Float32Array, k: number) => {
     const sorted = Float32Array.from(data).sort();
     const centroids = new Float32Array(k);
@@ -350,7 +380,7 @@ export class SOG4Encoder {
         const deleted = overrides.apply_deleted && Array.isArray(overrides.deleted_indices) ? overrides.deleted_indices : null;
         if (deleted && deleted.length > 0) {
             const originalCount = count;
-            const origIndices = overrides.original_indices as number[] | undefined;
+            const origIndices = overrides.original_indices as ArrayLike<number> | undefined;
             const deletedSet = new Set<number>();
             for (let i = 0; i < deleted.length; i++) {
                 const idx = deleted[i];
@@ -378,13 +408,15 @@ export class SOG4Encoder {
 
         const zip = new JSZip();
         const getSourceIndex = (i: number) => sourceIndices ? sourceIndices[i] : i;
+        const totalFrames = resolveTotalFrames(data);
         const meta: any = {
             version: 2,
             asset: { generator: 'master_ply_to_sog_native' },
             count: count,
-            model_transform: data.model_transform || overrides.model_transform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] },
-            cameras: data.cameras || overrides.cameras || [],
-            postProcessing: data.postProcessing || overrides.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 }
+            total_frames: totalFrames,
+            model_transform: overrides.model_transform || data.model_transform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] },
+            cameras: overrides.cameras || data.cameras || [],
+            postProcessing: overrides.postProcessing || data.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 }
         };
         const fRestNames = Object.keys(p).filter((name) => /^f_rest_\d+$/.test(name)).sort((a, b) => extractTrailingIndex(a) - extractTrailingIndex(b));
         const opacitySemantic = data.opacitySemantic;
@@ -401,7 +433,8 @@ export class SOG4Encoder {
                 stageLabel: 'Raw Payload',
                 stagePct: 0
             });
-            const staticRowFloats = 17 + fRestNames.length;
+            const originalIndexSource = (overrides.original_indices as ArrayLike<number> | undefined) || p.original_index;
+            const staticRowFloats = 18 + fRestNames.length;
             const staticData = new Float32Array(count * staticRowFloats);
             for (let i = 0; i < count; i++) {
                 const src = getSourceIndex(i);
@@ -427,6 +460,7 @@ export class SOG4Encoder {
                 for (const name of fRestNames) {
                     staticData[off++] = p[name]?.[src] || 0;
                 }
+                staticData[off++] = originalIndexSource?.[src] ?? src;
                 if ((i & 4095) === 0) {
                     emitProgress(5 + (i / Math.max(count, 1)) * 85, `Encoding Raw Float Payload ${i}/${count}`, {
                         stageId: 'raw_payload',
@@ -463,11 +497,11 @@ export class SOG4Encoder {
             if (rotBank) saveFloat32('raw_rot_bank.bin', rotBank);
             if (dcBank) saveFloat32('raw_dc_bank.bin', dcBank);
 
-            meta.total_frames = data.frames || 1;
+            meta.total_frames = totalFrames;
             meta.custom = Object.assign({}, data.custom || overrides.custom || {}, {
                 raw_float_payload: {
                     version: 1,
-                    total_frames: data.frames || 1,
+                    total_frames: totalFrames,
                     static: {
                         file: 'raw_static.bin',
                         row_floats: staticRowFloats,
@@ -514,9 +548,9 @@ export class SOG4Encoder {
             });
             return result;
         }
-        if (data.custom || overrides.custom) {
-            meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {});
-        }
+        meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {}, meta.custom || {}, {
+            total_frames: totalFrames
+        });
 
         const { width, height, paddedSize } = createPaddedSize(count);
         const iterations = Number.isFinite(overrides.iterations) ? overrides.iterations : 5;
@@ -767,8 +801,13 @@ export class SOG4Encoder {
                 }
             }
 
-            const paletteScale = Math.pow(2, Math.floor(Math.log2(Math.max(count / 1024, Number.MIN_VALUE))));
-            const paletteSize = Math.max(Math.min(64, paletteScale) * 1024, 16);
+            const paletteSize = chooseShnPaletteSize(count, numCoeffs);
+            const shnIterations = chooseShnIterations(iterations, count, numCoeffs);
+            emitProgress(54, `SHN palette size ${paletteSize}, iterations ${shnIterations}`, {
+                stageId: 'shn',
+                stageLabel: `SHN (${fRestNames.length})`,
+                stagePct: 10
+            });
             
             const wrappedSchedulerND = async (force?: boolean, pct?: number) => {
                 if (pct !== undefined) {
@@ -791,8 +830,8 @@ export class SOG4Encoder {
                 await scheduler(force);
             };
 
-            const { centroids: shCentroids, labels: shLabelsND } = await kmeansND(shData, count, numCoeffs, paletteSize, iterations, 1024, wrappedSchedulerND);
-            const { centroids: shCodebook, labels: centroidLabels } = await kmeans1D(shCentroids, 256, iterations, wrappedScheduler1D);
+            const { centroids: shCentroids, labels: shLabelsND } = await kmeansND(shData, count, numCoeffs, paletteSize, shnIterations, 1024, wrappedSchedulerND);
+            const { centroids: shCodebook, labels: centroidLabels } = await kmeans1D(shCentroids, 256, shnIterations, wrappedScheduler1D);
 
             const coeffsPerColor = numCoeffs / 3;
             const cWidth = 64 * coeffsPerColor;
@@ -945,6 +984,7 @@ export class SOG4Encoder {
             meta.xyz_bank = frames.map(({ mins, maxs, files }) => ({ mins, maxs, files }));
             frames.forEach(({ buffers }) => buffers.forEach(({ name, buffer }) => zip.file(name, buffer)));
             meta.xyz_bank_stride = data.xyzStride;
+            meta.custom.xyz_bank_keyframe_stride = data.xyzStride;
             emitProgress(70, "XYZ bank encoded", {
                 stageId: 'xyz_bank',
                 stageLabel: 'XYZ Bank',
@@ -960,6 +1000,7 @@ export class SOG4Encoder {
             meta.xyz_bank = frames.map(({ mins, maxs, files }) => ({ mins, maxs, files }));
             frames.forEach(({ buffers }) => buffers.forEach(({ name, buffer }) => zip.file(name, buffer)));
             meta.xyz_bank_stride = data.xyzStride || 1;
+            meta.custom.xyz_bank_keyframe_stride = data.xyzStride || 1;
             emitProgress(70, "XYZ bank encoded", {
                 stageId: 'xyz_bank',
                 stageLabel: 'XYZ Bank',
@@ -977,6 +1018,7 @@ export class SOG4Encoder {
             meta.f_dc_bank = frames.map(({ mins, maxs, files }) => ({ mins, maxs, files }));
             frames.forEach(({ buffers }) => buffers.forEach(({ name, buffer }) => zip.file(name, buffer)));
             meta.f_dc_bank_stride = data.dcStride;
+            meta.custom.features_dc_bank_keyframe_stride = data.dcStride;
             emitProgress(76, "Color bank encoded", {
                 stageId: 'color_bank',
                 stageLabel: 'Color Bank',
@@ -1025,6 +1067,7 @@ export class SOG4Encoder {
             meta.rot_bank = arr.map(({ files }) => ({ files }));
             arr.forEach(({ name, buffer }) => zip.file(name, buffer));
             meta.rot_bank_stride = data.rotStride;
+            meta.custom.rot_bank_keyframe_stride = data.rotStride;
             emitProgress(84, "Rotation bank encoded", {
                 stageId: 'rotation_bank',
                 stageLabel: 'Rotation Bank',

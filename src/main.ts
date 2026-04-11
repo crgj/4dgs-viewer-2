@@ -12,7 +12,7 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
-import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder';
+import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
 import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
 
 // --- Configuration & State ---
@@ -776,7 +776,6 @@ class Viewer {
             settingsPanel?.classList.add('hidden');
         });
 
-        // #WDD 2026-03-31 改为支持 SOG4 和 PLY4 两种导出
         const btnExportSog = document.getElementById('btn-export-sog');
         btnExportSog?.addEventListener('click', () => {
             this.saveAsSOG4();
@@ -5328,7 +5327,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     : 'No deleted splats'
             });
 
-            const origIndices = this.originalIndices ? Array.from(this.originalIndices) : undefined;
+            const origIndices = this.originalIndices || this.lastParsedData?.original_index || undefined;
             const hasDeletes = deletedIndices.length > 0;
             let buffer: Uint8Array;
 
@@ -5347,11 +5346,15 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 encodeOverrides.deleted_indices = deletedIndices;
                 if (origIndices) encodeOverrides.original_indices = origIndices;
             }
-            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, (pct: number, msg: string, meta?: SOG4EncodeProgressMeta) => {
-                setExportProgress(8 + (pct * 0.84), `Encoding: ${msg}`, meta ? {
-                    ...meta,
-                    overallPct: 8 + (pct * 0.84)
-                } : undefined);
+
+            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, {
+                mode: 'standard',
+                progress: (pct: number, msg: string, meta?: SOG4EncodeProgressMeta) => {
+                    setExportProgress(8 + (pct * 0.84), `Encoding: ${msg}`, meta ? {
+                        ...meta,
+                        overallPct: 8 + (pct * 0.84)
+                    } : undefined);
+                }
             });
             this.lastParsedData.sogBuffer = buffer;
             this.lastParsedData.isSOG4 = true;
@@ -5397,6 +5400,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
             }
         }
     }
+
 }
 
 // Global scoped app for access in callbacks

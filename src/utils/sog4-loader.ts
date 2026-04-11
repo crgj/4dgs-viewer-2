@@ -772,7 +772,7 @@ export class SOG4Loader {
     ): Promise<Uint8Array> {
         return await SOG4Encoder.encode(data, {
             ...overrides,
-            rawFloatPayload: false
+            rawFloatPayload: overrides.rawFloatPayload ?? false
         }, progress);
     }
 }
