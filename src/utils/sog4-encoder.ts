@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { encodeTextureImage } from './webp-lossless';
 
 export type SOG4EncodeProgressMeta = {
     stageId: string;
@@ -548,9 +549,14 @@ export class SOG4Encoder {
             });
             return result;
         }
-        meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {}, meta.custom || {}, {
-            total_frames: totalFrames
-        });
+        const customOut: any = { total_frames: totalFrames };
+        if (data.meta) {
+            const m = data.meta;
+            if (m.modelPos)   customOut['model_pos'] = `${m.modelPos.x} ${m.modelPos.y} ${m.modelPos.z}`;
+            if (m.modelRot)   customOut['model_rot'] = `${m.modelRot.x} ${m.modelRot.y} ${m.modelRot.z} ${m.modelRot.w}`;
+            if (m.modelScale) customOut['model_scale'] = `${m.modelScale.x} ${m.modelScale.y} ${m.modelScale.z}`;
+        }
+        meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {}, meta.custom || {}, customOut);
 
         const { width, height, paddedSize } = createPaddedSize(count);
         const iterations = Number.isFinite(overrides.iterations) ? overrides.iterations : 5;
@@ -567,30 +573,7 @@ export class SOG4Encoder {
         const chooseImageType = (fileName: string) => fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/webp';
 
         const renderTex = async (tex: any, fileName: string): Promise<ArrayBuffer> => {
-            tex.ctx.putImageData(tex.img, 0, 0);
-            let blob;
-            const preferredType = chooseImageType(fileName);
-            if (typeof tex.canvas.convertToBlob === 'function') {
-                blob = await tex.canvas.convertToBlob({ type: preferredType, quality: 1 });
-                if ((!blob || blob.size === 0) && preferredType !== 'image/png') {
-                    blob = await tex.canvas.convertToBlob({ type: 'image/png' });
-                }
-            } else {
-                blob = await new Promise<Blob>((res, rej) => {
-                    const tryType = (type: string, fallback: boolean) => {
-                        tex.canvas.toBlob((b: Blob) => {
-                            if (!b || b.size === 0) {
-                                if (fallback && type !== 'image/png') return tryType('image/png', false);
-                                rej();
-                                return;
-                            }
-                            res(b);
-                        }, type, 1);
-                    };
-                    tryType(preferredType, true);
-                });
-            }
-            return await blob.arrayBuffer();
+            return await encodeTextureImage(tex, fileName);
         };
         const saveTex = async (tex: any, name: string) => {
             zip.file(name, await renderTex(tex, name));
@@ -659,7 +642,7 @@ export class SOG4Encoder {
             stageLabel: 'Rotations',
             stagePct: 0
         });
-        meta.quats = { files: ['quats'] };
+        meta.quats = { files: ['quats.webp'] };
         const qTex = createTex();
         for (let i = 0; i < count; i++) {
             const src = getSourceIndex(i);
@@ -691,7 +674,7 @@ export class SOG4Encoder {
                 await scheduler();
             }
         }
-        await saveTex(qTex, 'quats');
+        await saveTex(qTex, 'quats.webp');
         emitProgress(34, "Rotations encoded", {
             stageId: 'rotations',
             stageLabel: 'Rotations',
@@ -719,7 +702,7 @@ export class SOG4Encoder {
             }
         }
         const { centroids: scaleCb, labelsList: scaleLabels } = await clusterSharedCodebook([scale0, scale1, scale2], 256, iterations, scheduler);
-        meta.scales = { codebook: Array.from(scaleCb), files: ['scales'] };
+        meta.scales = { codebook: Array.from(scaleCb), files: ['scales.webp'] };
         const sTex = createTex();
         for (let i = 0; i < count; i++) {
             sTex.data[i * 4] = scaleLabels[0][i];
@@ -735,7 +718,7 @@ export class SOG4Encoder {
                 await scheduler();
             }
         }
-        await saveTex(sTex, 'scales');
+        await saveTex(sTex, 'scales.webp');
 
         const sh0_0 = new Float32Array(count), sh0_1 = new Float32Array(count), sh0_2 = new Float32Array(count);
         const opacArray = new Float32Array(count);
@@ -755,7 +738,7 @@ export class SOG4Encoder {
             }
         }
         const { centroids: shCb, labelsList: shLabels } = await clusterSharedCodebook([sh0_0, sh0_1, sh0_2], 256, iterations, scheduler);
-        meta.sh0 = { codebook: Array.from(shCb), files: ['sh0'] };
+        meta.sh0 = { codebook: Array.from(shCb), files: ['sh0.webp'] };
         const sh0Tex = createTex();
         for (let i = 0; i < count; i++) {
             let opac = opacArray[i];
@@ -773,7 +756,7 @@ export class SOG4Encoder {
                 await scheduler();
             }
         }
-        await saveTex(sh0Tex, 'sh0');
+        await saveTex(sh0Tex, 'sh0.webp');
         emitProgress(52, "Scales & opacity encoded", {
             stageId: 'scales_opacity',
             stageLabel: 'Scales & Opacity',
@@ -1061,7 +1044,7 @@ export class SOG4Encoder {
                         await scheduler();
                     }
                 }
-                const fn = `rot_bank_${k}`;
+                const fn = `rot_bank_${k}.webp`;
                 return { files: [fn], buffer: await renderTex(bTex, fn), name: fn };
             });
             meta.rot_bank = arr.map(({ files }) => ({ files }));
@@ -1077,7 +1060,7 @@ export class SOG4Encoder {
 
         if (p.lifetime_mu && p.lifetime_w) {
             emitProgress(85, "Encoding Params...", {
-                stageId: 'params',
+                stageId: 'params.webp',
                 stageLabel: 'Params',
                 stagePct: 0
             });
@@ -1091,7 +1074,7 @@ export class SOG4Encoder {
                 isParam[i] = p.is_param?.[src] || 0;
                 if ((i & 4095) === 0) {
                     emitProgress(85 + (i / Math.max(count, 1)) * 3, `Collecting Params ${i}/${count}`, {
-                        stageId: 'params',
+                        stageId: 'params.webp',
                         stageLabel: 'Params',
                         stagePct: (i / Math.max(count, 1)) * 35
                     });
@@ -1109,7 +1092,7 @@ export class SOG4Encoder {
                 pTex.data[i * 4 + 3] = 255;
                 if ((i & 4095) === 0) {
                     emitProgress(88 + (i / Math.max(count, 1)) * 3, `Packing Params ${i}/${count}`, {
-                        stageId: 'params',
+                        stageId: 'params.webp',
                         stageLabel: 'Params',
                         stagePct: 65 + (i / Math.max(count, 1)) * 30
                     });
@@ -1124,7 +1107,7 @@ export class SOG4Encoder {
             };
             await saveTex(pTex, 'params.webp');
             emitProgress(92, "Params encoded", {
-                stageId: 'params',
+                stageId: 'params.webp',
                 stageLabel: 'Params',
                 stagePct: 100
             });

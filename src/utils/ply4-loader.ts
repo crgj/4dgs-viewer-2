@@ -1,6 +1,21 @@
 
 import * as pc from 'playcanvas';
 
+export type PLY4LoadProgressMeta = {
+    stageId: 'header' | 'body' | 'finalize';
+    stageLabel: string;
+    stagePct: number;
+    overallPct: number;
+    detail?: string;
+    substepId?: string;
+    substepLabel?: string;
+    substepPct?: number;
+    chunkIndex?: number;
+    chunkCount?: number;
+    rowsRead?: number;
+    rowCount?: number;
+};
+
 export class PLY4Loader {
     private static readonly HEADER_PROBE_BYTES = 1024 * 1024;
     private static readonly BODY_CHUNK_BYTES = 64 * 1024 * 1024;
@@ -8,27 +23,108 @@ export class PLY4Loader {
 
     constructor() { }
 
-    async load(file: File | ArrayBuffer, progressCallback?: (progress: number, message: string) => void): Promise<any> {
+    async load(file: File | ArrayBuffer, progressCallback?: (progress: number, message: string, meta?: PLY4LoadProgressMeta) => void): Promise<any> {
         if (file instanceof File) {
             return this.parsePLYFile(file, progressCallback);
         }
         return this.parsePLYBuffer(file, progressCallback);
     }
 
-    private async parsePLYFile(file: File, onProgress?: (p: number, msg: string) => void) {
-        if (onProgress) onProgress(0, "Parsing PLY Header");
+    private emitProgress(
+        onProgress: ((p: number, msg: string, meta?: PLY4LoadProgressMeta) => void) | undefined,
+        progress: number,
+        message: string,
+        meta?: Partial<PLY4LoadProgressMeta>
+    ) {
+        onProgress?.(progress, message, meta ? {
+            stageId: meta.stageId || 'body',
+            stageLabel: meta.stageLabel || message,
+            stagePct: meta.stagePct ?? progress,
+            overallPct: meta.overallPct ?? progress,
+            detail: meta.detail,
+            substepId: meta.substepId,
+            substepLabel: meta.substepLabel,
+            substepPct: meta.substepPct,
+            chunkIndex: meta.chunkIndex,
+            chunkCount: meta.chunkCount,
+            rowsRead: meta.rowsRead,
+            rowCount: meta.rowCount
+        } : undefined);
+    }
+
+    private async parsePLYFile(file: File, onProgress?: (p: number, msg: string, meta?: PLY4LoadProgressMeta) => void) {
+        this.emitProgress(onProgress, 0, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 0,
+            overallPct: 0,
+            detail: 'Reading header probe bytes',
+            substepId: 'header_probe',
+            substepLabel: 'Header Probe',
+            substepPct: 0
+        });
 
         const headerChunk = await file.slice(0, PLY4Loader.HEADER_PROBE_BYTES).arrayBuffer();
+        this.emitProgress(onProgress, 3, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 30,
+            overallPct: 3,
+            detail: 'Header bytes loaded',
+            substepId: 'header_probe',
+            substepLabel: 'Header Probe',
+            substepPct: 100
+        });
         const { headerEnd, headerText } = this.extractHeaderFromBuffer(headerChunk);
+        this.emitProgress(onProgress, 5, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 55,
+            overallPct: 5,
+            detail: 'Header terminator found',
+            substepId: 'header_scan',
+            substepLabel: 'Header Scan',
+            substepPct: 100
+        });
         const parsedHeader = this.parseHeaderText(headerText);
+        this.emitProgress(onProgress, 7, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 80,
+            overallPct: 7,
+            detail: `Vertex count ${parsedHeader.vertexCount.toLocaleString()}`,
+            substepId: 'header_parse',
+            substepLabel: 'Header Parse',
+            substepPct: 100
+        });
         this.ensureWithinBrowserMemoryBudget(parsedHeader);
+        this.emitProgress(onProgress, 10, "Reading Body", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 100,
+            overallPct: 10,
+            detail: 'Memory budget check passed',
+            substepId: 'memory_budget',
+            substepLabel: 'Memory Budget',
+            substepPct: 100
+        });
         const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames, parsedHeader.frestNames);
 
         if (!parsedHeader.isBinary) {
             throw new Error("PLY4 Loader: ASCII PLY not supported yet (optimization needed). Please use binary.");
         }
 
-        if (onProgress) onProgress(10, "Reading Body");
+        this.emitProgress(onProgress, 10, "Reading Body", {
+            stageId: 'body',
+            stageLabel: 'Read Body',
+            stagePct: 0,
+            overallPct: 10,
+            detail: 'Preparing chunked vertex reads',
+            substepId: 'body_prepare',
+            substepLabel: 'Prepare Body',
+            substepPct: 100,
+            rowCount: parsedHeader.vertexCount
+        });
 
         const rowSize = parsedHeader.propertyTypes.reduce((sum, p) => sum + p.size, 0);
         const expectedSize = headerEnd + parsedHeader.vertexCount * rowSize;
@@ -73,29 +169,102 @@ export class PLY4Loader {
                 parsedHeader.rotationSemantic
             );
 
-            if (onProgress) {
-                const progress = 10 + ((startRow + rowCount) / parsedHeader.vertexCount) * 80;
-                onProgress(progress, "Reading Vertices");
-            }
+            const rowsRead = startRow + rowCount;
+            const bodyPct = (rowsRead / Math.max(parsedHeader.vertexCount, 1)) * 100;
+            const progress = 10 + (bodyPct * 0.8);
+            this.emitProgress(onProgress, progress, "Reading Vertices", {
+                stageId: 'body',
+                stageLabel: 'Read Body',
+                stagePct: bodyPct,
+                overallPct: progress,
+                detail: `Chunk ${chunkIndex + 1}/${totalChunks} • rows ${rowsRead.toLocaleString()}/${parsedHeader.vertexCount.toLocaleString()}`,
+                substepId: 'vertex_chunk',
+                substepLabel: `Chunk ${chunkIndex + 1}/${totalChunks}`,
+                substepPct: (rowCount / Math.max(rowCount, 1)) * 100,
+                chunkIndex: chunkIndex + 1,
+                chunkCount: totalChunks,
+                rowsRead,
+                rowCount: parsedHeader.vertexCount
+            });
         }
 
-        if (onProgress) onProgress(100, "Done");
+        this.emitProgress(onProgress, 100, "Done", {
+            stageId: 'finalize',
+            stageLabel: 'Finalize Parse',
+            stagePct: 100,
+            overallPct: 100,
+            detail: 'PLY4 decode completed',
+            substepId: 'parse_complete',
+            substepLabel: 'Parse Complete',
+            substepPct: 100,
+            rowsRead: parsedHeader.vertexCount,
+            rowCount: parsedHeader.vertexCount
+        });
         return this.buildResult(data, parsedHeader);
     }
 
-    private parsePLYBuffer(buffer: ArrayBuffer, onProgress?: (p: number, msg: string) => void) {
-        if (onProgress) onProgress(0, "Parsing PLY Header");
+    private parsePLYBuffer(buffer: ArrayBuffer, onProgress?: (p: number, msg: string, meta?: PLY4LoadProgressMeta) => void) {
+        this.emitProgress(onProgress, 0, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 0,
+            overallPct: 0,
+            detail: 'Scanning buffer for header',
+            substepId: 'header_probe',
+            substepLabel: 'Header Probe',
+            substepPct: 0
+        });
 
         const { headerEnd, headerText } = this.extractHeaderFromBuffer(buffer);
+        this.emitProgress(onProgress, 4, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 40,
+            overallPct: 4,
+            detail: 'Header terminator found',
+            substepId: 'header_scan',
+            substepLabel: 'Header Scan',
+            substepPct: 100
+        });
         const parsedHeader = this.parseHeaderText(headerText);
+        this.emitProgress(onProgress, 8, "Parsing PLY Header", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 80,
+            overallPct: 8,
+            detail: `Vertex count ${parsedHeader.vertexCount.toLocaleString()}`,
+            substepId: 'header_parse',
+            substepLabel: 'Header Parse',
+            substepPct: 100
+        });
         this.ensureWithinBrowserMemoryBudget(parsedHeader);
+        this.emitProgress(onProgress, 10, "Reading Body", {
+            stageId: 'header',
+            stageLabel: 'Parse Header',
+            stagePct: 100,
+            overallPct: 10,
+            detail: 'Memory budget check passed',
+            substepId: 'memory_budget',
+            substepLabel: 'Memory Budget',
+            substepPct: 100
+        });
         const data = this.createDataArrays(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames, parsedHeader.frestNames);
 
         if (!parsedHeader.isBinary) {
             throw new Error("PLY4 Loader: ASCII PLY not supported yet (optimization needed). Please use binary.");
         }
 
-        if (onProgress) onProgress(10, "Reading Body");
+        this.emitProgress(onProgress, 10, "Reading Body", {
+            stageId: 'body',
+            stageLabel: 'Read Body',
+            stagePct: 0,
+            overallPct: 10,
+            detail: 'Reading vertex rows from memory buffer',
+            substepId: 'body_prepare',
+            substepLabel: 'Prepare Body',
+            substepPct: 100,
+            rowCount: parsedHeader.vertexCount
+        });
 
         console.log(`[PLY4] Buffer Length: ${buffer.byteLength}, Header End: ${headerEnd}`);
 
@@ -137,7 +306,18 @@ export class PLY4Loader {
             parsedHeader.rotationSemantic
         );
 
-        if (onProgress) onProgress(100, "Done");
+        this.emitProgress(onProgress, 100, "Done", {
+            stageId: 'finalize',
+            stageLabel: 'Finalize Parse',
+            stagePct: 100,
+            overallPct: 100,
+            detail: 'PLY4 decode completed',
+            substepId: 'parse_complete',
+            substepLabel: 'Parse Complete',
+            substepPct: 100,
+            rowsRead: parsedHeader.vertexCount,
+            rowCount: parsedHeader.vertexCount
+        });
         return this.buildResult(data, parsedHeader);
     }
 

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'path';
 
 export default defineConfig({
     // TODO: 如果发布到 GitHub Pages 的子目录，请将 '/' 替换为 '/仓库名称/'
@@ -8,6 +9,12 @@ export default defineConfig({
     build: {
         outDir: 'docs',
         emptyOutDir: true,
+        rollupOptions: {
+            input: {
+                main: resolve(__dirname, 'index.html'),
+                batchConvert: resolve(__dirname, 'batch-convert.html'),
+            },
+        },
     },
     server: {
         // 允许通过 IP 访问，方便手机端测试

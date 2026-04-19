@@ -2,20 +2,24 @@
 import * as pc from 'playcanvas';
 
 // SVG Icons for Selection Tools
-const ICON_BRUSH = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.93-1.91-1.41 1.41 1.42 1.42L3 19.29V21h1.71l11.96-8.92 1.42 1.42 1.41-1.41-1.92-1.92 3.12-3.12c.4-.4.4-1.03.01-1.42zM5.21 20c-.07.53-.51 1-1.21 1 0 0 0 0 0 0H3v-1.04c-.03.73.5 1.14 1.21 1.21.39.04.79-.12 1-.41z"/></svg>`;
-const ICON_RECT = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/></svg>`;
-const ICON_INVERT = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.49 10 10-4.49 10-10 10zm-1-17.93C7.06 4.56 4 7.92 4 12s3.06 7.44 7 7.93V4.07z"/></svg>`;
-const ICON_CLEAR = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+const ICON_BRUSH = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.93-1.91-1.41 1.41 1.42 1.42L3 19.29V21h1.71l11.96-8.92 1.42 1.42 1.41-1.41-1.92-1.92 3.12-3.12c.4-.4.4-1.03.01-1.42zM5.21 20c-.07.53-.51 1-1.21 1 0 0 0 0 0 0H3v-1.04c-.03.73.5 1.14 1.21 1.21.39.04.79-.12 1-.41z"/></svg>`;
+const ICON_RECT = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/></svg>`;
+const ICON_INVERT = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.49 10 10-4.49 10-10 10zm-1-17.93C7.06 4.56 4 7.92 4 12s3.06 7.44 7 7.93V4.07z"/></svg>`;
+const ICON_CLEAR = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
 // Center point icon (dot in center)
-const ICON_CENTER = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="3"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" opacity="0.5"/></svg>`;
+const ICON_CENTER = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><circle cx="12" cy="12" r="3"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" opacity="0.5"/></svg>`;
 // Ellipse/Edge icon (circle with ring)
-const ICON_ELLIPSE = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_ELLIPSE = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3"/></svg>`;
 // Undo icon
-const ICON_UNDO = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>`;
+const ICON_UNDO = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>`;
 // Redo icon
-const ICON_REDO = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>`;
+const ICON_REDO = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>`;
+// All-Time Brush icon with clock badge
+const ICON_BRUSH_ALLTIME = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5"><path fill="currentColor" transform="scale(0.8) translate(1, 3)" d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.93-1.91-1.41 1.41 1.42 1.42L3 19.29V21h1.71l11.96-8.92 1.42 1.42 1.41-1.41-1.92-1.92 3.12-3.12c.4-.4.4-1.03.01-1.42zM5.21 20c-.07.53-.51 1-1.21 1 0 0 0 0 0 0H3v-1.04c-.03.73.5 1.14 1.21 1.21.39.04.79-.12 1-.41z"/><circle cx="19" cy="5" r="4" fill="currentColor" opacity="0.2"/><circle cx="19" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M19 3v2l1.2 0.8" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
+// All-Time Rect icon with clock badge
+const ICON_RECT_ALLTIME = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5"><path fill="currentColor" transform="scale(0.8) translate(1, 3)" d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/><circle cx="19" cy="5" r="4" fill="currentColor" opacity="0.2"/><circle cx="19" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M19 3v2l1.2 0.8" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
 // Help/Question icon
-const ICON_HELP = `<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>`;
+const ICON_HELP = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>`;
 
 
 // Export class
@@ -30,7 +34,7 @@ export class SelectionTool {
     allTimeSelectionData: Uint8Array | null = null;
 
     // Tools
-    currentTool: 'none' | 'brush' | 'rect' = 'none';
+    currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' = 'none';
     selectionMode: 'center' | 'ellipse' = 'center';
     brushRadius = 50; // pixels
 
@@ -39,6 +43,7 @@ export class SelectionTool {
     isSubtracting = false;
     startPos = new pc.Vec2();
     currentPos = new pc.Vec2();
+    brushPath: Array<{x: number, y: number}> = []; // #WDD 2026-04-18: Deferred all-time brush path
 
     // UI
     toolbar!: HTMLElement;
@@ -162,52 +167,21 @@ export class SelectionTool {
     }
 
     invertSelection(totalSplats: number) {
-        // #WDD 2026-04-11: Invert selection logic
-        // If allTimeSelection is not empty:
-        //   1) Invert allTimeSelection itself globally (selected->unselected, unselected->selected)
-        //   2) Copy inverted allTimeSelection to selection
-        //   3) Clear allTimeSelection
-        // If allTimeSelection is empty:
-        //   Invert selection globally
-        if (!this.selectionData || !this.allTimeSelectionData) return;
+        // #WDD 2026-04-18: Invert selection based on current tool mode
+        // Normal tools: only invert currently visible points
+        // All-time tools: invert all non-deleted points globally
+        if (!this.selectionData) return;
         
-        // Check if allTimeSelection has any selected points
-        let hasAllTimeSelection = false;
-        for (let i = 0; i < this.allTimeSelectionData.length; i += 4) {
-            if (this.allTimeSelectionData[i] > 0) {
-                hasAllTimeSelection = true;
-                break;
-            }
-        }
+        const isAllTime = this.isAllTimeTool();
         
-        if (hasAllTimeSelection) {
-            // Case 2: allTimeSelection is not empty
-            // Invert allTimeSelection globally and copy to selection
-            for (let i = 0; i < totalSplats; i++) {
-                const idx = i * 4;
-                // Check if deleted (G > 0) - if so, skip
-                if (this.selectionData[idx + 1] > 0) continue;
-                
-                // Invert allTimeSelection itself (selected->unselected, unselected->selected)
-                this.allTimeSelectionData[idx] = this.allTimeSelectionData[idx] > 0 ? 0 : 255;
-                
-                // Copy inverted allTimeSelection to selection
-                this.selectionData[idx] = this.allTimeSelectionData[idx];
-            }
+        for (let i = 0; i < totalSplats; i++) {
+            const idx = i * 4;
+            // Skip deleted points (G > 0)
+            if (this.selectionData[idx + 1] > 0) continue;
             
-            // Clear all-time selection after using it
-            const allTimeLen = this.allTimeSelectionData.length;
-            for (let i = 0; i < allTimeLen; i += 4) {
-                this.allTimeSelectionData[i] = 0;
-            }
-        } else {
-            // Case 3: allTimeSelection is empty, invert selection globally
-            for (let i = 0; i < totalSplats; i++) {
-                const idx = i * 4;
-                // Check if deleted (G > 0) - if so, skip
-                if (this.selectionData[idx + 1] > 0) continue;
-                
-                // Invert R channel for all non-deleted points
+            // All-time tools: invert all non-deleted points
+            // Normal tools: only invert currently visible points
+            if (isAllTime || this.isVisibleAtCurrentTime(i)) {
                 this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
             }
         }
@@ -418,52 +392,59 @@ export class SelectionTool {
         div.className = 'fixed left-6 top-1/2 -translate-y-1/2 z-20 flex flex-row items-start gap-2 pointer-events-none transition-all duration-500';
         div.innerHTML = `
             <div class="flex flex-col gap-2">
-                <!-- Main Tools -->
-                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto">
-                    <button id="tool-brush" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Brush Selection">
+                <!-- Selection Tools (4 tools together) -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto">
+                    <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush Selection">
                         ${ICON_BRUSH}
                     </button>
-                    <button id="tool-rect" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Area Selection">
+                    <button id="tool-rect" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Area Selection">
                         ${ICON_RECT}
                     </button>
                     <div class="h-px ui-border w-full my-1"></div>
-                    <button id="tool-invert" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Invert Selection">
+                    <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush Selection">
+                        ${ICON_BRUSH_ALLTIME}
+                    </button>
+                    <button id="tool-rect-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Area Selection">
+                        ${ICON_RECT_ALLTIME}
+                    </button>
+                </div>
+
+                <!-- Operations: Invert / Clear / Undo / Redo -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
+                    <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert Selection">
                         ${ICON_INVERT}
                     </button>
-                    <button id="tool-clear" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Clear Selection">
+                    <button id="tool-clear" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear Selection">
                         ${ICON_CLEAR}
                     </button>
-                </div>
-
-                <!-- Selection Mode -->
-                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto">
-                    <button id="select-mode-center" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Center Mode">
-                        ${ICON_CENTER}
-                    </button>
-                    <button id="select-mode-ellipse" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Ellipse Mode">
-                        ${ICON_ELLIPSE}
-                    </button>
-                </div>
-
-                <!-- Delete Panel (Independent) -->
-                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto items-center">
-                     <button id="action-delete" class="p-2 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
-                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                    </button>
-                </div>
-
-                <!-- Undo/Redo Panel -->
-                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto items-center">
-                    <button id="action-undo" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Undo (Ctrl+Z)">
+                    <div class="h-px ui-border w-full my-1"></div>
+                    <button id="action-undo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Undo (Ctrl+Z)">
                         ${ICON_UNDO}
                     </button>
-                    <button id="action-redo" class="ui-btn p-2 rounded-lg has-tooltip" aria-label="Redo (Ctrl+Y)">
+                    <button id="action-redo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Redo (Ctrl+Y)">
                         ${ICON_REDO}
                     </button>
                 </div>
 
+                <!-- Selection Mode -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto">
+                    <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode">
+                        ${ICON_CENTER}
+                    </button>
+                    <button id="select-mode-ellipse" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Ellipse Mode">
+                        ${ICON_ELLIPSE}
+                    </button>
+                </div>
+
+                <!-- Delete Panel -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
+                     <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
+                </div>
+
                 <!-- Help Panel -->
-                <div class="glass-blue p-2 rounded-lg flex flex-col gap-2 pointer-events-auto items-center">
+                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
                     <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help (Shortcuts)">
                         ${ICON_HELP}
                     </button>
@@ -503,6 +484,8 @@ export class SelectionTool {
 
         get('tool-brush')?.addEventListener('click', () => this.setTool('brush'));
         get('tool-rect')?.addEventListener('click', () => this.setTool('rect'));
+        get('tool-brush-alltime')?.addEventListener('click', () => this.setTool('brush-alltime'));
+        get('tool-rect-alltime')?.addEventListener('click', () => this.setTool('rect-alltime'));
         get('select-mode-center')?.addEventListener('click', () => this.setSelectionMode('center'));
         get('select-mode-ellipse')?.addEventListener('click', () => this.setSelectionMode('ellipse'));
         get('tool-invert')?.addEventListener('click', () => {
@@ -539,7 +522,7 @@ export class SelectionTool {
         this.setSelectionMode('center');
     }
 
-    setTool(tool: 'brush' | 'rect' | 'none') {
+    setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'none') {
         if (this.currentTool === tool && tool !== 'none') {
             this.currentTool = 'none'; // Toggle off if clicking the same tool
         } else {
@@ -553,7 +536,12 @@ export class SelectionTool {
 
         // UI Feedback
         const get = (id: string) => document.getElementById(id);
-        const map: Record<string, string> = { 'brush': 'tool-brush', 'rect': 'tool-rect' };
+        const map: Record<string, string> = { 
+            'brush': 'tool-brush', 
+            'rect': 'tool-rect',
+            'brush-alltime': 'tool-brush-alltime',
+            'rect-alltime': 'tool-rect-alltime'
+        };
 
         Object.values(map).forEach(id => get(id)?.classList.remove('active'));
         if (this.currentTool !== 'none' && map[this.currentTool]) {
@@ -562,7 +550,7 @@ export class SelectionTool {
 
         // Show/Hide brush settings
         const settings = document.getElementById('brush-settings');
-        if (this.currentTool === 'brush') {
+        if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
             settings?.classList.remove('hidden');
             settings?.classList.add('flex');
             document.getElementById('brush-cursor-overlay')?.classList.remove('hidden');
@@ -637,6 +625,22 @@ export class SelectionTool {
                     this.setTool('rect');
                 }
             }
+            if (e.key === '3') {
+                // Toggle all-time brush tool
+                if (this.currentTool === 'brush-alltime') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('brush-alltime');
+                }
+            }
+            if (e.key === '4') {
+                // Toggle all-time rect tool
+                if (this.currentTool === 'rect-alltime') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('rect-alltime');
+                }
+            }
             
             // #WDD 2026-04-10: Undo/Redo keyboard shortcuts
             if (e.ctrlKey || e.metaKey) {
@@ -694,12 +698,18 @@ export class SelectionTool {
         if (this.currentTool === 'none') return;
         // Check if hitting UI
         if ((e.target as HTMLElement).closest('.glass-blue')) return;
+        if ((e.target as HTMLElement).closest('[style*="border-amber-500"]')) return;
 
         this.isSelecting = true;
         this.startPos.set(e.clientX, e.clientY);
         this.currentPos.set(e.clientX, e.clientY);
 
-        if (this.currentTool === 'brush') {
+        if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
+            if (this.isAllTimeTool()) {
+                // Record path for deferred all-time selection at mouseup
+                this.brushPath = [{x: e.clientX, y: e.clientY}];
+            }
+            // Real-time select currently visible points
             this.performBrush(e.clientX, e.clientY);
         }
     }
@@ -707,7 +717,7 @@ export class SelectionTool {
     onMouseMove(e: MouseEvent) {
         // Update Brush Cursor
         const overlay = document.getElementById('brush-cursor-overlay');
-        if (overlay && this.currentTool === 'brush') {
+        if (overlay && (this.currentTool === 'brush' || this.currentTool === 'brush-alltime')) {
             overlay.style.left = e.clientX + 'px';
             overlay.style.top = e.clientY + 'px';
         }
@@ -715,9 +725,14 @@ export class SelectionTool {
         if (!this.isSelecting) return;
         this.currentPos.set(e.clientX, e.clientY);
 
-        if (this.currentTool === 'brush') {
+        if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
+            if (this.isAllTimeTool()) {
+                // Record path for deferred all-time selection at mouseup
+                this.brushPath.push({x: e.clientX, y: e.clientY});
+            }
+            // Real-time select currently visible points
             this.performBrush(e.clientX, e.clientY);
-        } else if (this.currentTool === 'rect') {
+        } else if (this.currentTool === 'rect' || this.currentTool === 'rect-alltime') {
             // Draw visual rect overlay?
             this.drawRectOverlay();
         }
@@ -727,7 +742,17 @@ export class SelectionTool {
         if (!this.isSelecting) return;
         this.isSelecting = false;
 
-        if (this.currentTool === 'rect') {
+        if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
+            if (this.isAllTimeTool()) {
+                this.brushPath.push({x: e.clientX, y: e.clientY});
+                if (this.selectionMode === 'ellipse') {
+                    this.performBrushEllipseAllTimePath(this.brushPath);
+                } else {
+                    this.performBrushAllTimePath(this.brushPath);
+                }
+                this.brushPath = [];
+            }
+        } else if (this.currentTool === 'rect' || this.currentTool === 'rect-alltime') {
             this.performRect(this.startPos.x, this.startPos.y, e.clientX, e.clientY);
             this.removeRectOverlay();
         }
@@ -749,53 +774,47 @@ export class SelectionTool {
         return this.viewer.currentTime ?? 0;
     }
 
-    // #WDD 2026-04-10: Check if a point is visible at current time based on lifetime
-    isVisibleAtCurrentTime(splatIdx: number): boolean {
-        // Get lifetime data from viewer
+    // #WDD 2026-04-18: Check if current tool is an all-time selection tool
+    isAllTimeTool(): boolean {
+        return this.currentTool === 'brush-alltime' || this.currentTool === 'rect-alltime';
+    }
+
+    // #WDD 2026-04-18: Check if a point is visible at a specific time
+    isVisibleAtTime(splatIdx: number, time: number): boolean {
         const lifeTexData = this.viewer.lifeTexData;
-        if (!lifeTexData) {
-            // No lifetime data, assume always visible
-            return true;
-        }
+        if (!lifeTexData) return true;
 
         const idx = splatIdx * 4;
-        if (idx >= lifeTexData.length) {
-            return true; // Out of bounds, assume visible
-        }
+        if (idx >= lifeTexData.length) return true;
 
-        const mu = lifeTexData[idx + 0];      // center time
-        const w = lifeTexData[idx + 1];       // half-width
-        const k = lifeTexData[idx + 2];       // steepness (default 10.0)
-        const t = this.getCurrentTime();
+        const mu = lifeTexData[idx + 0];
+        const w = lifeTexData[idx + 1];
+        const k = lifeTexData[idx + 2];
         const duration = this.viewer.duration ?? 100;
         const totalFrames = Math.ceil(duration);
         const segmentMax = Math.max(0, totalFrames - 1);
 
-        // If time is outside valid range, not visible
-        if (t < 0.0 || t > segmentMax) {
-            return false;
-        }
+        if (time < 0.0 || time > segmentMax) return false;
 
-        // Calculate lifetime window
         const lifeStart = mu - w;
         const lifeEnd = mu + w;
 
-        // No overlap with the active segment at all
-        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) {
-            return false;
-        }
+        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
 
-        // Calculate sigmoid-based opacity (same as shader logic)
-        const argLeft = k * (t - lifeStart);
+        const argLeft = k * (time - lifeStart);
         const left = 1.0 / (1.0 + Math.exp(-argLeft));
 
-        const argRight = -k * (t - lifeEnd);
+        const argRight = -k * (time - lifeEnd);
         const right = 1.0 / (1.0 + Math.exp(-argRight));
 
         const alpha = left * right;
 
-        // Only select if alpha is significant (visible)
         return alpha > 0.01;
+    }
+
+    // #WDD 2026-04-10: Check if a point is visible at current time
+    isVisibleAtCurrentTime(splatIdx: number): boolean {
+        return this.isVisibleAtTime(splatIdx, this.getCurrentTime());
     }
 
     performBrush(cx: number, cy: number) {
@@ -878,6 +897,11 @@ export class SelectionTool {
     performRect(x1: number, y1: number, x2: number, y2: number) {
         if (this.selectionMode === 'ellipse') {
             this.performRectEllipse(x1, y1, x2, y2);
+            return;
+        }
+
+        if (this.isAllTimeTool()) {
+            this.performRectAllTime(x1, y1, x2, y2);
             return;
         }
         
@@ -1058,6 +1082,10 @@ export class SelectionTool {
 
     // Simple ellipse-rect intersection
     performRectEllipse(x1: number, y1: number, x2: number, y2: number) {
+        if (this.isAllTimeTool()) {
+            this.performRectEllipseAllTime(x1, y1, x2, y2);
+            return;
+        }
         const positions = this.getCachedPositions();
         if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
 
@@ -1125,6 +1153,189 @@ export class SelectionTool {
             }
         }
         
+        if (changed) this.updateTexture();
+    }
+
+    // ===== ALL-TIME SELECTION METHODS =====
+
+    // Generic all-time selection: check all frames for points that are visible and in selection area
+    private selectAllTimePoints(checkScreen: (screenX: number, screenY: number, screenZ: number, splatIdx: number) => boolean): boolean {
+        const positions = this.getCachedPositions();
+        if (!positions || !this.selectionData) return false;
+
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return false;
+
+        const duration = this.viewer.duration ?? 1;
+        const totalFrames = Math.ceil(duration);
+        const numSplats = positions.length / 3;
+
+        const found = new Uint8Array(numSplats);
+        const tempPos = new Float32Array(numSplats * 3);
+        const localPos = new pc.Vec3();
+        const worldPos = new pc.Vec3();
+        const screen = new pc.Vec3();
+        const modelMat = this.viewer.splatEntity.getWorldTransform();
+
+        for (let t = 0; t < totalFrames; t++) {
+            const framePositions = this.viewer.getPositionsAtTime(t, tempPos);
+            if (!framePositions) continue;
+
+            for (let i = 0; i < numSplats; i++) {
+                if (found[i]) continue;
+
+                const idx4 = i * 4;
+                if (this.selectionData[idx4 + 1] > 0) continue;
+
+                if (!this.isVisibleAtTime(i, t)) continue;
+
+                localPos.set(framePositions[i * 3 + 0], framePositions[i * 3 + 1], framePositions[i * 3 + 2]);
+                modelMat.transformPoint(localPos, worldPos);
+                camera.worldToScreen(worldPos, screen);
+
+                if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i)) {
+                    found[i] = 1;
+                }
+            }
+        }
+
+        let changed = false;
+        for (let i = 0; i < numSplats; i++) {
+            if (!found[i]) continue;
+            const idx4 = i * 4;
+            if (this.isSubtracting) {
+                if (this.selectionData[idx4] > 0) {
+                    this.selectionData[idx4] = 0;
+                    changed = true;
+                }
+            } else {
+                if (this.selectionData[idx4] === 0) {
+                    this.selectionData[idx4] = 255;
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    performBrushAllTime(cx: number, cy: number) {
+        const rSq = this.brushRadius * this.brushRadius;
+        const changed = this.selectAllTimePoints((sx, sy) => {
+            const dx = sx - cx;
+            const dy = sy - cy;
+            return dx * dx + dy * dy < rSq;
+        });
+        if (changed) this.updateTexture();
+    }
+
+    performRectAllTime(x1: number, y1: number, x2: number, y2: number) {
+        const minX = Math.min(x1, x2);
+        const maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2);
+        const maxY = Math.max(y1, y2);
+        const changed = this.selectAllTimePoints((sx, sy) => {
+            return sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
+        });
+        if (changed) this.updateTexture();
+    }
+
+    performBrushEllipseAllTime(cx: number, cy: number) {
+        const r = this.brushRadius;
+        const rSq = r * r;
+        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
+            const totalRadius = r + pixelSize;
+            const totalRSq = totalRadius * totalRadius;
+            const dx = sx - cx;
+            const dy = sy - cy;
+            return dx * dx + dy * dy <= totalRSq;
+        });
+        if (changed) this.updateTexture();
+    }
+
+    performRectEllipseAllTime(x1: number, y1: number, x2: number, y2: number) {
+        const minX = Math.min(x1, x2);
+        const maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2);
+        const maxY = Math.max(y1, y2);
+        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
+            return sx >= minX - pixelSize && sx <= maxX + pixelSize &&
+                   sy >= minY - pixelSize && sy <= maxY + pixelSize;
+        });
+        if (changed) this.updateTexture();
+    }
+
+    // Deferred all-time brush path selection (performance optimization)
+    performBrushAllTimePath(path: Array<{x: number, y: number}>) {
+        if (path.length === 0) return;
+
+        // Simplify path: remove points that are too close to each other
+        const simplified: Array<{x: number, y: number}> = [];
+        const thresholdSq = 25; // 5px threshold squared
+        for (const p of path) {
+            if (simplified.length === 0) {
+                simplified.push(p);
+            } else {
+                const last = simplified[simplified.length - 1];
+                const dx = p.x - last.x;
+                const dy = p.y - last.y;
+                if (dx * dx + dy * dy > thresholdSq) {
+                    simplified.push(p);
+                }
+            }
+        }
+
+        const rSq = this.brushRadius * this.brushRadius;
+        const circles = simplified.map(p => ({x: p.x, y: p.y, rSq}));
+
+        const changed = this.selectAllTimePoints((sx, sy) => {
+            for (const c of circles) {
+                const dx = sx - c.x;
+                const dy = sy - c.y;
+                if (dx * dx + dy * dy < c.rSq) return true;
+            }
+            return false;
+        });
+
+        if (changed) this.updateTexture();
+    }
+
+    performBrushEllipseAllTimePath(path: Array<{x: number, y: number}>) {
+        if (path.length === 0) return;
+
+        // Simplify path: remove points that are too close to each other
+        const simplified: Array<{x: number, y: number}> = [];
+        const thresholdSq = 25; // 5px threshold squared
+        for (const p of path) {
+            if (simplified.length === 0) {
+                simplified.push(p);
+            } else {
+                const last = simplified[simplified.length - 1];
+                const dx = p.x - last.x;
+                const dy = p.y - last.y;
+                if (dx * dx + dy * dy > thresholdSq) {
+                    simplified.push(p);
+                }
+            }
+        }
+
+        const r = this.brushRadius;
+        const circles = simplified.map(p => ({x: p.x, y: p.y}));
+
+        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
+            for (const c of circles) {
+                const totalRadius = r + pixelSize;
+                const totalRSq = totalRadius * totalRadius;
+                const dx = sx - c.x;
+                const dy = sy - c.y;
+                if (dx * dx + dy * dy <= totalRSq) return true;
+            }
+            return false;
+        });
+
         if (changed) this.updateTexture();
     }
 }

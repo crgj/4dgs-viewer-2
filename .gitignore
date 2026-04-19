@@ -3,3 +3,13 @@ dist
 .DS_Store
 .env
 *.local
+*.sog4
+*.ply
+__pycache__/
+
+# Temporary test outputs
+output/
+*.ply
+*.sog4
+*.bin
+__pycache__/

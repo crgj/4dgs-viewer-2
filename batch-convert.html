@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrueSplats.ai Batch Converter</title>
+    <link rel="icon" href="./logo.ico" />
+    <link rel="stylesheet" href="./src/style.css">
+    <style>
+        body.batch-page {
+            height: 100vh;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top left, rgba(16, 185, 129, 0.08), transparent 22%),
+                radial-gradient(circle at top right, rgba(79, 70, 229, 0.08), transparent 24%),
+                var(--ui-bg);
+            color: var(--text-primary);
+            position: relative;
+        }
+
+        body.batch-page::before,
+        body.batch-page::after {
+            content: "";
+            position: fixed;
+            inset: auto;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body.batch-page::before {
+            top: 64px;
+            right: 3%;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(16, 185, 129, 0.08), transparent 66%);
+            filter: blur(22px);
+        }
+
+        body.batch-page::after {
+            left: -80px;
+            bottom: -80px;
+            width: 320px;
+            height: 320px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(79, 70, 229, 0.08), transparent 64%);
+            filter: blur(26px);
+        }
+
+        .batch-shell {
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 18px 20px 24px;
+            position: relative;
+            z-index: 1;
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            gap: 16px;
+            box-sizing: border-box;
+        }
+
+        .batch-shell::before {
+            content: "";
+            position: absolute;
+            inset: 18px 0 auto 0;
+            height: 280px;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 28px 28px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.8), transparent);
+            pointer-events: none;
+        }
+
+        .batch-grid {
+            display: grid;
+            grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
+            gap: 14px;
+            align-items: stretch;
+            min-height: 0;
+            padding-bottom: 6px;
+        }
+
+        .batch-sidebar {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            gap: 12px;
+        }
+
+        .batch-queue-panel {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            min-height: 0;
+        }
+
+        .batch-hero {
+            display: block;
+            min-height: 0;
+            margin-bottom: 4px;
+        }
+
+        .batch-hero-card,
+        .batch-panel {
+            position: relative;
+            overflow: hidden;
+            border-radius: 10px;
+            background: linear-gradient(var(--glass-bg), var(--glass-bg)) padding-box;
+            backdrop-filter: blur(30px) saturate(120%);
+            border: 2px solid transparent;
+            box-shadow: 0 4px 20px 0 var(--glass-shadow);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+
+        /* Hover Effect Removed #WDD 2026-04-19 */
+
+        body.is-global-dragover .batch-shell {
+            background: rgba(16, 185, 129, 0.04);
+            transition: background 0.3s ease;
+        }
+
+        body.is-global-dragover .batch-dropzone {
+            border-color: var(--text-highlight);
+            background: var(--input-hover);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+        }
+
+        .batch-hero-main {
+            padding: 12px 14px;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .batch-hero-meta {
+            min-width: 0;
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .batch-hero-side {
+            display: none;
+        }
+
+        .batch-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            font-size: 8px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            color: var(--text-secondary);
+        }
+
+        .batch-hero-heading {
+            min-width: 0;
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .batch-brand-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .batch-brand-name {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .batch-brand-name span {
+            font-style: italic;
+            color: #22c55e;
+        }
+
+        .batch-version {
+            font-size: 9px;
+            font-weight: 700;
+            color: #9ca3af;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1px 4px;
+            border-radius: 4px;
+        }
+
+        .batch-hero-title {
+            margin: 0;
+            font-size: clamp(16px, 1.75vw, 22px);
+            line-height: 1.02;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            max-width: none;
+        }
+
+        .batch-back-link {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid transparent;
+            background: linear-gradient(var(--glass-bg), var(--glass-bg)) padding-box;
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        .batch-back-link:hover {
+            color: var(--text-highlight);
+            border-color: var(--text-highlight);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .batch-back-link svg {
+            width: 15px;
+            height: 15px;
+            display: block;
+        }
+
+        .batch-hero-actions,
+        .batch-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .batch-hero-actions {
+            margin-top: 0;
+            justify-content: flex-end;
+            flex: 0 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .batch-panel {
+            padding: 14px;
+            min-height: 0;
+        }
+
+        .batch-panel--input {
+            overflow: visible;
+        }
+
+        .batch-section-title {
+            font-size: 8px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            opacity: 0.72;
+        }
+
+        .batch-button,
+        .batch-action-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 34px;
+            padding: 0 12px;
+            border-radius: 10px;
+            border: 2px solid transparent;
+            background: linear-gradient(var(--glass-bg), var(--glass-bg)) padding-box;
+            color: var(--text-secondary);
+            font-size: 8px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        .batch-button:hover,
+        .batch-action-btn:hover {
+            color: var(--text-highlight);
+            border-color: var(--text-highlight);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .batch-button.is-primary {
+            background: var(--text-highlight);
+            color: #fff;
+            border-color: var(--text-highlight);
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .batch-button-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .batch-button-row--footer {
+            grid-template-columns: minmax(0, 1.2fr) minmax(160px, 0.8fr);
+        }
+
+        .batch-dropzone {
+            margin-top: 12px;
+            border: 1px dashed var(--glass-border);
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 14px;
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .batch-dropzone.is-dragover {
+            border-color: var(--text-highlight);
+            background: var(--input-hover);
+            box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.18);
+        }
+
+        .batch-drop-meta {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .batch-drop-meta-card {
+            padding: 8px 9px;
+            border-radius: 10px;
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+        }
+
+        .batch-drop-visual {
+            display: grid;
+            grid-template-columns: 56px minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+        }
+
+        .batch-drop-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+        }
+
+        .batch-drop-icon svg {
+            width: 28px;
+            height: 28px;
+            opacity: 0.82;
+        }
+
+        .batch-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .batch-stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 10px;
+            min-height: 74px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .batch-progress-track {
+            height: 6px;
+            background: var(--input-bg);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .batch-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, rgba(16, 185, 129, 0.95), rgba(16, 185, 129, 0.55));
+            border-radius: inherit;
+            box-shadow: 0 0 12px var(--accent-glow);
+            transition: width 0.18s ease;
+        }
+
+        .batch-task-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            align-content: start;
+            min-height: 0;
+        }
+
+        .batch-task {
+            border-radius: 12px;
+            padding: 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+        }
+
+        .batch-task-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .batch-chip {
+            border-radius: 999px;
+            padding: 4px 7px;
+            font-size: 8px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            border: 1px solid var(--glass-border);
+            background: var(--card-bg);
+        }
+
+        .batch-chip.is-active {
+            color: var(--text-highlight);
+            border-color: rgba(16, 185, 129, 0.4);
+            background: rgba(16, 185, 129, 0.12);
+        }
+
+        .batch-chip.is-done {
+            color: #bbf7d0;
+            border-color: rgba(34, 197, 94, 0.35);
+            background: rgba(34, 197, 94, 0.12);
+        }
+
+        .batch-chip.is-error {
+            color: #fecaca;
+            border-color: rgba(239, 68, 68, 0.35);
+            background: rgba(239, 68, 68, 0.12);
+        }
+
+        .batch-stage-row {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .batch-step {
+            border-radius: 10px;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid var(--glass-border);
+        }
+
+        .batch-step.is-active {
+            border-color: rgba(16, 185, 129, 0.35);
+            box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.16);
+        }
+
+        .batch-step.is-done {
+            border-color: rgba(34, 197, 94, 0.2);
+        }
+
+        .batch-step.is-error {
+            border-color: rgba(239, 68, 68, 0.28);
+        }
+
+        .batch-step-row,
+        .batch-substep-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .batch-step-detail {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .batch-step .batch-progress-track,
+        .batch-step-detail .batch-progress-track {
+            height: 5px;
+        }
+
+        .batch-task-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+
+        .batch-empty {
+            border-radius: 14px;
+            border: 1px dashed var(--glass-border);
+            padding: 24px 18px;
+            text-align: center;
+            color: var(--text-secondary);
+            background: var(--card-bg);
+            height: 100%;
+            display: grid;
+            place-items: center;
+        }
+
+        .batch-overflow-card {
+            min-height: 0;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            border-style: dashed;
+        }
+
+        .batch-overflow-count {
+            font-size: 34px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        @media (max-width: 1080px) {
+            .batch-shell {
+                height: auto;
+                min-height: 100vh;
+                overflow: auto;
+                padding: 18px 16px 24px;
+            }
+
+            .batch-hero {
+                grid-template-columns: 1fr;
+                max-height: none;
+            }
+
+            .batch-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .batch-sidebar {
+                grid-template-rows: auto auto;
+            }
+
+            .batch-button-row,
+            .batch-button-row--footer,
+            .batch-drop-meta {
+                grid-template-columns: 1fr;
+            }
+
+            .batch-hero-main {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .batch-hero-meta {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .batch-hero-actions {
+                justify-content: flex-start;
+            }
+
+            .batch-task-list {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .batch-hero-main,
+            .batch-hero-side,
+            .batch-panel {
+                padding: 18px;
+            }
+
+            .batch-hero-title {
+                font-size: 26px;
+            }
+
+            .batch-drop-visual {
+                grid-template-columns: 1fr;
+            }
+
+            .batch-drop-icon {
+                width: 64px;
+                height: 64px;
+            }
+        }
+    </style>
+</head>
+
+<body class="batch-page text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
+    <div class="batch-shell">
+        <section class="batch-hero">
+            <div class="batch-hero-card batch-hero-main">
+                <div class="batch-hero-meta">
+                    <div class="batch-hero-heading">
+                        <div class="batch-brand-row">
+                            <div class="batch-brand-name">TrueSplats<span>.ai</span></div>
+                            <span class="batch-version">Batch Converter</span> 
+                        </div>
+                        
+                    </div>
+                </div>
+                <div class="batch-hero-actions">
+                    <a href="./index.html" class="batch-back-link" aria-label="Back to viewer" title="Back to viewer">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </a>
+                 </div>
+            </div>
+        </section>
+
+        <div class="batch-grid">
+            <section class="batch-sidebar">
+                <div class="batch-panel batch-panel--input">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="batch-section-title">Input Source</div>
+                        </div>
+                        <label class="flex items-center gap-3 text-[11px] ui-text-secondary rounded-2xl px-4 py-3 border border-white/10 bg-white/5">
+                            <input id="auto-download-toggle" type="checkbox" checked />
+                            Auto download
+                        </label>
+                    </div>
+
+                    <div id="batch-dropzone" class="batch-dropzone">
+                        <div class="batch-drop-visual">
+                            <div class="batch-drop-icon">
+                                <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <path d="M32 12V36" stroke="white" stroke-width="5" stroke-linecap="round"/>
+                                    <path d="M20 24L32 12L44 24" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <rect x="12" y="38" width="40" height="14" rx="7" fill="rgba(255,255,255,0.18)" stroke="rgba(255,255,255,0.32)"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <div class="text-[11px] font-bold tracking-[0.16rem] uppercase ui-text-primary">Drop PLY4 Files Here</div>
+                            </div>
+                        </div>
+                        <div class="batch-button-row">
+                            <button id="batch-pick-files" class="batch-button is-secondary">Choose Files</button>
+                            <button id="batch-pick-folder" class="batch-button is-secondary">Choose Folder</button>
+                        </div>
+                       
+                        <input id="batch-file-input" type="file" class="hidden" accept=".ply4" multiple />
+                        <input id="batch-folder-input" type="file" class="hidden" accept=".ply4" multiple webkitdirectory />
+                    </div>
+
+                    <div class="batch-button-row batch-button-row--footer">
+                        <button id="batch-convert-all" class="batch-button is-primary">Convert Entire Queue</button>
+                        <button id="batch-clear" class="batch-button is-secondary">Clear Queue</button>
+                    </div>
+                </div>
+
+                <div class="batch-panel">
+                    <div class="batch-section-title">Batch Summary</div>
+                    <div class="batch-stat-grid mt-4 mb-4">
+                        <div class="batch-stat-card">
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Queued Files</div>
+                            <div id="summary-queued" class="text-2xl font-semibold mt-2">0</div>
+                        </div>
+                        <div class="batch-stat-card">
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Completed</div>
+                            <div id="summary-done" class="text-2xl font-semibold mt-2">0</div>
+                        </div>
+                        <div class="batch-stat-card">
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Failed</div>
+                            <div id="summary-error" class="text-2xl font-semibold mt-2">0</div>
+                        </div>
+                        <div class="batch-stat-card">
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Output Size</div>
+                            <div id="summary-size" class="text-2xl font-semibold mt-2">0 B</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between gap-3 text-[11px] ui-text-secondary mb-2">
+                        <span>Batch overall progress</span>
+                        <span id="summary-progress-label">0%</span>
+                    </div>
+                    <div class="batch-progress-track">
+                        <div id="summary-progress-fill" class="batch-progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="batch-panel batch-queue-panel">
+                <div class="flex items-center justify-between gap-3 mb-5">
+                    <div>
+                        <div class="batch-section-title">Queue Detail</div>
+                    </div>
+                </div>
+                <div id="batch-task-list" class="batch-task-list">
+                    <div class="batch-empty">No files queued yet.</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script type="module" src="./src/batch-convert.ts"></script>
+</body>
+
+</html>

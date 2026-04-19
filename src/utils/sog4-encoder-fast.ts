@@ -12,6 +12,7 @@
  */
 
 import JSZip from 'jszip';
+import { encodeTextureImage } from './webp-lossless';
 
 export type SOG4EncodeProgressMeta = {
     stageId: string;
@@ -420,34 +421,8 @@ class FastTextureRenderer {
         return { canvas, ctx, img, data: img.data };
     }
 
-    async render(tex: any, fileName: string, quality: number = 0.9): Promise<ArrayBuffer> {
-        tex.ctx.putImageData(tex.img, 0, 0);
-        
-        const preferredType = fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/webp';
-        
-        let blob: Blob;
-        if (typeof tex.canvas.convertToBlob === 'function') {
-            blob = await tex.canvas.convertToBlob({ type: preferredType, quality });
-            if ((!blob || blob.size === 0) && preferredType !== 'image/png') {
-                blob = await tex.canvas.convertToBlob({ type: 'image/png' });
-            }
-        } else {
-            blob = await new Promise<Blob>((res, rej) => {
-                const tryType = (type: string, fallback: boolean) => {
-                    tex.canvas.toBlob((b: Blob) => {
-                        if (!b || b.size === 0) {
-                            if (fallback && type !== 'image/png') return tryType('image/png', false);
-                            rej(new Error('Canvas toBlob failed'));
-                            return;
-                        }
-                        res(b);
-                    }, type, quality);
-                };
-                tryType(preferredType, true);
-            });
-        }
-        
-        return await blob.arrayBuffer();
+    async render(tex: any, fileName: string, _quality: number = 0.9): Promise<ArrayBuffer> {
+        return await encodeTextureImage(tex, fileName);
     }
 
     /**

@@ -6,59 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
-    <style>
-        .sidebar-hidden {
-            transform: translateX(120%);
-            opacity: 0;
-            pointer-events: none;
-        }
 
-        .bottom-bar-hidden {
-            bottom: -100px !important;
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        #simplified-panel {
-            position: fixed !important;
-            bottom: 32px !important;
-            left: 50% !important;
-            top: auto !important;
-            transform: translateX(-50%) !important;
-            z-index: 9999 !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 6px !important;
-            padding: 6px !important;
-            border-radius: 12px !important;
-        }
-
-        #simplified-panel.hidden-panel {
-            bottom: -100px !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-        }
-
-        .tools-hidden {
-            transform: translateY(-50%) translateX(-200%);
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        .header-hidden {
-            transform: translateY(-150%);
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        .panel-hidden {
-            transform: translateX(150%);
-            opacity: 0;
-            pointer-events: none;
-        }
-    </style>
-  <script type="module" crossorigin src="./assets/index-PyhhhMDX.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BW1Ev4VF.css">
+  <script type="module" crossorigin src="./assets/main-DQPfCaAQ.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/sog4-encoder-wrapper-CuwAAP6K.js">
+  <link rel="stylesheet" crossorigin href="./assets/sog4-encoder-wrapper-CPpdV0Yr.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -80,27 +31,25 @@
     </div>
 
     <!-- UI Overlay: Top Left Brand -->
-    <header class="fixed top-4 left-4 z-50 pointer-events-none">
-        <div id="header-brand" class="relative flex flex-col items-end gap-2 pointer-events-auto">
-            <div class="glass-blue px-3 py-1.5 rounded-lg flex items-center gap-2">
-                <h1 class="text-[10px] font-bold  ui-text-primary">TrueSplats
+    <header class="fixed top-6 left-6 z-50 pointer-events-none transition-all duration-500">
+        <div id="header-brand" class="relative inline-block pointer-events-auto">
+            <div class="glass-blue px-3 py-1.5 rounded-md flex items-center gap-2">
+                <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] font-bold text-gray-400 bg-black/30 px-1 rounded">v2.2.13</span>
-                <div class="h-3 w-px ui-border"></div>
-                <button id="toggle-samples" class="flex items-center gap-1.5 group">
-                    <span
-                        class="text-[8px] font-bold tracking-widest uppercase ui-text-secondary opacity-60 group-hover:opacity-100 transition-opacity">Samples</span>
-                    <svg viewBox="0 0 24 24"
-                        class="w-2.5 h-2.5 fill-current ui-text-secondary opacity-40 group-hover:opacity-100 transition-all group-[.open]:rotate-180">
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.16</span>
+                <div class="h-3 w-px ui-border mx-1"></div>
+ 
+                <button id="toggle-samples" class="flex items-center gap-1.5 group p-1">
+                    <span class="text-[9px] font-extrabold tracking-widest uppercase ui-text-secondary opacity-60 group-hover:opacity-100 transition-opacity">Samples</span>
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current ui-text-secondary opacity-40 group-hover:opacity-100 transition-all group-[.open]:rotate-180">
                         <path d="M7 10l5 5 5-5z" />
                     </svg>
                 </button>
             </div>
-
-            <!-- Samples Dropdown -->
+ 
             <div id="samples-dropdown"
-                class="hidden pointer-events-auto glass-blue rounded-lg p-1.5 w-40 flex flex-col gap-1 shadow-2xl animate-in fade-in slide-in-from-top-2 duration-200">
+                class="hidden absolute top-full left-full -translate-x-full mt-2 pointer-events-auto glass-blue rounded-md p-1 flex flex-col gap-0.5 w-48 shadow-2xl animate-in fade-in slide-in-from-top-1 duration-200 z-[60]">
             </div>
         </div>
     </header>
@@ -109,69 +58,76 @@
     <div id="control-panel"
         class="fixed top-6 right-6 flex flex-col items-stretch gap-2 z-20 pointer-events-none transition-all duration-500">
         <div class="flex flex-col gap-1.5 pointer-events-auto">
+            <a href="./batch-convert.html"
+                class="ui-btn px-2 py-1 rounded-md flex items-center justify-center gap-1.5 text-[9px] font-bold tracking-tight uppercase ui-text-secondary hover:ui-text-highlight">
+                <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 7h16"></path>
+                    <path d="M7 12h10"></path>
+                    <path d="M10 17h4"></path>
+                </svg>
+                <span>Batch</span>
+            </a>
             <!-- Main Controls Row -->
-            <div class="grid grid-cols-3 gap-1">
-                <button id="toggle-ui" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                    aria-label="Toggle UI" data-tip="UI">
-                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+            <div class="grid grid-cols-3 gap-0.5">
+                <button id="toggle-ui" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Toggle UI">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                     </svg>
                 </button>
-                <button id="reset-cam" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                    aria-label="Reset Camera" data-tip="Reset">
-                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                <button id="reset-cam" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Reset Camera">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
                     </svg>
                 </button>
-                <button id="open-file" class="ui-btn p-1.5 rounded-lg flex justify-center has-tooltip"
-                    aria-label="Open File" data-tip="Open">
-                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                <button id="open-file" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Open File">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
                     </svg>
                 </button>
             </div>
 
-            <div class="grid grid-cols-2 gap-1">
+            <div class="grid grid-cols-2 gap-0.5">
                 <button id="btn-export-sog"
-                    class="ui-btn px-2 py-2 rounded-lg flex items-center justify-center has-tooltip bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
-                    aria-label="Export SOG4" data-tip="Export SOG4">
-                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
+                    aria-label="Export SOG4">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
-                    <span class="text-[8px] font-bold ml-1 tracking-wider">SOG4</span>
+                    <span class="text-[8px] font-bold ml-1 tracking-tight">SOG4</span>
                 </button>
                 <button id="btn-export-ply4"
-                    class="ui-btn px-2 py-2 rounded-lg flex items-center justify-center has-tooltip bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
-                    aria-label="Export PLY4" data-tip="Export PLY4">
-                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                    aria-label="Export PLY4">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
-                    <span class="text-[8px] font-bold ml-1 tracking-wider">PLY4</span>
+                    <span class="text-[8px] font-bold ml-1 tracking-tight">PLY4</span>
                 </button>
             </div>
             <input type="file" id="file-input" class="hidden" accept=".truesplats,.sog4,.ply4" />
         </div>
 
         <aside id="sidebar"
-            class="w-[248px] max-w-[calc(100vw-3rem)] flex flex-col gap-3 pointer-events-auto transition-all duration-500 text-[9px]">
-            <div class="glass-blue rounded-xl p-1.5 flex gap-1 sidebar-tabs">
-                <button class="ui-btn active flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
-                    data-panel-target="panel-common" aria-label="Common" data-tip="Common">COMMON</button>
-                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
-                    data-panel-target="panel-presets" aria-label="Presets" data-tip="Presets">PRESETS</button>
-                <button class="ui-btn flex-1 px-3 py-2 rounded-lg has-tooltip sidebar-tab"
-                    data-panel-target="panel-special" aria-label="Special" data-tip="Special">SPECIAL</button>
+            class="w-[220px] max-w-[calc(100vw-3rem)] flex flex-col gap-1 pointer-events-auto transition-all duration-500 text-[9px]">
+            <div class="glass-blue rounded-md p-0.5 grid grid-cols-3 gap-0.5 sidebar-tabs">
+                <button class="ui-btn active min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+                    data-panel-target="panel-common">COMMON</button>
+                <button class="ui-btn min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+                    data-panel-target="panel-presets">PRESETS</button>
+                <button class="ui-btn min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+                    data-panel-target="panel-special">SPECIAL</button>
             </div>
 
             <section id="panel-common"
-                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view">
+                class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">COMMON</div>
-                        <p class="panel-desc">Transform, scene, render mode, and stats.</p>
+
                     </div>
                 </div>
 
@@ -180,20 +136,20 @@
                         <span class="panel-label">POSITION</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1.5 font-mono">
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">X</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">X</span>
                             <input type="number" id="pos-x" step="0.1" value="0.0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">Y</span>
                             <input type="number" id="pos-y" step="0.1" value="0.0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Z</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">Z</span>
                             <input type="number" id="pos-z" step="0.1" value="0.0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
                 </div>
@@ -203,20 +159,20 @@
                         <span class="panel-label">ROTATION</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1.5 font-mono">
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">P</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">P</span>
                             <input type="number" id="rot-x" step="1" value="0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">Y</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">Y</span>
                             <input type="number" id="rot-y" step="1" value="0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
-                        <div class="flex items-center gap-1 ui-input px-1.5">
-                            <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">R</span>
+                        <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
+                            <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">R</span>
                             <input type="number" id="rot-z" step="1" value="0"
-                                class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                                class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
                 </div>
@@ -225,162 +181,125 @@
                     <div class="panel-label-row">
                         <span class="panel-label">SCALE</span>
                     </div>
-                    <div class="flex items-center gap-1 ui-input px-1.5 font-mono">
-                        <span class="text-[7px] opacity-50 w-1.5 ui-text-highlight">S</span>
+                    <div class="flex items-center gap-1.5 ui-input px-1.5 py-1 font-mono">
+                        <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">S</span>
                         <input type="number" id="scale-uniform" step="0.1" value="1.0"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[9px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                            class="scrub-input w-0 flex-1 bg-transparent text-[11px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                     </div>
                 </div>
 
                 <div class="panel-divider"></div>
 
-                <div class="space-y-1.5">
+                <div class="space-y-1">
                     <div class="panel-label-row">
-                        <span class="panel-label">CAMERA VIEWS</span>
+                        <span class="panel-label">VIEWS</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <button id="view-top"
-                            class="w-full h-9 flex items-center justify-center ui-btn rounded-lg has-tooltip"
-                            aria-label="Top View" data-tip="Top">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                                <path d="M12 2L2 7l10 5 10-5-10-5z" opacity="1" />
-                                <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" fill="none"
-                                    opacity="0.5" />
-                                <path d="M12 22V12" stroke="currentColor" opacity="0.3" />
+                    <div class="grid grid-cols-3 gap-1">
+                        <button id="view-top" class="h-7 flex items-center justify-center ui-btn rounded-md"
+                            aria-label="Top">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z" />
                             </svg>
                         </button>
-                        <button id="view-front"
-                            class="w-full h-9 flex items-center justify-center ui-btn rounded-lg has-tooltip"
-                            aria-label="Front View" data-tip="Front">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                                <path d="M2 7v10l10 5V12L2 7z" opacity="1" />
-                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
-                                <path d="M22 7l-10 5v10l10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                        <button id="view-front" class="h-7 flex items-center justify-center ui-btn rounded-md"
+                            aria-label="Front">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                                <path d="M2 7v10l10 5V12L2 7z" />
                             </svg>
                         </button>
-                        <button id="view-side"
-                            class="w-full h-9 flex items-center justify-center ui-btn rounded-lg has-tooltip"
-                            aria-label="Side View" data-tip="Side">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                                <path d="M22 7v10l-10 5V12l10-5z" opacity="1" />
-                                <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" fill="none" opacity="0.5" />
-                                <path d="M2 7l10 5v10l-10-5V7z" stroke="currentColor" fill="none" opacity="0.5" />
+                        <button id="view-side" class="h-7 flex items-center justify-center ui-btn rounded-md"
+                            aria-label="Side">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                                <path d="M22 7v10l-10 5V12l10-5z" />
                             </svg>
                         </button>
                     </div>
                 </div>
 
-                <div class="space-y-1.5">
+                <div class="space-y-1">
                     <div class="panel-label-row">
                         <span class="panel-label">SCENE</span>
                     </div>
-                    <div class="grid grid-cols-4 gap-2">
-                        <button id="toggle-grid"
-                            class="w-full h-9 flex items-center justify-center rounded-lg ui-btn has-tooltip"
-                            aria-label="Toggle Grid" data-tip="Grid">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                <line x1="3" y1="9" x2="21" y2="9"></line>
-                                <line x1="3" y1="15" x2="21" y2="15"></line>
-                                <line x1="9" y1="3" x2="9" y2="21"></line>
-                                <line x1="15" y1="3" x2="15" y2="21"></line>
+                    <div class="grid grid-cols-4 gap-1">
+                        <button id="toggle-grid" class="h-7 flex items-center justify-center rounded-md ui-btn"
+                            aria-label="Grid">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
+                                stroke-width="2.5">
+                                <rect x="3" y="3" width="18" height="18" rx="2" />
+                                <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
                             </svg>
                         </button>
-                        <button id="toggle-axes"
-                            class="w-full h-9 flex items-center justify-center rounded-lg ui-btn has-tooltip"
-                            aria-label="Toggle Axes" data-tip="Axes">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round">
+                        <button id="toggle-axes" class="h-7 flex items-center justify-center rounded-md ui-btn"
+                            aria-label="Axes">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
+                                stroke-width="2.5">
                                 <path d="M12 12L3 17M12 12L21 17M12 12V3" />
-                                <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
                             </svg>
                         </button>
-                        <button id="toggle-theme"
-                            class="w-full h-9 flex items-center justify-center rounded-lg ui-btn has-tooltip"
-                            aria-label="Toggle Theme" data-tip="Theme">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round">
+                        <button id="toggle-theme" class="h-7 flex items-center justify-center rounded-md ui-btn"
+                            aria-label="Theme">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
+                                stroke-width="2.5">
                                 <path
-                                    d="M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7zM9 21h6">
-                                </path>
+                                    d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17h6v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
                             </svg>
                         </button>
                         <button id="toggle-transition-effect"
-                            class="w-full h-9 flex items-center justify-center rounded-lg ui-btn ui-text-highlight has-tooltip"
-                            aria-label="Toggle Particles" data-tip="FX">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                                <path
-                                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
+                            class="h-7 flex items-center justify-center rounded-md ui-btn ui-text-highlight"
+                            aria-label="FX">
+                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <circle cx="12" cy="12" r="3" />
-                                <path
-                                    d="M7 12h2m6 0h2M12 7v2m0 6v2m-3.5-3.5l1.4 1.4m4.2-4.2l1.4 1.4m-7 0l1.4-1.4m4.2 4.2l1.4-1.4"
-                                    stroke="currentColor" stroke-width="2" />
+                                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
                             </svg>
                         </button>
                     </div>
                 </div>
 
-                <div class="space-y-1.5">
+                <div class="space-y-1">
                     <div class="panel-label-row">
-                        <span class="panel-label">GAUSSIAN RENDER</span>
+                        <span class="panel-label">RENDER</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-1.5">
+                    <div class="grid grid-cols-3 gap-1">
                         <button id="render-mode-normal"
-                            class="ui-btn px-2 py-2 rounded-lg text-[8px] font-bold tracking-wide leading-none has-tooltip"
-                            aria-label="Normal Mode" data-tip="Normal">
-                            Normal
-                        </button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">NORMAL</button>
                         <button id="render-mode-center"
-                            class="ui-btn px-2 py-2 rounded-lg text-[8px] font-bold tracking-wide leading-none has-tooltip"
-                            aria-label="Center Mode" data-tip="Center">
-                            Center
-                        </button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">CENTER</button>
                         <button id="render-mode-outline"
-                            class="ui-btn px-2 py-2 rounded-lg text-[8px] font-bold tracking-wide leading-none has-tooltip"
-                            aria-label="Outline Mode" data-tip="Outline">
-                            Outline
-                        </button>
-                    </div>
-                    <!-- #WDD 2026-03-31: High Quality / High DPI Toggle -->
-                    <div class="flex items-center justify-between px-1 mt-2">
-                        <span class="panel-label text-[7px]">HIGH QUALITY (DPI)</span>
-                        <input type="checkbox" id="toggle-high-quality" checked
-                            class="w-3 h-3 accent-emerald-500 cursor-pointer" />
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">OUTLINE</button>
                     </div>
                 </div>
 
                 <div class="panel-divider"></div>
 
-                <div class="grid grid-cols-2 gap-2">
-                    <div class="panel-stat">
+                <div class="grid grid-cols-2 gap-1.5 pt-1">
+                    <div class="panel-stat py-1">
                         <span class="panel-stat-label">FPS</span>
-                        <span id="fps-display" class="panel-stat-value font-mono tabular-nums">--</span>
+                        <span id="fps-display" class="panel-stat-value font-mono tabular-nums text-[11px]">--</span>
                     </div>
-                    <div class="panel-stat">
-                        <span class="panel-stat-label">Gaussians</span>
-                        <span id="splat-count" class="panel-stat-value font-mono tabular-nums">--</span>
+                    <div class="panel-stat py-1">
+                        <span class="panel-stat-label">SPLATS</span>
+                        <span id="splat-count" class="panel-stat-value font-mono tabular-nums text-[10px]">--</span>
                     </div>
                 </div>
             </section>
 
             <section id="panel-presets"
-                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
+                class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">PRESETS</div>
-                        <p class="panel-desc">Save and manage camera positions.</p>
+
                     </div>
                     <div class="flex gap-1.5">
                         <button id="add-preset"
-                            class="ui-btn p-1.5 rounded-lg flex items-center justify-center has-tooltip"
+                            class="ui-btn p-1 rounded-lg flex items-center justify-center has-tooltip"
                             aria-label="Save Camera" data-tip="Save">
                             <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
                             </svg>
                         </button>
                         <button id="clear-presets"
-                            class="ui-btn p-1.5 rounded-lg flex items-center justify-center has-tooltip"
+                            class="ui-btn p-1 rounded-lg flex items-center justify-center has-tooltip"
                             aria-label="Clear All" data-tip="Clear">
                             <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                                 <path
@@ -398,11 +317,10 @@
             </section>
 
             <section id="panel-special"
-                class="sidebar-panel glass-blue rounded-xl p-3 flex flex-col gap-3 sidebar-panel-view hidden">
+                class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">SPECIAL</div>
-                        <p class="panel-desc">AR, face tracking, and post processing.</p>
                     </div>
                 </div>
 
@@ -412,14 +330,14 @@
                     </div>
                     <div class="panel-select-row">
                         <button id="start-ar"
-                            class="ui-btn w-10 h-9 rounded-lg flex items-center justify-center has-tooltip"
+                            class="ui-btn w-10 h-8 rounded-lg flex items-center justify-center has-tooltip"
                             aria-label="Start AR" data-tip="AR">
                             <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                                 <path
                                     d="M3 5c0-1.1.9-2 2-2h4v2H5v4H3V5zm0 14c0 1.1.9 2 2 2h4v-2H5v-4H3v4zm16 2c1.1 0 2-.9 2-2v-4h-2v4h-4v2h4zm0-16v4h-2V5h-4V3h4c1.1 0 2 .9 2 2z" />
                             </svg>
                         </button>
-                        <select id="ar-camera-select" class="ui-input flex-1 h-9 text-xs cursor-pointer">
+                        <select id="ar-camera-select" class="ui-input flex-1 h-8 text-[11px] cursor-pointer">
                             <option value="" disabled selected>AR Camera</option>
                         </select>
                     </div>
@@ -431,14 +349,14 @@
                     </div>
                     <div class="panel-select-row">
                         <button id="start-face-tracking"
-                            class="ui-btn w-10 h-9 rounded-lg flex items-center justify-center has-tooltip"
+                            class="ui-btn w-10 h-8 rounded-lg flex items-center justify-center has-tooltip"
                             aria-label="Start Face Tracking" data-tip="Face">
                             <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                                 <path
                                     d="M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21 2.37-1.47 5.72-4.17 7.74z" />
                             </svg>
                         </button>
-                        <select id="face-tracking-camera-select" class="ui-input flex-1 h-9 text-xs cursor-pointer">
+                        <select id="face-tracking-camera-select" class="ui-input flex-1 h-8 text-[11px] cursor-pointer">
                             <option value="" disabled selected>Face Camera</option>
                         </select>
                     </div>
@@ -448,34 +366,26 @@
                     <div class="panel-label-row">
                         <span class="panel-label">POST PROCESS</span>
                     </div>
-                    <div class="flex items-center justify-between pl-3">
+                    <div class="flex items-center justify-between pl-1">
                         <button id="reset-pp"
-                            class="ui-btn px-2 py-1.5 rounded-lg text-[8px] font-semibold tracking-[0.12em] uppercase has-tooltip"
-                            aria-label="Reset Post" data-tip="Reset">RESET</button>
+                            class="ui-btn px-2 py-1 rounded-lg text-[9px] font-bold tracking-tight uppercase"
+                            aria-label="Reset Post">RESET</button>
                     </div>
-                    <div class="flex flex-col gap-1.5 pl-3">
+                    <div class="flex flex-col gap-1.5 pl-1">
                         <div class="flex justify-between">
-                            <span class="text-[7px] uppercase opacity-50 font-bold tracking-[0.08em]">Exposure</span>
-                            <span id="val-exposure" class="text-[7px] font-mono opacity-80">1.0</span>
+                            <span class="text-[9px] uppercase opacity-70 font-bold">Exposure</span>
+                            <span id="val-exposure" class="text-[10px] ui-text-highlight">1.0</span>
                         </div>
                         <input type="range" id="pp-exposure" min="0" max="5" step="0.1" value="1.0"
-                            class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                            class="w-full h-1 cursor-pointer">
                     </div>
-                    <div class="flex flex-col gap-1.5 pl-3 pt-1">
+                    <div class="flex flex-col gap-1.5 pl-1">
                         <div class="flex justify-between">
-                            <span class="text-[7px] uppercase opacity-50 font-bold tracking-[0.08em]">Brightness</span>
-                            <span id="val-brightness" class="text-[7px] font-mono opacity-80">0.0</span>
+                            <span class="text-[9px] uppercase opacity-70 font-bold">Brightness</span>
+                            <span id="val-brightness" class="text-[10px] ui-text-highlight">0.0</span>
                         </div>
                         <input type="range" id="pp-brightness" min="-1" max="1" step="0.05" value="0.0"
-                            class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer">
-                    </div>
-                    <div class="flex flex-col gap-1.5 pl-3 pt-1">
-                        <div class="flex justify-between">
-                            <span class="text-[7px] uppercase opacity-50 font-bold tracking-[0.08em]">Contrast</span>
-                            <span id="val-contrast" class="text-[7px] font-mono opacity-80">0.0</span>
-                        </div>
-                        <input type="range" id="pp-contrast" min="-1" max="1" step="0.05" value="0.0"
-                            class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                            class="w-full h-1 cursor-pointer">
                     </div>
                 </div>
 
@@ -485,30 +395,23 @@
 
     <!-- UI Overlay: Bottom Playback Hub -->
     <div id="playbar-container"
-        class="fixed bottom-4 left-1/2 -translate-x-1/2 w-[80%] md:w-[50%] px-0 pointer-events-none z-10 transition-all duration-500">
+        class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[1200px] px-0 pointer-events-none z-10 transition-all duration-500">
 
-        <!-- Dashboard Layer: Unified Telemetry -->
-        <div class="flex items-center justify-end  mb-3 pointer-events-none ">
+        <div class="flex items-center justify-end mb-2 pointer-events-none">
             <div class="ui-playbar flex items-center p-0.5 rounded-lg pointer-events-auto overflow-hidden">
-                <!-- Frame Monitor -->
                 <div class="flex items-center px-2 py-1 gap-2 border-r ui-border">
-                    <span
-                        class="text-[7px] uppercase font-bold ui-text-secondary opacity-30 tracking-[0.2em] leading-none">FRAME</span>
-                    <span id="time-label"
-                        class="font-mono text-[9px] ui-text-primary tabular-nums text-right min-w-[40px] leading-none">0
-                        / 0</span>
+                    <span id="time-label" class="font-mono text-[9px] ui-text-primary tabular-nums">0 / 0</span>
                 </div>
-                <!-- FPS Segmented Control -->
-                <div class="flex items-center px-1   ">
+                <div class="flex items-center px-1">
                     <div class="flex gap-1 p-0.5">
-                        <button data-value="12"
-                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">12</button>
-                        <button data-value="24"
-                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary   hover:opacity-100 leading-none">24</button>
+                        <button data-value="1" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">1</button>
+                        <button data-value="3" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">3</button>
+                        <button data-value="6" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">6</button>
+                        <button data-value="12" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">12</button>
+                        <button data-value="24" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">24</button>
                         <button data-value="30"
-                            class="fps-item  px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary  hover:opacity-100 leading-none active">30</button>
-                        <button data-value="60"
-                            class="fps-item px-3 py-1 rounded-lg transition-all text-[7px] font-bold ui-text-secondary  hover:opacity-100 leading-none">60</button>
+                            class="fps-item px-1 py-0.5 rounded text-[8px] font-bold active">30</button>
+                        <button data-value="60" class="fps-item px-1 py-0.5 rounded text-[8px] font-bold">60</button>
                     </div>
                 </div>
             </div>
@@ -516,27 +419,51 @@
 
         <!-- Control Hub Layer -->
         <div id="time-controls"
-            class="glass-blue px-3 py-1.5 rounded-lg flex items-center gap-3 pointer-events-auto shadow-2xl">
-            <!-- Premium Play Button -->
-            <button id="play-pause" class="w-7 h-7 flex items-center justify-center rounded-lg ui-btn ui-text-highlight"
-                aria-label="Play/Pause">
-                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
-                    <path d="M8 5v14l11-7z" />
-                </svg>
-            </button>
-
-            <!-- Scrubbing Layer -->
-            <div class="flex-grow flex flex-col gap-1">
-                <input type="range" id="time-slider" min="0" max="1" step="0.01" value="0"
-                    class="w-full h-1 accent-emerald-500 cursor-pointer appearance-none rounded-full" />
-                <div id="timeline-ticks" class="flex justify-between px-1"></div>
+            class="glass-blue px-4 py-0.5 rounded-lg flex items-center gap-3 pointer-events-auto shadow-2xl">
+            <div class="flex items-center gap-1.5">
+                <button id="step-frame-back" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn"
+                    aria-label="Previous Frame">
+                    <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
+                        <path d="M15 6l-6 6 6 6V6zM7 6h2v12H7z" />
+                    </svg>
+                </button>
+                <button id="play-pause"
+                    class="w-8 h-8 flex items-center justify-center rounded-md ui-btn ui-text-highlight"
+                    aria-label="Play/Pause">
+                    <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
+                        <path d="M8 5v14l11-7z" />
+                    </svg>
+                </button>
+                <button id="step-frame-forward" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn"
+                    aria-label="Next Frame">
+                    <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
+                        <path d="M9 6l6 6-6 6V6zM15 6h2v12h-2z" />
+                    </svg>
+                </button>
+            </div>
+            <div class="flex-grow flex flex-col gap-0.5">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-1">
+                        <button id="loop-set-start"
+                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
+                            aria-label="Set Start">A</button>
+                        <button id="loop-set-end" class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
+                            aria-label="Set End">B</button>
+                        <button id="timeline-loop-toggle"
+                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
+                            aria-label="Loop">LOOP</button>
+                    </div>
+                    <div id="timeline-loop-label" class="text-[8px] font-mono uppercase ui-text-secondary opacity-50">
+                        All</div>
+                </div>
+                <div class="timeline-track-shell">
+                    <div id="timeline-loop-range" class="timeline-loop-range hidden"></div>
+                    <input type="range" id="time-slider" min="0" max="1" step="1" value="0"
+                        class="relative z-20 w-full h-1 accent-emerald-500 cursor-pointer appearance-none rounded-full bg-transparent" />
+                </div>
             </div>
         </div>
     </div>
-
-
-
-    <!-- Dedicated Large Download Overlay #WDD 2026-01-22 -->
     <div id="download-overlay"
         class="hidden fixed inset-0 flex items-center justify-center bg-black/90 z-[101] backdrop-blur-md transition-opacity duration-300">
         <div class="flex flex-col items-center gap-6 w-96 transform scale-100">
@@ -554,14 +481,14 @@
             </div>
 
             <!-- Details -->
-            <div class="flex flex-col items-center gap-1">
-                <div id="download-filename"
-                    class="text-xs font-bold uppercase tracking-[0.2em] ui-text-primary opacity-80">Filename</div>
-                <div id="download-size" class="text-[10px] font-mono uppercase ui-text-secondary opacity-60">0.0 MB /
+            <div class="flex flex-col items-center gap-2">
+                <div id="download-filename" class="text-xs font-bold uppercase tracking-[0.2em] ui-text-primary">
+                    Filename</div>
+                <div id="download-size" class="text-xs font-mono uppercase ui-text-secondary opacity-60">0.0 MB /
                     0.0 MB</div>
             </div>
 
-            <div class="text-[9px] font-bold text-emerald-500/50 uppercase tracking-widest animate-pulse mt-4">
+            <div class="text-xs font-bold text-emerald-500/80 uppercase tracking-[0.3em] animate-pulse mt-4">
                 Downloading Content</div>
         </div>
     </div>
@@ -594,11 +521,11 @@
                 <div class="step-square z-10 w-3 h-3 rounded-sm" data-step="9"></div>
             </div>
 
-            <div class="flex flex-col items-center gap-2">
-                <div id="loading-status" class="text-[10px] font-black tracking-[0.8rem] uppercase ui-text-primary">
+            <div class="flex flex-col items-center gap-3">
+                <div id="loading-status" class="text-xs font-black tracking-[1rem] uppercase ui-text-primary">
                     initializing</div>
                 <div id="loading-detail"
-                    class="text-[8px] font-mono uppercase ui-text-secondary tracking-tight opacity-80">System
+                    class="text-[10px] font-mono uppercase ui-text-secondary tracking-tight opacity-100">System
                     Ready</div>
             </div>
 

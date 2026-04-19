@@ -14,6 +14,16 @@ import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; 
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
 import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
+import { PerformanceMonitor } from './managers/performance-monitor'; // #WDD 2026-04-11 Performance
+import { PerformancePanel } from './ui/performance-panel'; // #WDD 2026-04-11 Performance
+import {
+    chooseExportModelTransform,
+    cloneModelTransform,
+    DEFAULT_MODEL_TRANSFORM,
+    normalizeLegacyModelTransform,
+    normalizeModelTransform,
+    type ModelTransform
+} from './utils/model-transform';
 
 // --- Configuration & State ---
 interface CameraPreset {
@@ -45,12 +55,12 @@ class Viewer {
     camera: pc.Entity | null = null;
     splatEntity: pc.Entity | null = null;
     prevTime = 0;
-    fpsCounter = 0;
-    fpsTimer = 0;
     duration = 1.0;
     fps = 30; // Default playback fps
     currentFileName: string | null = null;
     private currentTransformCacheKey: string | null = null;
+    private sourceModelTransform: ModelTransform | null = null;
+    private modelTransformEdited = false;
     originalFrames: number | null = null;
     private isPlaying = false;
     currentTime = 0;
@@ -67,7 +77,7 @@ class Viewer {
     // #WDD 2026-02-03 Face Tracking
     private faceTracker: FaceTracker;
     private isFaceTracking = false;
-    private isHighQuality = true; // #WDD 2026-03-31 Default to true for sharpness
+    private isHighQuality = true; // Used by adaptive quality fallback.
     private faceTrackingBasePos = new pc.Vec3();
 
     private faceTrackingBaseRight = new pc.Vec3();
@@ -94,6 +104,9 @@ class Viewer {
 
     private skyboxManager: SkyboxManager; // #WDD 2026-01-21
 
+    // #WDD 2026-04-11 Performance Monitor
+    private performanceMonitor: PerformanceMonitor;
+    private performancePanel: PerformancePanel;
 
     // Camera Presets State
     private cameraPresets: CameraPreset[] = [];
@@ -156,6 +169,9 @@ class Viewer {
     private sequenceSwapRaf: number | null = null;
     private sequencePendingSwapFrame: number | null = null;
     private sequencePendingSwapEntity: pc.Entity | null = null;
+    private loopEnabled = false;
+    private loopStartFrame = 0;
+    private loopEndFrame = 0;
 
     // --- SOG4 Segment Sequence (temporal-per-segment) ---
     private isSog4SequenceMode = false;
@@ -291,19 +307,6 @@ class Viewer {
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
 
-        // #WDD 2026-03-31: High Quality UI connection
-        const hqToggle = document.getElementById('toggle-high-quality') as HTMLInputElement;
-        if (hqToggle) {
-            hqToggle.checked = this.isHighQuality;
-            hqToggle.addEventListener('change', () => {
-                this.isHighQuality = hqToggle.checked;
-                this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
-                this.app.resizeCanvas();
-                console.log(`[Viewer] Render quality changed: ${this.isHighQuality ? 'Native DPI' : 'Fixed 1.0'}`);
-            });
-        }
-
-
         // #WDD 2026-02-03 Init Face Tracker
         this.faceTracker = new FaceTracker('face-tracker-video', (pos) => {
             // Callback when face moves
@@ -325,6 +328,21 @@ class Viewer {
                 this.faceTrackingOffset.y = pc.math.lerp(this.faceTrackingOffset.y, targetY, 0.1);
             }
         });
+
+        // #WDD 2026-04-11 Init Performance Monitor
+        this.performanceMonitor = new PerformanceMonitor(this.app, {
+            targetFPS: 30,
+            adaptiveQuality: true,
+            mobileDowngrade: true,
+            largeModelMode: false,
+            progressiveLoading: true,
+            showWarnings: true
+        });
+        this.performancePanel = new PerformancePanel(this.performanceMonitor);
+
+        // Expose the viewer/monitor for diagnostics panels and tooling.
+        (window as any).viewer = this;
+        (window as any).performanceMonitor = this.performanceMonitor;
 
         this.setupEventListeners();
         this.initSkyboxSelector(); // #WDD 2026-01-21
@@ -594,12 +612,10 @@ class Viewer {
                 this.arHandler.stop();
                 this.arHandler.start(arSelect.value).then(() => {
                     this.updateToggleButton(startArBtn, true);
-                    updateSettingsUI(); // Refresh settings for new camera
                 });
             } else {
                 this.arHandler.start(arSelect.value).then(() => {
                     this.updateToggleButton(startArBtn, true);
-                    updateSettingsUI();
                 });
             }
         });
@@ -694,88 +710,6 @@ class Viewer {
             faceVideoContainer?.classList.add('hidden');
         });
 
-
-
-        // #WDD 2026-01-18 Settings UI Logic
-        const settingsBtn = document.getElementById('ar-settings-btn');
-        const settingsPanel = document.getElementById('ar-settings-panel');
-        const closeSettingsBtn = document.getElementById('close-ar-settings');
-        const settingsContent = document.getElementById('ar-settings-content');
-
-        const updateSettingsUI = () => {
-            if (!settingsContent) return;
-            settingsContent.innerHTML = '';
-
-            if (!this.arHandler.isARRunning) {
-                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">Start AR to edit settings</div>';
-                return;
-            }
-
-            const caps = this.arHandler.getCapabilities();
-            const settings = this.arHandler.getSettings();
-
-            if (!caps || !settings) {
-                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">No capabilities available</div>';
-                return;
-            }
-
-            // Helper to create slider
-            const createSlider = (label: string, key: string, min: number, max: number, step: number, value: number) => {
-                const div = document.createElement('div');
-                div.className = 'flex flex-col mb-2';
-                div.innerHTML = `
-                    <div class="flex justify-between">
-                        <label class="text-gray-400 capitalize">${label}</label>
-                        <span class="text-gray-300 ml-2" id="val-${key}">${value}</span>
-                    </div>
-                    <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer slider-thumb">
-                `;
-                const input = div.querySelector('input')!;
-                const valSpan = div.querySelector(`#val-${key}`)!;
-
-                input.addEventListener('input', (e) => {
-                    const val = parseFloat((e.target as HTMLInputElement).value);
-                    valSpan.textContent = val.toString();
-                    this.arHandler.applyConstraints({ [key]: val });
-                });
-                return div;
-            };
-
-            // brightness
-            // @ts-ignore
-            if (caps.brightness) {
-                // @ts-ignore
-                settingsContent.appendChild(createSlider('Brightness', 'brightness', caps.brightness.min, caps.brightness.max, caps.brightness.step, settings.brightness));
-            }
-            // contrast
-            // @ts-ignore
-            if (caps.contrast) {
-                // @ts-ignore
-                settingsContent.appendChild(createSlider('Contrast', 'contrast', caps.contrast.min, caps.contrast.max, caps.contrast.step, settings.contrast));
-            }
-            // exposureCompensation
-            // @ts-ignore
-            if (caps.exposureCompensation) {
-                // @ts-ignore
-                settingsContent.appendChild(createSlider('Exposure', 'exposureCompensation', caps.exposureCompensation.min, caps.exposureCompensation.max, caps.exposureCompensation.step, settings.exposureCompensation));
-            }
-
-            if (settingsContent.children.length === 0) {
-                settingsContent.innerHTML = '<div class="text-gray-500 italic text-center">Camera supports no adjustable settings</div>';
-            }
-        };
-
-        settingsBtn?.addEventListener('click', () => {
-            settingsPanel?.classList.toggle('hidden');
-            if (!settingsPanel?.classList.contains('hidden')) {
-                updateSettingsUI();
-            }
-        });
-
-        closeSettingsBtn?.addEventListener('click', () => {
-            settingsPanel?.classList.add('hidden');
-        });
-
         const btnExportSog = document.getElementById('btn-export-sog');
         btnExportSog?.addEventListener('click', () => {
             this.saveAsSOG4();
@@ -794,7 +728,6 @@ class Viewer {
 
 
         toggleUI?.addEventListener('click', doToggle);
-
         const simplePrev = document.getElementById('simple-prev');
         const simpleNext = document.getElementById('simple-next');
         const simplePlay = document.getElementById('simple-play-pause');
@@ -888,6 +821,7 @@ class Viewer {
             this.splatEntity.setPosition(px, py, pz);
             this.splatEntity.setEulerAngles(rx, ry, rz);
             this.splatEntity.setLocalScale(s, s, s);
+            this.modelTransformEdited = true;
 
             if (this.isSog4SequenceMode && this.sog4SequenceSegments.length) {
                 const q = this.splatEntity.getLocalRotation();
@@ -998,9 +932,33 @@ class Viewer {
 
         const playBtn = document.getElementById('play-pause');
         const timeSlider = document.getElementById('time-slider') as HTMLInputElement;
-        const timeLabel = document.getElementById('time-label');
+        const stepBackBtn = document.getElementById('step-frame-back');
+        const stepForwardBtn = document.getElementById('step-frame-forward');
+        const loopSetStartBtn = document.getElementById('loop-set-start');
+        const loopSetEndBtn = document.getElementById('loop-set-end');
+        const loopToggleBtn = document.getElementById('timeline-loop-toggle');
 
         playBtn?.addEventListener('click', () => this.togglePlay());
+        stepBackBtn?.addEventListener('click', () => this.stepFrame(-1));
+        stepForwardBtn?.addEventListener('click', () => this.stepFrame(1));
+        loopSetStartBtn?.addEventListener('click', () => {
+            this.loopStartFrame = this.clampTimelineFrame(this.currentTime);
+            this.normalizeLoopRange();
+            this.renderTimelineDecorations();
+        });
+        loopSetEndBtn?.addEventListener('click', () => {
+            this.loopEndFrame = this.clampTimelineFrame(this.currentTime);
+            this.normalizeLoopRange();
+            this.renderTimelineDecorations();
+        });
+        loopToggleBtn?.addEventListener('click', () => {
+            this.normalizeLoopRange();
+            this.loopEnabled = !this.loopEnabled;
+            if (this.loopEnabled) {
+                this.seekToFrame(Math.max(this.loopStartFrame, this.currentTime), { pause: false });
+            }
+            this.renderTimelineDecorations();
+        });
 
         let isScrubbing = false;
 
@@ -1014,18 +972,7 @@ class Viewer {
 
         timeSlider?.addEventListener('input', () => {
             const requestedFrame = parseFloat(timeSlider.value);
-            this.playbackTime = requestedFrame;
-            if (this.is4DGS && this.trajectoryData && !this.isSequenceMode) {
-                this.requestSortedFrame(requestedFrame);
-            } else {
-                this.currentTime = requestedFrame;
-            }
-            const total = Math.ceil(this.duration);
-            if (timeLabel) timeLabel.innerText = `${Math.floor(requestedFrame)} / ${total}`;
-
-            if (this.splatEntity?.gsplat && !(this.is4DGS && this.trajectoryData && !this.isSequenceMode)) {
-                (this.splatEntity.gsplat as any).time = Math.floor(this.currentTime);
-            }
+            this.seekToFrame(requestedFrame, { pause: false });
         });
 
         // Close text edit when clicking anywhere outside
@@ -1157,6 +1104,14 @@ class Viewer {
             if (e.key === ' ') {
                 e.preventDefault();
                 this.togglePlay();
+            }
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                this.stepFrame(-1);
+            }
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                this.stepFrame(1);
             }
             // #WDD 2026-01-16 'e' key removed
         });
@@ -1425,12 +1380,15 @@ class Viewer {
 
             if (this.isPlaying) {
                 const totalFrames = this.isSog4SequenceMode ? (this.sog4SequenceTotalFrames || this.duration) : this.duration;
-                const maxTime = Math.max(0, totalFrames - 1.0);
+                const globalMaxTime = Math.max(0, totalFrames - 1.0);
+                this.normalizeLoopRange();
+                const loopStart = this.loopEnabled ? this.loopStartFrame : 0;
+                const loopEnd = this.loopEnabled ? Math.min(this.loopEndFrame, globalMaxTime) : globalMaxTime;
 
                 if (this.is4DGS && this.trajectoryData && !this.isSog4SequenceMode && !this.isSequenceMode) {
                     this.playbackTime += dt * this.fps;
-                    if (this.playbackTime > maxTime) {
-                        this.playbackTime = 0;
+                    if (this.playbackTime > loopEnd) {
+                        this.playbackTime = loopStart;
                     }
                     if (!this.isWaitingForSort) {
                         const nextFrame = Math.floor(this.playbackTime);
@@ -1442,10 +1400,11 @@ class Viewer {
                     if (!this.isWaitingForSort) {
                         this.currentTime += dt * this.fps;
                     }
-                    if (this.currentTime > maxTime) {
-                        this.currentTime = 0;
+                    if (this.currentTime > loopEnd) {
+                        this.currentTime = loopStart;
                         if (this.isSog4SequenceMode) {
-                            void this.activateSog4SequenceSegment(0);
+                            const targetSeg = this.getSog4SegmentIndex(loopStart);
+                            void this.activateSog4SequenceSegment(targetSeg);
                         }
                     }
                 }
@@ -1481,12 +1440,13 @@ class Viewer {
                 if (timeSlider && !isScrubbing) {
                     timeSlider.value = displayFrame.toString();
                 }
-                if (timeLabel) timeLabel.innerText = `${displayFrame} / ${total}`;
+                this.syncTimelineUI(displayFrame, total);
             } else {
                 
                 // Also update on scrub
                 if (this.isSog4SequenceMode) {
-                    this.updateSog4SequenceTime();
+                    const info = this.updateSog4SequenceTime();
+                    this.syncTimelineUI(info.displayFrame, Math.max(0, Math.ceil(info.total) - 1));
                 } else {
                     if (this.splatEntity?.gsplat) {
                         const material = (this.splatEntity.gsplat as any).instance.material;
@@ -1500,6 +1460,7 @@ class Viewer {
                     if (this.isSequenceMode) {
                         void this.applySequenceFrame(Math.floor(this.currentTime));
                     }
+                    this.syncTimelineUI(Math.floor(this.currentTime), Math.max(0, Math.ceil(this.duration) - 1));
                 }
             }
         });
@@ -1996,6 +1957,10 @@ class Viewer {
     private togglePlay() {
         this.isPlaying = !this.isPlaying;
         if (this.isPlaying) {
+            this.normalizeLoopRange();
+            if (this.loopEnabled && (this.currentTime < this.loopStartFrame || this.currentTime > this.loopEndFrame)) {
+                this.currentTime = this.loopStartFrame;
+            }
             this.playbackTime = this.currentTime;
         }
         const playBtn = document.getElementById('play-pause');
@@ -2245,6 +2210,7 @@ class Viewer {
             this.sog4SequenceIndex = 0;
             this.sog4SequenceLoading = false;
             this.sog4SequenceRequestId++;
+            this.resetTimelineTools();
         }
 
         const name = file.name.toLowerCase();
@@ -2305,6 +2271,9 @@ class Viewer {
         try {
             setProgress(9, "READY", "Processing Asset...");
 
+            // #WDD 2026-04-11 Performance: Start load phase tracking
+            this.performanceMonitor.startLoadPhase('file-load', `Loading ${file.name}`);
+
             let parsed;
             let loader: any;
             const lowerName = file.name.toLowerCase();
@@ -2313,12 +2282,15 @@ class Viewer {
             if (lowerName.endsWith('.sog4') || lowerName.endsWith('.sog')) {
                 console.log("[Viewer] Using SOG4Loader for", file.name);
                 loader = new SOG4Loader(this.app);
+                this.performanceMonitor.startLoadPhase('sog4-parse', 'Parsing SOG4 format');
                 parsed = await loader.load(file, (p: number, msg: string) => {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
+                this.performanceMonitor.endLoadPhase('sog4-parse');
             } else if (lowerName.endsWith('.ply4') || lowerName.endsWith('.ply')) {
                 console.log("[Viewer] Using PLY4Loader for", file.name);
                 loader = new PLY4Loader(); // #WDD 2026-01-21 Use PLY4Loader
+                this.performanceMonitor.startLoadPhase('ply4-parse', 'Parsing PLY4 format');
                 parsed = await loader.load(file, (p: number, msg: string) => {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
@@ -2356,6 +2328,7 @@ class Viewer {
                 let vertexElement = elements[0];
 
                 // Instantiating GSplatData with the elements option correctly
+                this.performanceMonitor.startLoadPhase('gsplat-create', 'Creating GSplat data');
                 const splatData = new (pc.GSplatData as any)([vertexElement]);
 
                 const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
@@ -2369,6 +2342,7 @@ class Viewer {
 
                 const entity = new pc.Entity('GSplat');
                 entity.addComponent('gsplat', { asset: asset });
+                this.performanceMonitor.endLoadPhase('gsplat-create');
 
                 // #WDD 2026-01-18 AR Compatibility: Robust Parenting
                 let arScaleFactor = 1.0;
@@ -2462,6 +2436,9 @@ class Viewer {
 
                 setProgress(9, "READY", "System Update Complete");
                 setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
+
+                // #WDD 2026-04-11 Performance: End load phase tracking
+                this.performanceMonitor.endLoadPhase('file-load');
 
                 // Finalize
                 this.updateStats(asset);
@@ -3189,19 +3166,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
         // UI
         const container = document.getElementById('timeline-ticks');
         if (container) container.innerHTML = '';
+        this.resetTimelineTools();
         this.updateTimelineTicks(this.duration);
 
-        const timeSlider = document.getElementById('time-slider') as HTMLInputElement | null;
-        if (timeSlider) {
-            timeSlider.max = Math.max(0, this.duration - 1).toString();
-            timeSlider.step = '1';
-            timeSlider.value = '0';
-        }
-        const timeLabel = document.getElementById('time-label');
-        if (timeLabel) {
-            const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
-            timeLabel.innerText = `0 / ${maxIdx}`;
-        }
+        this.syncTimelineUI(0, Math.max(0, Math.ceil(this.duration) - 1));
 
         progress(9, 'READY', 'System Update Complete');
         window.setTimeout(() => { document.getElementById('loading-overlay')?.classList.add('hidden'); }, 600);
@@ -3282,6 +3250,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 progress(step, 'PREPARING', `Preparing ${this.sog4SequenceSegments[i].name}`);
                 await this.prepareSog4SequenceSegment(i);
             }
+            this.resetTimelineTools();
             await this.activateSog4SequenceSegment(0);
             this.currentTime = 0;
             this.playbackTime = 0;
@@ -3664,15 +3633,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
         this.originalFrames = this.duration;
 
 
-        const slider = (document.getElementById('time-slider') as HTMLInputElement);
-        if (slider) {
-            const maxIdx = Math.max(0, Math.ceil(this.sog4SequenceTotalFrames) - 1);
-            slider.max = maxIdx.toString();
-            slider.step = "0.1";
-        }
         this.setSog4SequenceVisibleSegment(index);
         this.applySog4LocalTime(0);
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
+        this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(this.sog4SequenceTotalFrames || this.duration) - 1));
         this.updateStats(segment.asset);
     }
 
@@ -3813,6 +3777,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 material.setParameter('uGlobalTotalFrames', this.duration);
             }
         }
+        this.syncTimelineUI(clamped, this.getTimelineMaxFrame());
     }
 
     private requestSortedFrame(frame: number) {
@@ -3921,6 +3886,49 @@ const duration = parsed.frames || parsed.maxMu || 100;
         // when calculating depth, assuming it runs every frame.
     }
 
+    // #WDD 2026-04-18: Get positions at a specific time without modifying current state
+    public getPositionsAtTime(time: number, out?: Float32Array): Float32Array | null {
+        if (!this.cachedPositions) return null;
+
+        // If not 4DGS, positions don't change over time
+        if (!this.posArrays || !this.trajectoryData || !this.is4DGS) {
+            return this.cachedPositions;
+        }
+
+        const K = this.keyframes;
+        const stride = this.xyzStride;
+        const traj = this.trajectoryData;
+        const origIndices = this.originalIndices;
+        const N = this.posArrays.x.length;
+
+        const keyframeMax = Math.max(0, (K - 1) * stride);
+        const maxTime = Math.max(0, Math.min(this.duration - 1, keyframeMax));
+        const tClamped = Math.max(0, Math.min(time, maxTime));
+        const idx = stride > 0 ? Math.floor(tClamped / stride) : 0;
+        const k0 = K <= 1 ? 0 : Math.min(Math.max(0, idx), K - 1);
+        const k1 = K <= 1 ? 0 : Math.min(k0 + 1, K - 1);
+        const t0 = k0 * stride;
+        const t1 = k1 * stride;
+        const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
+
+        const result = out || new Float32Array(N * 3);
+
+        for (let i = 0; i < N; i++) {
+            const oidx = origIndices ? Math.round(origIndices[i]) : i;
+            const base = oidx * K * 3;
+            const b0 = base + k0 * 3;
+            const b1 = base + k1 * 3;
+
+            const x0 = traj[b0 + 0], y0 = traj[b0 + 1], z0 = traj[b0 + 2];
+            const x1 = traj[b1 + 0], y1 = traj[b1 + 1], z1 = traj[b1 + 2];
+
+            result[i * 3 + 0] = x0 + (x1 - x0) * ratio;
+            result[i * 3 + 1] = y0 + (y1 - y0) * ratio;
+            result[i * 3 + 2] = z0 + (z1 - z0) * ratio;
+        }
+
+        return result;
+    }
 
     private posArrays: { x: Float32Array, y: Float32Array, z: Float32Array } | null = null;
 
@@ -4272,23 +4280,18 @@ const duration = parsed.frames || parsed.maxMu || 100;
         if (parsed) {
             console.log("[Viewer] Persisting parsed data for export (finalize). isSOG4:", parsed.isSOG4);
             this.lastParsedData = parsed;
+            this.rememberLoadedModelTransform(parsed);
         }
 
         this.updateToggleButton(document.getElementById('mode-default') as HTMLElement, true);
         this.updateToggleButton(document.getElementById('mode-selection') as HTMLElement, false);
 
         // #WDD 2026-01-17 Restore Slider Logic
-        const slider = (document.getElementById('time-slider') as HTMLInputElement);
         const maxIdx = Math.max(0, Math.ceil(this.duration) - 1);
-        if (slider) {
-            slider.max = maxIdx.toString();
-            slider.step = "0.1";
-            slider.value = "0";
-        }
         if (!options.suppressUI) {
+            this.resetTimelineTools();
             this.updateTimelineTicks(this.duration);
-            const timeLabel = document.getElementById('time-label');
-            if (timeLabel) timeLabel.innerText = `0 / ${maxIdx}`;
+            this.syncTimelineUI(0, maxIdx);
 
             setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
             this.updateStats(asset);
@@ -4510,6 +4513,118 @@ const duration = parsed.frames || parsed.maxMu || 100;
             `;
             container.appendChild(tick);
         }
+
+        this.renderTimelineDecorations();
+    }
+
+    private getTimelineTotalFrames(): number {
+        return this.isSog4SequenceMode ? (this.sog4SequenceTotalFrames || this.duration || 1) : (this.duration || 1);
+    }
+
+    private getTimelineMaxFrame(): number {
+        return Math.max(0, Math.ceil(this.getTimelineTotalFrames()) - 1);
+    }
+
+    private clampTimelineFrame(frame: number): number {
+        const maxFrame = this.getTimelineMaxFrame();
+        return Math.max(0, Math.min(maxFrame, Math.floor(frame)));
+    }
+
+    private normalizeLoopRange() {
+        const maxFrame = this.getTimelineMaxFrame();
+        this.loopStartFrame = Math.max(0, Math.min(maxFrame, Math.floor(this.loopStartFrame)));
+        this.loopEndFrame = Math.max(0, Math.min(maxFrame, Math.floor(this.loopEndFrame || maxFrame)));
+        if (this.loopEndFrame < this.loopStartFrame) {
+            [this.loopStartFrame, this.loopEndFrame] = [this.loopEndFrame, this.loopStartFrame];
+        }
+    }
+
+    private resetTimelineTools() {
+        this.loopEnabled = false;
+        this.loopStartFrame = 0;
+        this.loopEndFrame = this.getTimelineMaxFrame();
+        this.renderTimelineDecorations();
+    }
+
+    private syncTimelineUI(displayFrame = Math.floor(this.currentTime), total = this.getTimelineMaxFrame()) {
+        const slider = document.getElementById('time-slider') as HTMLInputElement | null;
+        const timeLabel = document.getElementById('time-label');
+        if (slider) {
+            slider.max = total.toString();
+            slider.step = '1';
+            slider.value = Math.max(0, Math.min(total, Math.floor(displayFrame))).toString();
+        }
+        if (timeLabel) {
+            timeLabel.innerText = `${Math.floor(displayFrame)} / ${Math.max(0, total)}`;
+        }
+    }
+
+    private renderTimelineDecorations() {
+        const maxFrame = this.getTimelineMaxFrame();
+        const loopRange = document.getElementById('timeline-loop-range') as HTMLDivElement | null;
+        const loopLabel = document.getElementById('timeline-loop-label');
+        const loopToggle = document.getElementById('timeline-loop-toggle');
+        if (!loopRange || !loopLabel) return;
+
+        this.normalizeLoopRange();
+        const percentFor = (frame: number) => maxFrame <= 0 ? 0 : (frame / maxFrame) * 100;
+
+        if (this.loopEnabled && maxFrame > 0) {
+            const startPct = percentFor(this.loopStartFrame);
+            const endPct = percentFor(this.loopEndFrame);
+            loopRange.classList.remove('hidden');
+            loopRange.style.left = `${startPct}%`;
+            loopRange.style.width = `${Math.max(0, endPct - startPct)}%`;
+            loopLabel.textContent = `Loop ${this.loopStartFrame}-${this.loopEndFrame}`;
+            loopToggle?.classList.add('active');
+        } else {
+            loopRange.classList.add('hidden');
+            loopRange.style.left = '0%';
+            loopRange.style.width = '0%';
+            loopLabel.textContent = this.loopStartFrame !== 0 || this.loopEndFrame !== maxFrame
+                ? `Range ${this.loopStartFrame}-${this.loopEndFrame}`
+                : 'Full Range';
+            loopToggle?.classList.remove('active');
+        }
+    }
+
+    private seekToFrame(frame: number, options: { pause?: boolean } = {}) {
+        const target = this.clampTimelineFrame(frame);
+        if (options.pause && this.isPlaying) {
+            this.togglePlay();
+        }
+
+        this.playbackTime = target;
+
+        if (this.isSog4SequenceMode) {
+            this.currentTime = target;
+            const info = this.updateSog4SequenceTime();
+            this.syncTimelineUI(info.displayFrame, Math.max(0, Math.ceil(info.total) - 1));
+            return;
+        }
+
+        if (this.is4DGS && this.trajectoryData && !this.isSequenceMode) {
+            this.requestSortedFrame(target);
+        } else {
+            this.currentTime = target;
+            if (this.splatEntity?.gsplat) {
+                (this.splatEntity.gsplat as any).time = target;
+                const material = (this.splatEntity.gsplat as any).instance?.material;
+                if (material) {
+                    material.setParameter('uTime', target);
+                    material.setParameter('uGlobalTotalFrames', this.duration);
+                }
+            }
+            if (this.isSequenceMode) {
+                void this.applySequenceFrame(target);
+            }
+        }
+
+        this.syncTimelineUI(target, this.getTimelineMaxFrame());
+    }
+
+    private stepFrame(delta: number) {
+        this.seekToFrame(this.currentTime + delta, { pause: true });
     }
 
     private resetObjectTransformUI() {
@@ -4784,15 +4899,6 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.camera.lookAt(this.faceTrackingTarget);
         }
 
-        this.fpsCounter++;
-        this.fpsTimer += dt;
-        if (this.fpsTimer >= 1) {
-            const fpsElem = document.getElementById('fps-display');
-            if (fpsElem) fpsElem.innerText = Math.round(this.fpsCounter).toString();
-            this.fpsCounter = 0;
-            this.fpsTimer = 0;
-        }
-
         // Sequence playback is driven by the main update loop in the constructor; avoid double-advancing time here.
         if (this.isSequenceMode) {
             return;
@@ -4803,6 +4909,14 @@ const duration = parsed.frames || parsed.maxMu || 100;
         if (this.is4DGS && this.trajectoryData && !this.isPlaying && !this.isWaitingForSort) {
             this.updateDynamicPositions(Math.floor(this.currentTime));
         }
+    }
+
+    public setHighQuality(enabled: boolean) {
+        if (this.isHighQuality === enabled) return;
+        this.isHighQuality = enabled;
+        this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
+        this.app.resizeCanvas();
+        console.log(`[Viewer] Render quality changed: ${this.isHighQuality ? 'Native DPI' : 'Fixed 1.0'}`);
     }
 
 
@@ -4992,6 +5106,41 @@ const duration = parsed.frames || parsed.maxMu || 100;
         console.log(`[Export] Saved: ${filename}`);
     }
 
+    private captureCurrentEntityModelTransform(): ModelTransform {
+        if (!this.splatEntity) return cloneModelTransform(DEFAULT_MODEL_TRANSFORM);
+        const p = this.splatEntity.getLocalPosition();
+        const r = this.splatEntity.getLocalRotation();
+        const s = this.splatEntity.getLocalScale();
+        return {
+            pos: [p.x, p.y, p.z],
+            rot: [r.x, r.y, r.z, r.w],
+            scale: [s.x, s.y, s.z]
+        };
+    }
+
+    private rememberLoadedModelTransform(parsed: any) {
+        this.sourceModelTransform =
+            normalizeModelTransform(parsed?.model_transform) ||
+            normalizeLegacyModelTransform(parsed?.meta);
+        this.modelTransformEdited = false;
+    }
+
+    private resolveExportModelTransform(): ModelTransform {
+        const entityTransform = this.captureCurrentEntityModelTransform();
+        const preserveSource = !!(this.lastParsedData?.isSOG4 && this.sourceModelTransform && !this.modelTransformEdited);
+        if (preserveSource) {
+            console.log('[Export] Preserving original SOG4 model_transform to avoid coordinate-system drift.', {
+                source: this.sourceModelTransform,
+                entity: entityTransform
+            });
+        }
+        return chooseExportModelTransform({
+            entityTransform,
+            sourceTransform: this.sourceModelTransform,
+            preserveSource
+        });
+    }
+
 
     // #WDD 2026-01-18
     async saveAsTrueSplats() {
@@ -5002,18 +5151,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
         console.log(`[Export] Saving .truesplats...`);
         try {
-            // #WDD 2026-01-18: Capture Model Transform & Cameras
-            const transform = {
-                pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1]
-            };
-            if (this.splatEntity) {
-                const p = this.splatEntity.getLocalPosition();
-                const r = this.splatEntity.getLocalRotation();
-                const s = this.splatEntity.getLocalScale();
-                transform.pos = [p.x, p.y, p.z];
-                transform.rot = [r.x, r.y, r.z, r.w];
-                transform.scale = [s.x, s.y, s.z];
-            }
+            const transform = this.resolveExportModelTransform();
 
             const cameras = this.cameraPresets.map(c => ({
                 name: c.name,
@@ -5287,15 +5425,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 detail: 'Collecting export inputs'
             });
 
-            const transform = { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
-            if (this.splatEntity) {
-                const p = this.splatEntity.getLocalPosition();
-                const r = this.splatEntity.getLocalRotation();
-                const s = this.splatEntity.getLocalScale();
-                transform.pos = [p.x, p.y, p.z];
-                transform.rot = [r.x, r.y, r.z, r.w];
-                transform.scale = [s.x, s.y, s.z];
-            }
+            const transform = this.resolveExportModelTransform();
 
             const cameras = this.cameraPresets.map(c => ({
                 name: c.name, pos: [c.pos.x, c.pos.y, c.pos.z], pitch: c.pitch, yaw: c.yaw,
