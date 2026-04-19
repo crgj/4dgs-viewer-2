@@ -295,6 +295,14 @@ export class SelectionTool {
                                 <span>切换<strong>矩形选择</strong>工具（再按关闭）</span>
                             </li>
                             <li class="flex items-center gap-2">
+                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">3</kbd>
+                                <span>切换<strong>全时段笔刷</strong>工具（选中所有帧可见点）</span>
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">4</kbd>
+                                <span>切换<strong>全时段矩形</strong>工具（选中所有帧可见点）</span>
+                            </li>
+                            <li class="flex items-center gap-2">
                                 <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Alt</kbd>
                                 <span>按住进入<strong>减选模式</strong>（从选区移除）</span>
                             </li>
@@ -341,6 +349,9 @@ export class SelectionTool {
                         <p class="text-gray-300 text-xs leading-relaxed">
                             选择工具现在是<strong>时间感知</strong>的！只会选择当前时刻可见的点。
                             播放动画时，当前时刻会自动更新。
+                        </p>
+                        <p class="text-gray-300 text-xs leading-relaxed mt-1">
+                            <strong>全时段选择</strong>（<kbd class="px-1 py-0.5 bg-white/5 rounded text-xs">3</kbd> / <kbd class="px-1 py-0.5 bg-white/5 rounded text-xs">4</kbd>）可选中所有时间帧内可见的点，适合清理跨帧噪点。
                         </p>
                     </div>
                 </div>
