@@ -11,7 +11,10 @@ import { PLY4Loader } from '../utils/ply4-loader';
 export class ViewerFileLoader {
     constructor(private viewer: Viewer) {}
 
-    private async downloadFileConcurrent(url: string, onProgress: (loaded: number, total: number) => void): Promise<Blob> {
+    private async downloadFileConcurrent(
+        url: string,
+        onProgress: (loaded: number, total: number) => void
+    ): Promise<{ blob: Blob; contentType: string; status: number; finalUrl: string }> {
         const v = this.viewer as any;
         console.log("[SmartLoader] Starting Direct Download...");
 
@@ -34,7 +37,12 @@ export class ViewerFileLoader {
             onProgress(loaded, totalSize || loaded);
         }
 
-        return new Blob(chunks as any[]);
+        return {
+            blob: new Blob(chunks as any[]),
+            contentType: res.headers.get('content-type') || '',
+            status: res.status,
+            finalUrl: res.url || url
+        };
     }
     public async loadSampleFile(url: string) {
         const v = this.viewer as any;
@@ -79,16 +87,27 @@ export class ViewerFileLoader {
             if (loadOverlay) loadOverlay.classList.add('hidden');
 
             // Fetch Blob using Concurrent Downloader
-            const blob = await this.downloadFileConcurrent(url, (loaded, total) => {
+            const { blob, contentType, status, finalUrl } = await this.downloadFileConcurrent(url, (loaded, total) => {
                 const percent = total > 0 ? (loaded / total) * 100 : 0;
                 updateDownloadUI(percent, { loaded, total });
             });
 
-            // #WDD 2026-01-22: Validate content is not HTML
-            const headerHelper = new Uint8Array(await blob.slice(0, 100).arrayBuffer());
-            const headerStr = new TextDecoder().decode(headerHelper);
-            if (headerStr.trim().startsWith('<') || headerStr.includes('<!DOCTYPE html') || headerStr.includes('<html')) {
+            // #WDD-gpt 2026-04-20 - 样例加载失败排查：优先用 content-type 判断 HTML，避免二进制误判
+            const loweredType = contentType.toLowerCase();
+            if (loweredType.includes('text/html')) {
                 throw new Error("The downloaded file appears to be an HTML page (likely a 404 or Proxy Error), not a valid model file.");
+            }
+            // #WDD-gpt 2026-04-20 - 样例加载失败排查：只在 text/* 时做正文 HTML 特征判断
+            if (loweredType.startsWith('text/')) {
+                const headerHelper = new Uint8Array(await blob.slice(0, 256).arrayBuffer());
+                const headerStr = new TextDecoder().decode(headerHelper).toLowerCase();
+                if (headerStr.includes('<!doctype html') || headerStr.includes('<html')) {
+                    throw new Error("The downloaded file appears to be an HTML page (likely a 404 or Proxy Error), not a valid model file.");
+                }
+            }
+            // #WDD-gpt 2026-04-20 - 样例加载失败排查：空文件直接报错
+            if (blob.size <= 0) {
+                throw new Error(`Downloaded file is empty (status=${status}, url=${finalUrl}).`);
             }
 
             // Switch to Parsing UI (Download Complete)
@@ -104,11 +123,13 @@ export class ViewerFileLoader {
             }
 
             const file = new File([blob], filename, { type: 'application/octet-stream' });
-            this.loadFile(file);
+            await this.loadFile(file);
 
         } catch (error) {
             console.error('Error loading sample file:', error);
-            alert('Failed to load sample file.');
+            // #WDD-gpt 2026-04-20 - 显示具体失败原因，便于快速定位
+            const message = error instanceof Error ? error.message : String(error);
+            alert(`Failed to load sample file: ${message}`);
             if (dlOverlay) dlOverlay.classList.add('hidden');
             if (loadOverlay) loadOverlay.classList.add('hidden');
         }
