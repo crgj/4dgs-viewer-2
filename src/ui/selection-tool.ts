@@ -54,10 +54,16 @@ export class SelectionTool {
     // UI
     toolbar!: HTMLElement;
 
-    // #WDD 2026-04-10: Undo/Redo for deletion
+    // #WDD-kimi 2026-04-20: Undo/Redo 升级为全段状态快照（保存并恢复所有段落状态）
     private readonly MAX_HISTORY = 30;
-    private undoStack: Array<{ type: 'delete'; indices: number[] }> = [];
-    private redoStack: Array<{ type: 'delete'; indices: number[] }> = [];
+    private undoStack: Array<{
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    }> = [];
+    private redoStack: Array<{
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    }> = [];
 
     constructor(app: pc.Application, viewer: any) {
         this.app = app;
@@ -117,58 +123,54 @@ export class SelectionTool {
     }
 
     clearSelection() {
-        if (!this.selectionData || !this.selectionTexture) return;
-
-        // Only clear the Selection Channel (R), preserve Deleted Channel (G)
-        // usage: R=Selection, G=Deleted
-        const len = this.selectionData.length;
-        for (let i = 0; i < len; i += 4) {
-            this.selectionData[i] = 0;
-        }
-
-        // #WDD 2026-04-11: Clear all-time selection as well
-        if (this.allTimeSelectionData) {
-            const allTimeLen = this.allTimeSelectionData.length;
-            for (let i = 0; i < allTimeLen; i += 4) {
-                this.allTimeSelectionData[i] = 0;
+        const before = this.captureGlobalSelectionState();
+        // #WDD-kimi 2026-04-20 - 取消选择改为跨所有段：清空每段的 R 通道和 all-time 选择通道
+        const targets = this.getGlobalSelectionTargets();
+        let changed = false;
+        for (const target of targets) {
+            const len = target.selectionData.length;
+            for (let i = 0; i < len; i += 4) {
+                if (target.selectionData[i] !== 0) changed = true;
+                target.selectionData[i] = 0;
             }
+            const allLen = target.allTimeSelectionData.length;
+            for (let i = 0; i < allLen; i += 4) {
+                if (target.allTimeSelectionData[i] !== 0) changed = true;
+                target.allTimeSelectionData[i] = 0;
+            }
+            this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
         }
-
+        if (changed) this.pushUndoSnapshot(before);
         this.updateTexture();
     }
 
     deleteSelected() {
-        if (!this.selectionData) return;
-        const positions = this.getCachedPositions();
-        if (!positions) return;
+        const before = this.captureGlobalSelectionState();
+        const targets = this.getGlobalSelectionTargets();
+        let deletedTotal = 0;
 
-        const totalSplats = positions.length / 3;
-        const deletedIndices: number[] = [];
-
-        for (let i = 0; i < totalSplats; i++) {
-            const idx = i * 4;
-            // If selected (R > 0)
-            if (this.selectionData[idx] > 0) {
-                // Record this index for undo
-                deletedIndices.push(i);
-                // Mark as Deleted (G = 255)
-                this.selectionData[idx + 1] = 255;
-                // Clear selection (R = 0)
-                this.selectionData[idx] = 0;
+        // #WDD-kimi 2026-04-20 - 删除改为跨所有段：对每段已选点同步打删除标记
+        for (const target of targets) {
+            const deletedIndices: number[] = [];
+            const totalSplats = Math.floor(target.selectionData.length / 4);
+            for (let i = 0; i < totalSplats; i++) {
+                const idx = i * 4;
+                if (target.selectionData[idx] > 0) {
+                    deletedIndices.push(i);
+                    target.selectionData[idx + 1] = 255;
+                    target.selectionData[idx] = 0;
+                }
+            }
+            if (deletedIndices.length > 0) {
+                deletedTotal += deletedIndices.length;
+                this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
             }
         }
 
-        if (deletedIndices.length > 0) {
-            // #WDD 2026-04-10: Push to undo stack
-            this.undoStack.push({ type: 'delete', indices: deletedIndices });
-            // Clear redo stack since we made a new change
-            this.redoStack = [];
-            // Limit undo stack size
-            if (this.undoStack.length > this.MAX_HISTORY) {
-                this.undoStack.shift();
-            }
+        if (deletedTotal > 0) {
+            this.pushUndoSnapshot(before);
             this.updateTexture();
-            console.log(`[Selection] Deleted ${deletedIndices.length} points. Undo stack: ${this.undoStack.length}`);
+            console.log(`[Selection] Deleted ${deletedTotal} points across sequence. Undo stack: ${this.undoStack.length}`);
         }
     }
 
@@ -177,21 +179,45 @@ export class SelectionTool {
         // Normal tools: only invert currently visible points
         // All-time tools: invert all non-deleted points globally
         if (!this.selectionData) return;
-        
+
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        if (Array.isArray(sequenceElements) && sequenceElements.length > 0) {
+            const before = this.captureGlobalSelectionState();
+            let changed = false;
+            // #WDD-kimi 2026-04-20 - 反选改为全序列：对每个段的所有非删除点执行反向
+            for (const element of sequenceElements) {
+                const rt = this.buildSelectionRuntimeFromElement(element);
+                const data = (rt?.selectionData as Uint8Array | null) || null;
+                const tex = (rt?.selectionTexture as pc.Texture | null) || null;
+                if (!data) continue;
+                const count = Math.floor(data.length / 4);
+                for (let i = 0; i < count; i++) {
+                    const idx = i * 4;
+                    if (data[idx + 1] > 0) continue;
+                    changed = true;
+                    data[idx] = data[idx] > 0 ? 0 : 255;
+                }
+                this.updateTextureForRuntime(tex, data);
+            }
+            if (changed) this.pushUndoSnapshot(before);
+            this.updateTexture();
+            return;
+        }
+
+        const before = this.captureGlobalSelectionState();
         const isAllTime = this.isAllTimeTool();
-        
+        let changed = false;
         for (let i = 0; i < totalSplats; i++) {
             const idx = i * 4;
-            // Skip deleted points (G > 0)
             if (this.selectionData[idx + 1] > 0) continue;
-            
-            // All-time tools: invert all non-deleted points
-            // Normal tools: only invert currently visible points
             if (isAllTime || this.isVisibleAtCurrentTime(i)) {
+                changed = true;
                 this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
             }
         }
-        
+        if (changed) this.pushUndoSnapshot(before);
         this.updateTexture();
     }
 
@@ -217,22 +243,13 @@ export class SelectionTool {
             return;
         }
 
-        const action = this.undoStack.pop()!;
-        
-        if (action.type === 'delete') {
-            // Restore deleted points (clear G channel)
-            for (const splatIdx of action.indices) {
-                const idx = splatIdx * 4;
-                if (idx < this.selectionData!.length) {
-                    this.selectionData![idx + 1] = 0; // Clear deleted flag
-                }
-            }
-            this.updateTexture();
-            
-            // Push to redo stack
-            this.redoStack.push(action);
-            console.log(`[Selection] Undo: restored ${action.indices.length} points. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
-        }
+        const previous = this.undoStack.pop()!;
+        const current = this.captureGlobalSelectionState();
+        this.restoreGlobalSelectionState(previous);
+        this.redoStack.push(current);
+        if (this.redoStack.length > this.MAX_HISTORY) this.redoStack.shift();
+        this.updateTexture();
+        console.log(`[Selection] Undo: restored full sequence state. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
     }
 
     // #WDD 2026-04-10: Redo last undone action
@@ -242,23 +259,13 @@ export class SelectionTool {
             return;
         }
 
-        const action = this.redoStack.pop()!;
-        
-        if (action.type === 'delete') {
-            // Delete again (set G channel to 255)
-            for (const splatIdx of action.indices) {
-                const idx = splatIdx * 4;
-                if (idx < this.selectionData!.length) {
-                    this.selectionData![idx + 1] = 255; // Mark as deleted
-                    this.selectionData![idx] = 0;       // Clear selection
-                }
-            }
-            this.updateTexture();
-            
-            // Push back to undo stack
-            this.undoStack.push(action);
-            console.log(`[Selection] Redo: deleted ${action.indices.length} points. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
-        }
+        const next = this.redoStack.pop()!;
+        const current = this.captureGlobalSelectionState();
+        this.restoreGlobalSelectionState(next);
+        this.undoStack.push(current);
+        if (this.undoStack.length > this.MAX_HISTORY) this.undoStack.shift();
+        this.updateTexture();
+        console.log(`[Selection] Redo: restored full sequence state. Undo: ${this.undoStack.length}, Redo: ${this.redoStack.length}`);
     }
 
     // #WDD 2026-04-10: Clear undo/redo history (e.g., on new file load)
@@ -266,6 +273,110 @@ export class SelectionTool {
         this.undoStack = [];
         this.redoStack = [];
         console.log('[Selection] History cleared');
+    }
+
+    // #WDD-kimi 2026-04-20 - 捕获当前所有段落的选择状态快照（用于 undo/redo）
+    private captureGlobalSelectionState(): {
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    } {
+        const targets = this.getGlobalSelectionTargets();
+        const segments = targets.map((t) => ({
+            elementIndex: t.elementIndex,
+            selectionData: new Uint8Array(t.selectionData),
+            allTimeSelectionData: new Uint8Array(t.allTimeSelectionData)
+        }));
+        // #WDD-kimi 2026-04-20 - 记录视图上下文（段落/时间/变换），避免切段后 undo 顺序错位
+        const viewContext = typeof this.viewer.captureSelectionUndoViewContext === 'function'
+            ? this.viewer.captureSelectionUndoViewContext()
+            : null;
+        return { segments, viewContext };
+    }
+
+    private pushUndoSnapshot(snapshot: {
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    }) {
+        this.undoStack.push(snapshot);
+        if (this.undoStack.length > this.MAX_HISTORY) this.undoStack.shift();
+        this.redoStack = [];
+    }
+
+    private restoreGlobalSelectionState(snapshot: {
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    } | Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>) {
+        const segments = Array.isArray(snapshot) ? snapshot : (snapshot?.segments || []);
+        const targetMap = new Map<number, {
+            elementIndex: number;
+            selectionData: Uint8Array;
+            allTimeSelectionData: Uint8Array;
+            selectionTexture: pc.Texture | null;
+        }>();
+        for (const t of this.getGlobalSelectionTargets()) targetMap.set(t.elementIndex, t);
+
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+
+        for (const s of segments) {
+            const target = targetMap.get(s.elementIndex);
+            if (!target) continue;
+
+            if (target.selectionData.length !== s.selectionData.length) {
+                target.selectionData = new Uint8Array(s.selectionData);
+            } else {
+                target.selectionData.set(s.selectionData);
+            }
+            if (target.allTimeSelectionData.length !== s.allTimeSelectionData.length) {
+                target.allTimeSelectionData = new Uint8Array(s.allTimeSelectionData);
+            } else {
+                target.allTimeSelectionData.set(s.allTimeSelectionData);
+            }
+
+            if (s.elementIndex >= 0 && Array.isArray(sequenceElements) && sequenceElements[s.elementIndex]) {
+                const el = sequenceElements[s.elementIndex];
+                el.runtime = el.runtime || {};
+                el.runtime.selectionData = target.selectionData;
+                el.runtime.allTimeSelectionData = target.allTimeSelectionData;
+            } else if (s.elementIndex < 0) {
+                this.selectionData = target.selectionData;
+                this.allTimeSelectionData = target.allTimeSelectionData;
+            }
+
+            this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
+        }
+
+        // #WDD-kimi 2026-04-20 - 恢复视图上下文（先变换/段落/时间），保证与选择状态回退顺序一致
+        const viewContext = Array.isArray(snapshot) ? null : snapshot?.viewContext;
+        if (viewContext && typeof this.viewer.restoreSelectionUndoViewContext === 'function') {
+            this.viewer.restoreSelectionUndoViewContext(viewContext);
+        }
+
+        // #WDD-kimi 2026-04-20 - 修复切段后 undo/redo 引用错位：恢复完成后强制同步到当前激活段
+        this.syncActiveSelectionRefsAfterRestore();
+    }
+
+    private syncActiveSelectionRefsAfterRestore() {
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        if (!Array.isArray(sequenceElements) || sequenceElements.length === 0) return;
+
+        const activeIdx = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+            ? this.viewer.splatSequence.activeElementIndex
+            : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : 0);
+
+        const clampedIdx = Math.max(0, Math.min(sequenceElements.length - 1, activeIdx));
+        const active = sequenceElements[clampedIdx];
+        if (!active) return;
+
+        const rt = this.buildSelectionRuntimeFromElement(active);
+        if (!rt?.selectionData) return;
+
+        this.selectionData = rt.selectionData as Uint8Array;
+        this.allTimeSelectionData = (rt.allTimeSelectionData as Uint8Array | null) || this.allTimeSelectionData;
+        this.selectionTexture = (rt.selectionTexture as pc.Texture | null) || this.selectionTexture;
     }
 
     // #WDD 2026-04-10: Help Modal
@@ -861,9 +972,18 @@ export class SelectionTool {
         return this.viewer.cachedPositions;
     }
 
-    // #WDD 2026-04-10: Get current time for time-based selection
+    // #WDD-kimi 2026-04-20 - 序列模式下返回当前段本地时间，避免用全局时间误判可见性
     getCurrentTime(): number {
-        return this.viewer.currentTime ?? 0;
+        const globalTime = this.viewer.currentTime ?? 0;
+        if (this.viewer?.isSog4SequenceMode) {
+            const offsets = this.viewer?.sog4SequenceOffsets;
+            const segIdx = this.viewer?.sog4SequenceIndex;
+            if (Array.isArray(offsets) && typeof segIdx === 'number' && segIdx >= 0) {
+                const segStart = offsets[segIdx] ?? 0;
+                return Math.max(0, globalTime - segStart);
+            }
+        }
+        return globalTime;
     }
 
     // #WDD 2026-04-18: Check if current tool is an all-time selection tool
@@ -907,6 +1027,199 @@ export class SelectionTool {
     // #WDD 2026-04-10: Check if a point is visible at current time
     isVisibleAtCurrentTime(splatIdx: number): boolean {
         return this.isVisibleAtTime(splatIdx, this.getCurrentTime());
+    }
+
+    // #WDD-gpt 2026-04-20 - 序列元素可见性检查（使用元素自己的生命周期纹理数据）
+    private isVisibleAtTimeForRuntime(runtime: any, splatIdx: number, time: number): boolean {
+        const lifeTexData = runtime?.lifeTexData as Float32Array | null | undefined;
+        if (!lifeTexData) return true;
+
+        const idx = splatIdx * 4;
+        if (idx >= lifeTexData.length) return true;
+
+        const mu = lifeTexData[idx + 0];
+        const w = lifeTexData[idx + 1];
+        const k = lifeTexData[idx + 2];
+        const duration = runtime?.totalFrames ?? 100;
+        const totalFrames = Math.ceil(duration);
+        const segmentMax = Math.max(0, totalFrames - 1);
+
+        if (time < 0.0 || time > segmentMax) return false;
+
+        const lifeStart = mu - w;
+        const lifeEnd = mu + w;
+        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
+
+        const left = 1.0 / (1.0 + Math.exp(-k * (time - lifeStart)));
+        const right = 1.0 / (1.0 + Math.exp(k * (time - lifeEnd)));
+        return (left * right) > 0.01;
+    }
+
+    // #WDD-gpt 2026-04-20 - 从序列元素 runtime 计算指定时刻位置
+    private getPositionsAtTimeForRuntime(runtime: any, time: number, out?: Float32Array): Float32Array | null {
+        const cached = runtime?.cachedPositions as Float32Array | null | undefined;
+        if (!cached) return null;
+
+        const posArrays = runtime?.posArrays as { x: Float32Array, y: Float32Array, z: Float32Array } | null | undefined;
+        const traj = runtime?.trajectoryData as Float32Array | null | undefined;
+        const is4DGS = !!runtime?.is4DGS;
+        if (!is4DGS || !posArrays || !traj) return cached;
+
+        const K = runtime?.keyframes || 0;
+        const stride = runtime?.xyzStride || 1;
+        const origIndices = runtime?.originalIndices as Float32Array | null | undefined;
+        const duration = runtime?.totalFrames || 1;
+        const N = Math.min(posArrays.x.length, posArrays.y.length, posArrays.z.length);
+        if (K <= 0 || N <= 0) return cached;
+
+        const keyframeMax = Math.max(0, (K - 1) * stride);
+        const maxTime = Math.max(0, Math.min(duration - 1, keyframeMax));
+        const tClamped = Math.max(0, Math.min(time, maxTime));
+        const idx = stride > 0 ? Math.floor(tClamped / stride) : 0;
+        const k0 = K <= 1 ? 0 : Math.min(Math.max(0, idx), K - 1);
+        const k1 = K <= 1 ? 0 : Math.min(k0 + 1, K - 1);
+        const t0 = k0 * stride;
+        const t1 = k1 * stride;
+        const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
+
+        const result = out || new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+            const oidx = origIndices ? Math.round(origIndices[i]) : i;
+            const base = oidx * K * 3;
+            const b0 = base + k0 * 3;
+            const b1 = base + k1 * 3;
+            const x0 = traj[b0 + 0], y0 = traj[b0 + 1], z0 = traj[b0 + 2];
+            const x1 = traj[b1 + 0], y1 = traj[b1 + 1], z1 = traj[b1 + 2];
+            result[i * 3 + 0] = x0 + (x1 - x0) * ratio;
+            result[i * 3 + 1] = y0 + (y1 - y0) * ratio;
+            result[i * 3 + 2] = z0 + (z1 - z0) * ratio;
+        }
+        return result;
+    }
+
+    private updateTextureForRuntime(selectionTexture: pc.Texture | null, selectionData: Uint8Array | null) {
+        if (!selectionTexture || !selectionData) return;
+        const lock = selectionTexture.lock();
+        lock.set(selectionData);
+        selectionTexture.unlock();
+    }
+
+    // #WDD-kimi 2026-04-20 - 当 runtime 尚未构建时，用 parsed 数据构造可用于 all-time 比对的运行时视图
+    private buildSelectionRuntimeFromElement(element: any): any {
+        const runtime = element?.runtime;
+        if (runtime) return runtime;
+
+        const parsed = element?.parsed || {};
+        const readProp = (name: string): Float32Array | null => {
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+
+        let cachedPositions: Float32Array | null = null;
+        const x = parsed?.x || readProp('x');
+        const y = parsed?.y || readProp('y');
+        const z = parsed?.z || readProp('z');
+        if (x && y && z) {
+            const count = Math.min(x.length, y.length, z.length);
+            cachedPositions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                cachedPositions[i * 3 + 0] = x[i];
+                cachedPositions[i * 3 + 1] = y[i];
+                cachedPositions[i * 3 + 2] = z[i];
+            }
+        }
+
+        const mu = parsed?.lifetime_mu || readProp('lifetime_mu');
+        const w = parsed?.lifetime_w || readProp('lifetime_w');
+        const k = parsed?.lifetime_k || readProp('lifetime_k');
+        let lifeTexData: Float32Array | null = null;
+        if (cachedPositions && mu && w) {
+            const count = Math.min(cachedPositions.length / 3, mu.length, w.length);
+            lifeTexData = new Float32Array(count * 4);
+            for (let i = 0; i < count; i++) {
+                lifeTexData[i * 4 + 0] = mu[i];
+                lifeTexData[i * 4 + 1] = w[i];
+                lifeTexData[i * 4 + 2] = k ? k[i] : 10.0;
+                lifeTexData[i * 4 + 3] = 0;
+            }
+        }
+
+        return {
+            totalFrames: Math.max(1, Math.floor(parsed?.frames || parsed?.maxMu || element?.duration || 1)),
+            is4DGS: !!parsed?.trajectory,
+            keyframes: parsed?.keyframes || 0,
+            xyzStride: parsed?.xyzStride || 1,
+            lifeTexData,
+            trajectoryData: parsed?.trajectory || null,
+            originalIndices: parsed?.original_index || readProp('original_index'),
+            posArrays: cachedPositions ? {
+                x: x as Float32Array,
+                y: y as Float32Array,
+                z: z as Float32Array
+            } : null,
+            cachedPositions,
+            selectionData: runtime?.selectionData || null,
+            allTimeSelectionData: runtime?.allTimeSelectionData || null,
+            selectionTexture: runtime?.selectionTexture || null
+        };
+    }
+
+    // #WDD-kimi 2026-04-20 - 构建跨段操作目标集，确保每段都有可写 selection/all-time 缓冲
+    private getGlobalSelectionTargets(): Array<{
+        elementIndex: number;
+        selectionData: Uint8Array;
+        allTimeSelectionData: Uint8Array;
+        selectionTexture: pc.Texture | null;
+    }> {
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+
+        if (Array.isArray(sequenceElements) && sequenceElements.length > 0) {
+            const targets: Array<{
+                elementIndex: number;
+                selectionData: Uint8Array;
+                allTimeSelectionData: Uint8Array;
+                selectionTexture: pc.Texture | null;
+            }> = [];
+            for (let idx = 0; idx < sequenceElements.length; idx++) {
+                const element = sequenceElements[idx];
+                const rt = this.buildSelectionRuntimeFromElement(element);
+                if (!rt?.cachedPositions) continue;
+                const count = Math.floor((rt.cachedPositions as Float32Array).length / 3);
+                if (!rt.selectionData || rt.selectionData.length < count * 4) {
+                    rt.selectionData = new Uint8Array(count * 4);
+                }
+                if (!rt.allTimeSelectionData || rt.allTimeSelectionData.length < count * 4) {
+                    rt.allTimeSelectionData = new Uint8Array(count * 4);
+                }
+                element.runtime = element.runtime || {};
+                element.runtime.selectionData = rt.selectionData;
+                element.runtime.allTimeSelectionData = rt.allTimeSelectionData;
+                if (rt.selectionTexture) {
+                    element.runtime.selectionTexture = rt.selectionTexture;
+                }
+                targets.push({
+                    elementIndex: idx,
+                    selectionData: rt.selectionData as Uint8Array,
+                    allTimeSelectionData: rt.allTimeSelectionData as Uint8Array,
+                    selectionTexture: (rt.selectionTexture as pc.Texture | null) || null
+                });
+            }
+            return targets;
+        }
+
+        if (!this.selectionData) return [];
+        if (!this.allTimeSelectionData || this.allTimeSelectionData.length !== this.selectionData.length) {
+            this.allTimeSelectionData = new Uint8Array(this.selectionData.length);
+        }
+        return [{
+            elementIndex: -1,
+            selectionData: this.selectionData,
+            allTimeSelectionData: this.allTimeSelectionData,
+            selectionTexture: this.selectionTexture
+        }];
     }
 
     performBrush(cx: number, cy: number) {
@@ -1252,63 +1565,109 @@ export class SelectionTool {
 
     // Generic all-time selection: check all frames for points that are visible and in selection area
     private selectAllTimePoints(checkScreen: (screenX: number, screenY: number, screenZ: number, splatIdx: number) => boolean): boolean {
-        const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData) return false;
-
         const camera = this.viewer.camera?.camera;
         if (!camera) return false;
 
-        const duration = this.viewer.duration ?? 1;
-        const totalFrames = Math.ceil(duration);
-        const numSplats = positions.length / 3;
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        const hasSequence = Array.isArray(sequenceElements) && sequenceElements.length > 0;
+        const targets = hasSequence ? sequenceElements : [{
+            entity: this.viewer.splatEntity,
+            runtime: {
+                totalFrames: this.viewer.duration ?? 1,
+                is4DGS: !!this.viewer.is4DGS,
+                keyframes: this.viewer.keyframes,
+                xyzStride: this.viewer.xyzStride,
+                lifeTexData: this.viewer.lifeTexData,
+                trajectoryData: this.viewer.trajectoryData,
+                originalIndices: this.viewer.originalIndices,
+                posArrays: this.viewer.posArrays,
+                cachedPositions: this.getCachedPositions(),
+                selectionData: this.selectionData,
+                allTimeSelectionData: this.allTimeSelectionData,
+                selectionTexture: this.selectionTexture
+            }
+        }];
 
-        const found = new Uint8Array(numSplats);
-        const tempPos = new Float32Array(numSplats * 3);
+        let anyChanged = false;
         const localPos = new pc.Vec3();
         const worldPos = new pc.Vec3();
         const screen = new pc.Vec3();
-        const modelMat = this.viewer.splatEntity.getWorldTransform();
 
-        for (let t = 0; t < totalFrames; t++) {
-            const framePositions = this.viewer.getPositionsAtTime(t, tempPos);
-            if (!framePositions) continue;
+        for (const target of targets) {
+            const rt = hasSequence ? this.buildSelectionRuntimeFromElement(target) : target?.runtime;
+            const entity = target?.entity;
+            let selectionData = (rt?.selectionData as Uint8Array | null) || null;
+            let allTimeSelectionData = (rt?.allTimeSelectionData as Uint8Array | null) || null;
+            const selectionTexture = (rt?.selectionTexture as pc.Texture | null) || null;
+            const basePositions = (rt?.cachedPositions as Float32Array | null) || null;
+            if (!entity || !basePositions) continue;
 
+            if (!selectionData || !allTimeSelectionData) {
+                const bytes = Math.max(0, Math.floor(basePositions.length / 3)) * 4;
+                selectionData = selectionData || new Uint8Array(bytes);
+                allTimeSelectionData = allTimeSelectionData || new Uint8Array(bytes);
+                if (hasSequence) {
+                    target.runtime = target.runtime || {};
+                    target.runtime.selectionData = selectionData;
+                    target.runtime.allTimeSelectionData = allTimeSelectionData;
+                }
+            }
+
+            const numSplats = Math.floor(basePositions.length / 3);
+            const found = new Uint8Array(numSplats);
+            const tempPos = new Float32Array(numSplats * 3);
+            const modelMat = entity.getWorldTransform();
+            const totalFrames = Math.max(1, Math.ceil(rt?.totalFrames ?? 1));
+
+            for (let t = 0; t < totalFrames; t++) {
+                const framePositions = this.getPositionsAtTimeForRuntime(rt, t, tempPos);
+                if (!framePositions) continue;
+
+                for (let i = 0; i < numSplats; i++) {
+                    if (found[i]) continue;
+
+                    const idx4 = i * 4;
+                    if (selectionData[idx4 + 1] > 0) continue;
+                    if (!this.isVisibleAtTimeForRuntime(rt, i, t)) continue;
+
+                    localPos.set(framePositions[i * 3 + 0], framePositions[i * 3 + 1], framePositions[i * 3 + 2]);
+                    modelMat.transformPoint(localPos, worldPos);
+                    camera.worldToScreen(worldPos, screen);
+
+                    if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i)) {
+                        found[i] = 1;
+                    }
+                }
+            }
+
+            let changed = false;
             for (let i = 0; i < numSplats; i++) {
-                if (found[i]) continue;
-
+                if (!found[i]) continue;
                 const idx4 = i * 4;
-                if (this.selectionData[idx4 + 1] > 0) continue;
-
-                if (!this.isVisibleAtTime(i, t)) continue;
-
-                localPos.set(framePositions[i * 3 + 0], framePositions[i * 3 + 1], framePositions[i * 3 + 2]);
-                modelMat.transformPoint(localPos, worldPos);
-                camera.worldToScreen(worldPos, screen);
-
-                if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i)) {
-                    found[i] = 1;
+                if (this.isSubtracting) {
+                    allTimeSelectionData[idx4] = 0;
+                    if (selectionData[idx4] > 0) {
+                        selectionData[idx4] = 0;
+                        changed = true;
+                    }
+                } else {
+                    allTimeSelectionData[idx4] = 255;
+                    if (selectionData[idx4] === 0) {
+                        selectionData[idx4] = 255;
+                        changed = true;
+                    }
                 }
+            }
+
+            if (changed) {
+                anyChanged = true;
+                this.updateTextureForRuntime(selectionTexture, selectionData);
             }
         }
 
-        let changed = false;
-        for (let i = 0; i < numSplats; i++) {
-            if (!found[i]) continue;
-            const idx4 = i * 4;
-            if (this.isSubtracting) {
-                if (this.selectionData[idx4] > 0) {
-                    this.selectionData[idx4] = 0;
-                    changed = true;
-                }
-            } else {
-                if (this.selectionData[idx4] === 0) {
-                    this.selectionData[idx4] = 255;
-                    changed = true;
-                }
-            }
-        }
-
-        return changed;
+        return anyChanged;
     }
 
     performBrushAllTime(cx: number, cy: number) {

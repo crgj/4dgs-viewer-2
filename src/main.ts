@@ -50,6 +50,50 @@ interface SequenceFrameData {
     propertyValues: Record<string, Float32Array>;
 }
 
+interface SplatSequenceElement {
+    name: string;
+    type: 'ply4' | 'sog4';
+    duration: number;
+    globalStartFrame: number;
+    globalEndFrame: number;
+    parsed: any;
+    asset: pc.Asset | null;
+    entity: pc.Entity | null;
+    runtime?: {
+        is4DGS: boolean;
+        totalFrames: number;
+        keyframes: number;
+        xyzStride: number;
+        rotKeyframes: number;
+        rotStride: number;
+        dcKeyframes: number;
+        dcStride: number;
+        lifeTexData: Float32Array | null;
+        scalesTexData: Float32Array | null;
+        trajectoryData: Float32Array | null;
+        rotTrajectoryData: Float32Array | null;
+        dcTrajectoryData: Float32Array | null;
+        originalIndices: Float32Array | null;
+        posArrays: { x: Float32Array, y: Float32Array, z: Float32Array } | null;
+        cachedPositions: Float32Array | null;
+        lifeTexture: pc.Texture | null;
+        trajectoryTexture: pc.Texture | null;
+        rotationTexture: pc.Texture | null;
+        dcTrajectoryTexture: pc.Texture | null;
+        scalesTexture: pc.Texture | null;
+        selectionData: Uint8Array | null;
+        allTimeSelectionData: Uint8Array | null;
+        selectionTexture: pc.Texture | null;
+    };
+}
+
+interface SplatSequence {
+    name: string;
+    elements: SplatSequenceElement[];
+    totalFrames: number;
+    activeElementIndex: number;
+}
+
 class Viewer {
     app: pc.Application;
     camera: pc.Entity | null = null;
@@ -184,6 +228,7 @@ class Viewer {
     private sog4SequenceOffsets: number[] = [];
     private sog4SequenceLoading = false;
     private sog4SequenceRequestId = 0;
+    private splatSequence: SplatSequence | null = null;
 
     private getSequenceParentEntity(): pc.Entity {
         if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) return this.arHandler.arAnchor;
@@ -2196,6 +2241,7 @@ class Viewer {
             this.sog4SequenceIndex = 0;
             this.sog4SequenceLoading = false;
             this.sog4SequenceRequestId++;
+            this.splatSequence = null;
             this.resetTimelineTools();
         }
 
@@ -2442,6 +2488,10 @@ class Viewer {
                 // #WDD 2026-01-16
                 
 const duration = parsed.frames || parsed.maxMu || 100;
+                // #WDD-gpt 2026-04-20 - 单文件先注册到序列，再生成运行时资源，确保资源归属到队列元素
+                if (lowerName.endsWith('.ply4') || lowerName.endsWith('.sog4')) {
+                    this.configureSingleElementTemporalSequence(file, parsed, asset, entity, duration);
+                }
                 this.finalizeGSplatLoad(asset, count, null, duration, parsed);
 
                 // #WDD 2026-01-30 Apply postProcessing parameters from file parameters from file
@@ -2547,6 +2597,62 @@ const duration = parsed.frames || parsed.maxMu || 100;
         this.sog4SequenceIndex = 0;
         this.sog4SequenceLoading = false;
         this.sog4SequenceRequestId++;
+        // #WDD-gpt 2026-04-20 - 清理旧序列对象，避免新加载沿用过期元素
+        this.splatSequence = null;
+    }
+
+    // #WDD-gpt 2026-04-20 - 新增统一序列模型：将当前 temporal segments 投影为 SplatSequence
+    private rebuildSplatSequenceFromTemporalSegments(sequenceName: string) {
+        const elements: SplatSequenceElement[] = this.sog4SequenceSegments.map((seg, idx) => {
+            const start = this.sog4SequenceOffsets[idx] || 0;
+            const duration = Math.max(1, Math.floor(seg.duration || 1));
+            return {
+                name: seg.name,
+                type: seg.name.toLowerCase().endsWith('.ply4') ? 'ply4' : 'sog4',
+                duration,
+                globalStartFrame: start,
+                globalEndFrame: start + duration,
+                parsed: seg.parsed,
+                asset: seg.asset,
+                entity: seg.entity
+            };
+        });
+        this.splatSequence = {
+            name: sequenceName,
+            elements,
+            totalFrames: this.sog4SequenceTotalFrames || Math.max(1, this.duration),
+            activeElementIndex: Math.max(0, this.sog4SequenceIndex || 0)
+        };
+    }
+
+    // #WDD-gpt 2026-04-20 - 单文件 ply4/sog4 也按“单元素序列”处理
+    private configureSingleElementTemporalSequence(
+        file: File,
+        parsed: any,
+        asset: pc.Asset,
+        entity: pc.Entity,
+        duration: number
+    ) {
+        const type: 'ply4' | 'sog4' = file.name.toLowerCase().endsWith('.ply4') ? 'ply4' : 'sog4';
+        this.isSog4SequenceMode = true;
+        this.sog4SequenceFiles = [file];
+        this.sog4SequenceSegments = [{ name: file.name, parsed, asset, entity, duration }];
+        this.sog4SequenceOffsets = [0];
+        this.sog4SequenceTotalFrames = Math.max(1, Math.floor(duration || 1));
+        this.sog4SequenceIndex = 0;
+        this.sog4SequenceName = `${file.name}_sequence`;
+        this.sog4SequenceLoading = false;
+        this.rebuildSplatSequenceFromTemporalSegments(this.sog4SequenceName);
+        if (this.splatSequence) {
+            this.splatSequence.elements[0].type = type;
+            this.splatSequence.activeElementIndex = 0;
+        }
+    }
+
+    // #WDD-gpt 2026-04-20 - 通过 asset 反查序列元素，用于绑定每个元素的运行时纹理/缓存
+    private getSplatSequenceElementByAsset(asset: pc.Asset | null): SplatSequenceElement | null {
+        if (!asset || !this.splatSequence) return null;
+        return this.splatSequence.elements.find((el) => el.asset === asset) || null;
     }
 
     private async parsePlyFrame(file: File): Promise<SequenceFrameData> {
@@ -2738,6 +2844,49 @@ const duration = parsed.frames || parsed.maxMu || 100;
             }
         } catch (e) {
             console.warn('[Sequence] ensureSequenceSelectionTextureForAsset failed:', e);
+        }
+    }
+
+    // #WDD-kimi 2026-04-20 - 为序列段落创建独立选择状态，避免不同段落复用同一 selection 缓冲
+    private createSequenceSelectionStateForAsset(asset: pc.Asset, seedSelectionData?: Uint8Array | null): {
+        selectionData: Uint8Array;
+        allTimeSelectionData: Uint8Array;
+        selectionTexture: pc.Texture;
+    } | null {
+        try {
+            const resource = asset.resource as pc.GSplatResource;
+            const splatData = resource.splatData;
+            const numSplats = splatData.numSplats;
+            const resAny = asset.resource as any;
+            const texWidth = (resAny?.colorTexture?.width || resAny?.transformATexture?.width || Math.ceil(Math.sqrt(numSplats))) as number;
+            const texHeight = Math.ceil(numSplats / texWidth);
+            const bytes = texWidth * texHeight * 4;
+
+            const selectionData = new Uint8Array(bytes);
+            if (seedSelectionData && seedSelectionData.length > 0) {
+                selectionData.set(seedSelectionData.subarray(0, Math.min(seedSelectionData.length, selectionData.length)));
+            }
+            const allTimeSelectionData = new Uint8Array(bytes);
+
+            const selectionTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth,
+                height: texHeight,
+                format: pc.PIXELFORMAT_R8_G8_B8_A8,
+                mipmaps: false,
+                minFilter: pc.FILTER_NEAREST,
+                magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+                addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+                name: 'selectionTexture'
+            });
+            const lock = selectionTexture.lock();
+            lock.set(selectionData);
+            selectionTexture.unlock();
+
+            return { selectionData, allTimeSelectionData, selectionTexture };
+        } catch (e) {
+            console.warn('[Sequence] createSequenceSelectionStateForAsset failed:', e);
+            return null;
         }
     }
 
@@ -3240,6 +3389,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
             await this.activateSog4SequenceSegment(0);
             this.currentTime = 0;
             this.playbackTime = 0;
+            this.rebuildSplatSequenceFromTemporalSegments(this.sog4SequenceName || 'sog4_sequence');
 
             const first = this.sog4SequenceSegments[0];
             if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
@@ -3273,6 +3423,97 @@ const duration = parsed.frames || parsed.maxMu || 100;
         } catch (err) {
             console.error('SOG4 sequence load failed', err);
             alert('Failed to load SOG4 sequence: ' + (err instanceof Error ? err.message : String(err)));
+        } finally {
+            if (!succeeded) {
+                this.isSog4SequenceMode = false;
+                this.sog4SequenceFiles = [];
+                this.sog4SequenceSegments = [];
+                this.sog4SequenceOffsets = [];
+                this.sog4SequenceTotalFrames = 0;
+                this.sog4SequenceIndex = 0;
+                this.sog4SequenceLoading = false;
+                overlay?.classList.add('hidden');
+            }
+        }
+    }
+
+    // #WDD-gpt 2026-04-20 - 新增 PLY4 多段序列读取，和 SOG4 一样按段累计总帧
+    private async loadPly4Sequence(files: File[]): Promise<void> {
+        const overlay = document.getElementById('loading-overlay');
+        const progress = this.createSequenceProgressUpdater();
+        progress(0, 'PREPARING', `Loading ${files.length} PLY4 segments`);
+        let succeeded = false;
+        try {
+            this.activeLoadingSequenceCleanup();
+
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+            this.isSog4SequenceMode = true;
+            this.sog4SequenceFiles = sorted;
+            const base = sorted[0]?.name ? sorted[0].name.replace(/\.ply4$/i, '') : 'ply4_sequence';
+            this.sog4SequenceName = `${base}_sequence.ply4`;
+            this.sog4SequenceSharedTransform = null;
+            this.sog4SequenceSegments = [];
+            this.sog4SequenceOffsets = [];
+            this.sog4SequenceTotalFrames = 0;
+            this.sog4SequenceIndex = 0;
+            this.sog4SequenceLoading = true;
+            const requestId = ++this.sog4SequenceRequestId;
+
+            const loader = new PLY4Loader();
+            for (let i = 0; i < sorted.length; i++) {
+                const file = sorted[i];
+                const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
+                progress(step, 'LOADING', `Parsing ${file.name}`);
+                const parsed = await loader.load(file, () => { });
+                const duration = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || 100));
+                this.sog4SequenceOffsets.push(this.sog4SequenceTotalFrames);
+                this.sog4SequenceTotalFrames += duration;
+                this.sog4SequenceSegments.push({ name: file.name, parsed, asset: null, entity: null, duration });
+            }
+
+            if (!this.sog4SequenceSegments.length) throw new Error('No PLY4 segments parsed');
+            for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
+                const step = Math.min(8, 4 + Math.floor((i / Math.max(1, this.sog4SequenceSegments.length - 1)) * 4));
+                progress(step, 'PREPARING', `Preparing ${this.sog4SequenceSegments[i].name}`);
+                await this.prepareSog4SequenceSegment(i);
+            }
+            this.resetTimelineTools();
+            this.activateSog4SequenceSegment(0);
+            this.currentTime = 0;
+            this.playbackTime = 0;
+            this.rebuildSplatSequenceFromTemporalSegments(this.sog4SequenceName || 'ply4_sequence');
+
+            const first = this.sog4SequenceSegments[0];
+            if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
+                this.cameraPresets = first.parsed.cameras.map((c: any) => ({
+                    name: c.name,
+                    pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
+                    pitch: c.pitch,
+                    yaw: c.yaw,
+                    textObjects: c.textObjects
+                }));
+                this.renderPresets();
+            }
+            if (first?.parsed?.postProcessing) {
+                this.postProcessingTool.exposure = first.parsed.postProcessing.exposure || 1.0;
+                this.postProcessingTool.brightness = first.parsed.postProcessing.brightness || 0.0;
+                this.postProcessingTool.contrast = first.parsed.postProcessing.contrast || 0.0;
+                this.postProcessingTool.applySettings();
+            }
+
+            if (this.sog4SequenceRequestId === requestId) {
+                this.sog4SequenceLoading = false;
+            }
+
+            console.log("[Viewer] Auto-starting playback and switching to Play Mode");
+            this.toggleUIVisibility(true);
+            if (!this.isPlaying) this.togglePlay();
+
+            setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 200);
+            succeeded = true;
+        } catch (err) {
+            console.error('PLY4 sequence load failed', err);
+            alert('Failed to load PLY4 sequence: ' + (err instanceof Error ? err.message : String(err)));
         } finally {
             if (!succeeded) {
                 this.isSog4SequenceMode = false;
@@ -3515,6 +3756,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
     }
 
     private createSog4SegmentAsset(parsed: any, name: string): pc.Asset {
+        if (!parsed?.sogBuffer) {
+            // #WDD-gpt 2026-04-20 - PLY4 分段没有 sogBuffer，改用 plyData 构建资源
+            return this.createGsplatAssetFromVertexElement(name, parsed.plyData.elements[0]);
+        }
         const vertexElement = parsed.plyData.elements[0];
         const splatData = new (pc.GSplatData as any)([vertexElement]);
         const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
@@ -3599,19 +3844,94 @@ const duration = parsed.frames || parsed.maxMu || 100;
         this.clearActiveSog4SequenceRenderState();
 
         this.sog4SequenceIndex = index;
+        if (this.splatSequence) {
+            this.splatSequence.activeElementIndex = index;
+        }
         this.currentFileName = this.sog4SequenceName || segment.name;
         this.currentTransformCacheKey = this.currentFileName;
         this.splatEntity = segment.entity;
         this.lastParsedData = segment.parsed;
 
-        // Always reset selection/deleted mask per segment. If two segments share the
-        // same texture dimensions, reusing the previous selectionTexture would leak
-        // deleted/hidden flags into the next segment and look like opacity bleed.
-        this.ensureSequenceSelectionTextureForAsset(segment.asset, true);
+        // #WDD-kimi 2026-04-20 - 优先复用段内保存的选择状态，避免切段后删除状态丢失
+        const preBoundElement = this.getSplatSequenceElementByAsset(segment.asset);
+        if (preBoundElement?.runtime?.selectionData) {
+            if (!preBoundElement.runtime.selectionTexture) {
+                const restored = this.createSequenceSelectionStateForAsset(segment.asset, preBoundElement.runtime.selectionData as Uint8Array);
+                if (restored) {
+                    preBoundElement.runtime.selectionTexture = restored.selectionTexture;
+                    preBoundElement.runtime.selectionData = restored.selectionData;
+                    const prevAllTime = preBoundElement.runtime.allTimeSelectionData as Uint8Array | null;
+                    if (prevAllTime && prevAllTime.length > 0) {
+                        restored.allTimeSelectionData.set(prevAllTime.subarray(0, Math.min(prevAllTime.length, restored.allTimeSelectionData.length)));
+                    }
+                    preBoundElement.runtime.allTimeSelectionData = restored.allTimeSelectionData;
+                } else {
+                    this.ensureSequenceSelectionTextureForAsset(segment.asset, false);
+                    preBoundElement.runtime.selectionTexture = this.selectionTool?.selectionTexture || null;
+                }
+            }
+            if (this.selectionTool) {
+                this.selectionTool.selectionData = preBoundElement.runtime.selectionData;
+                this.selectionTool.allTimeSelectionData = preBoundElement.runtime.allTimeSelectionData;
+                this.selectionTool.selectionTexture = preBoundElement.runtime.selectionTexture;
+            }
+            if (preBoundElement.runtime.selectionTexture) {
+                const lock = preBoundElement.runtime.selectionTexture.lock();
+                lock.set(preBoundElement.runtime.selectionData);
+                preBoundElement.runtime.selectionTexture.unlock();
+                this.updateSelectionUniform(preBoundElement.runtime.selectionTexture);
+            }
+        } else {
+            // #WDD-kimi 2026-04-20 - 首次激活该段时创建独立选择状态，防止“当前帧工具”跨段污染
+            const fresh = this.createSequenceSelectionStateForAsset(segment.asset, null);
+            if (fresh) {
+                if (preBoundElement) {
+                    const rt = (preBoundElement.runtime || (preBoundElement.runtime = {} as any)) as any;
+                    rt.selectionData = fresh.selectionData;
+                    rt.allTimeSelectionData = fresh.allTimeSelectionData;
+                    rt.selectionTexture = fresh.selectionTexture;
+                }
+                if (this.selectionTool) {
+                    this.selectionTool.selectionData = fresh.selectionData;
+                    this.selectionTool.allTimeSelectionData = fresh.allTimeSelectionData;
+                    this.selectionTool.selectionTexture = fresh.selectionTexture;
+                }
+                this.updateSelectionUniform(fresh.selectionTexture);
+            } else {
+                this.ensureSequenceSelectionTextureForAsset(segment.asset, false);
+            }
+        }
         this.finalizeGSplatLoad(segment.asset, segment.parsed.count, null, segment.duration, segment.parsed, { suppressUI: true });
         if (this.selectionTool?.selectionTexture) {
             this.updateSelectionUniform(this.selectionTool.selectionTexture);
             this.updateSelectionModeParams(false);
+        }
+
+        // #WDD-gpt 2026-04-20 - 激活元素后回填 viewer 运行时引用，显式对齐到该队列元素
+        const activeElement = this.getSplatSequenceElementByAsset(segment.asset);
+        if (activeElement?.runtime) {
+            this.is4DGS = activeElement.runtime.is4DGS;
+            this.duration = activeElement.runtime.totalFrames;
+            this.totalFrames = activeElement.runtime.totalFrames;
+            this.keyframes = activeElement.runtime.keyframes;
+            this.xyzStride = activeElement.runtime.xyzStride;
+            this.rotKeyframes = activeElement.runtime.rotKeyframes;
+            this.rotStride = activeElement.runtime.rotStride;
+            this.dcKeyframes = activeElement.runtime.dcKeyframes;
+            this.dcStride = activeElement.runtime.dcStride;
+            this.lifeTexData = activeElement.runtime.lifeTexData;
+            this.scalesTexData = activeElement.runtime.scalesTexData;
+            this.trajectoryData = activeElement.runtime.trajectoryData;
+            this.rotTrajectoryData = activeElement.runtime.rotTrajectoryData;
+            this.dcTrajectoryData = activeElement.runtime.dcTrajectoryData;
+            this.originalIndices = activeElement.runtime.originalIndices;
+            this.posArrays = activeElement.runtime.posArrays;
+            this.cachedPositions = activeElement.runtime.cachedPositions;
+            if (this.selectionTool) {
+                this.selectionTool.selectionData = activeElement.runtime.selectionData;
+                this.selectionTool.allTimeSelectionData = activeElement.runtime.allTimeSelectionData;
+                this.selectionTool.selectionTexture = activeElement.runtime.selectionTexture;
+            }
         }
 
         this.duration = segment.duration;
@@ -3711,6 +4031,11 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
     private async handleDroppedFiles(files: File[]): Promise<void> {
         const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+        const ply4Seq = sorted.filter((f) => this.isPly4SequenceCandidate(f));
+        if (ply4Seq.length > 1) {
+            await this.loadPly4Sequence(ply4Seq);
+            return;
+        }
         const plySeq = sorted.filter((f) => this.isPlySequenceCandidate(f));
         if (plySeq.length > 1) {
             await this.loadPlySequence(plySeq);
@@ -3744,6 +4069,11 @@ const duration = parsed.frames || parsed.maxMu || 100;
     private isSog4SequenceCandidate(file: File): boolean {
         const name = file.name.toLowerCase();
         return name.endsWith('.sog4');
+    }
+
+    private isPly4SequenceCandidate(file: File): boolean {
+        const name = file.name.toLowerCase();
+        return name.endsWith('.ply4');
     }
 
     // #WDD 2026-01-17: Dynamic Sorting Update
@@ -4008,8 +4338,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.syncTextOverlays();
         }
 
+        // #WDD-kimi 2026-04-20 - 序列切段时不要重复套用初始 deleted_indices，避免覆盖 undo/redo 恢复结果
+        const shouldRestoreParsedDeletedIndices = !(options.suppressUI && this.isSog4SequenceMode);
         // #WDD 2026-01-18: Restore Deleted Splats
-        if (parsed.deleted_indices && parsed.deleted_indices.length > 0) {
+        if (shouldRestoreParsedDeletedIndices && parsed.deleted_indices && parsed.deleted_indices.length > 0) {
             console.log(`[Finalize] Restoring ${parsed.deleted_indices.length} deleted splats...`);
             this.selectionTool.restoreDeletedIndices(parsed.deleted_indices);
         }
@@ -4267,6 +4599,38 @@ const duration = parsed.frames || parsed.maxMu || 100;
             console.log("[Viewer] Persisting parsed data for export (finalize). isSOG4:", parsed.isSOG4);
             this.lastParsedData = parsed;
             this.rememberLoadedModelTransform(parsed);
+        }
+
+        // #WDD-gpt 2026-04-20 - 将 finalize 生成的纹理/缓存绑定回队列元素，保证“读入元素 <-> 运行时资源”一一对应
+        const boundElement = this.getSplatSequenceElementByAsset(asset);
+        if (boundElement) {
+            boundElement.runtime = {
+                is4DGS: this.is4DGS,
+                totalFrames: this.duration,
+                keyframes: this.keyframes,
+                xyzStride: this.xyzStride,
+                rotKeyframes: this.rotKeyframes,
+                rotStride: this.rotStride,
+                dcKeyframes: this.dcKeyframes,
+                dcStride: this.dcStride,
+                lifeTexData: this.lifeTexData,
+                scalesTexData: this.scalesTexData,
+                trajectoryData: this.trajectoryData,
+                rotTrajectoryData: this.rotTrajectoryData,
+                dcTrajectoryData: this.dcTrajectoryData,
+                originalIndices: this.originalIndices,
+                posArrays: this.posArrays,
+                cachedPositions: this.cachedPositions,
+                lifeTexture,
+                trajectoryTexture,
+                rotationTexture,
+                dcTrajectoryTexture,
+                scalesTexture,
+                selectionData: this.selectionTool?.selectionData || null,
+                allTimeSelectionData: this.selectionTool?.allTimeSelectionData || null,
+                selectionTexture: this.selectionTool?.selectionTexture || null
+            };
+            this.splatSequence!.totalFrames = this.sog4SequenceTotalFrames || this.duration;
         }
 
         this.updateToggleButton(document.getElementById('mode-default') as HTMLElement, true);
@@ -4956,6 +5320,50 @@ const duration = parsed.frames || parsed.maxMu || 100;
         }
         // Fallback or Non-4DGS
         return this.cachedPositions;
+    }
+
+    // #WDD-gpt 2026-04-20 - 提供给 SelectionTool：遍历序列全部段的运行时数据
+    public getSplatSequenceSelectionElements() {
+        return this.splatSequence?.elements || [];
+    }
+
+    // #WDD-kimi 2026-04-20 - 提供给 SelectionTool：捕获 undo 需要的视图上下文（段落/时间）
+    // 注：位置/旋转/缩放 变换不再纳入 undo/redo 序列
+    public captureSelectionUndoViewContext() {
+        return {
+            isSequence: !!this.isSog4SequenceMode,
+            activeSegmentIndex: this.isSog4SequenceMode ? this.sog4SequenceIndex : 0,
+            currentTime: this.currentTime ?? 0
+        };
+    }
+
+    // #WDD-kimi 2026-04-20 - 提供给 SelectionTool：恢复 undo 视图上下文，确保切段时顺序一致
+    // 注：位置/旋转/缩放 变换不再纳入 undo/redo 序列，恢复时跳过 transform
+    public restoreSelectionUndoViewContext(ctx: any) {
+        if (!ctx || typeof ctx !== 'object') return;
+
+        if (this.isSog4SequenceMode && this.sog4SequenceSegments.length > 0) {
+            const idxRaw = Number(ctx.activeSegmentIndex);
+            const idx = Number.isFinite(idxRaw)
+                ? Math.max(0, Math.min(this.sog4SequenceSegments.length - 1, Math.floor(idxRaw)))
+                : this.sog4SequenceIndex;
+            this.activateSog4SequenceSegment(idx);
+        }
+
+        const total = Math.max(1, this.getTimelineTotalFrames());
+        const tRaw = Number(ctx.currentTime);
+        const t = Number.isFinite(tRaw) ? Math.max(0, Math.min(tRaw, total - 1)) : (this.currentTime ?? 0);
+        this.currentTime = t;
+        this.playbackTime = t;
+
+        if (this.isSog4SequenceMode) {
+            this.updateSog4SequenceTime();
+        } else if (this.is4DGS && this.trajectoryData && !this.isWaitingForSort) {
+            this.updateDynamicPositions(Math.floor(t));
+        }
+
+        this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(total) - 1));
+        this.updateTransformUIFromEntity();
     }
 
     // Public method for window binding

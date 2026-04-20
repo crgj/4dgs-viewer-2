@@ -2,5 +2,6 @@
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python-envs.pythonProjects": [],
-    "kimi.alwaysExpandThinking": false
+    "kimi.alwaysExpandThinking": false,
+    "kimi.yoloMode": true
 }
