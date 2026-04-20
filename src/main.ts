@@ -12,6 +12,9 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
+import { ViewerPresetManager } from './viewer/viewer-preset-manager';
+import { ViewerFaceTrackingManager } from './viewer/viewer-face-tracking-manager';
+import { ViewerFileLoader } from './viewer/viewer-file-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
 import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
 import { PerformanceMonitor } from './managers/performance-monitor'; // #WDD 2026-04-11 Performance
@@ -24,77 +27,12 @@ import {
     normalizeModelTransform,
     type ModelTransform
 } from './utils/model-transform';
+import type { CameraPreset, SequenceFrameData, SplatSequence, SplatSequenceElement } from './types/viewer';
+import { ViewerExportManager } from './viewer/viewer-export-manager';
+import { ViewerTimelineManager } from './viewer/viewer-timeline-manager';
+import { ViewerSceneManager } from './viewer/viewer-scene-manager';
 
-// --- Configuration & State ---
-interface CameraPreset {
-    name: string;
-    pos: pc.Vec3;
-    pitch: number;
-    yaw: number;
-    textObjects?: {
-        id: string;
-        content: string;
-        font: string;
-        fontSize: number;
-        color: string;
-        fontWeight: string;
-        fontStyle: string;
-        top: number;
-        left: number;
-    }[];
-}
-
-interface SequenceFrameData {
-    count: number;
-    propertyNames: string[];
-    propertyValues: Record<string, Float32Array>;
-}
-
-interface SplatSequenceElement {
-    name: string;
-    type: 'ply4' | 'sog4';
-    duration: number;
-    globalStartFrame: number;
-    globalEndFrame: number;
-    parsed: any;
-    asset: pc.Asset | null;
-    entity: pc.Entity | null;
-    runtime?: {
-        is4DGS: boolean;
-        totalFrames: number;
-        keyframes: number;
-        xyzStride: number;
-        rotKeyframes: number;
-        rotStride: number;
-        dcKeyframes: number;
-        dcStride: number;
-        lifeTexData: Float32Array | null;
-        scalesTexData: Float32Array | null;
-        trajectoryData: Float32Array | null;
-        rotTrajectoryData: Float32Array | null;
-        dcTrajectoryData: Float32Array | null;
-        originalIndices: Float32Array | null;
-        posArrays: { x: Float32Array, y: Float32Array, z: Float32Array } | null;
-        cachedPositions: Float32Array | null;
-        lifeTexture: pc.Texture | null;
-        trajectoryTexture: pc.Texture | null;
-        rotationTexture: pc.Texture | null;
-        dcTrajectoryTexture: pc.Texture | null;
-        scalesTexture: pc.Texture | null;
-        selectionData: Uint8Array | null;
-        allTimeSelectionData: Uint8Array | null;
-        selectionTexture: pc.Texture | null;
-    };
-}
-
-interface SplatSequence {
-    name: string;
-    elements: SplatSequenceElement[];
-    totalFrames: number;
-    activeElementIndex: number;
-}
-
-class Viewer {
+export class Viewer {
     app: pc.Application;
     camera: pc.Entity | null = null;
     splatEntity: pc.Entity | null = null;
@@ -117,30 +55,12 @@ class Viewer {
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private effects: GaussianEffects;
-
-    // #WDD 2026-02-03 Face Tracking
-    private faceTracker: FaceTracker;
-    private isFaceTracking = false;
     private isHighQuality = true; // Used by adaptive quality fallback.
-    private faceTrackingBasePos = new pc.Vec3();
-
-    private faceTrackingBaseRight = new pc.Vec3();
-    private faceTrackingBaseUp = new pc.Vec3();
-    private faceTrackingTarget = new pc.Vec3();
-    private faceTrackingOffset = new pc.Vec3();
-    // private previousFaceOffset = new pc.Vec3(); // Removed
-    private faceTrackingScale = 5.0; // Sensitivity for movement
-    private faceTrackingInvertX = true; // Physical Right -> Cam Right (MP is mirrored)
-    private faceTrackingInvertY = true; // Physical Up -> Cam Up (MP is inverted)
 
     private pitch = 0;
     private yaw = 0;
     private gridEntity: pc.Entity | null = null;
     private axesEntity: pc.Entity | null = null;
-
-    // --- Text Object Feature Interfaces #WDD 2026-01-15 ---
-    private activeTextId: string | null = null;
-    private textOverlays: Map<string, HTMLElement> = new Map();
 
     // Mobile / Orbit Mode State
     private isOrbitMode = false; // If true, camera orbits 0,0,0
@@ -151,18 +71,6 @@ class Viewer {
     // #WDD 2026-04-11 Performance Monitor
     private performanceMonitor: PerformanceMonitor;
     private performancePanel: PerformancePanel;
-
-    // Camera Presets State
-    private cameraPresets: CameraPreset[] = [];
-    private isCameraAnimating = false;
-    private wasPlayingBeforeAnim = false; // #WDD 2026-01-15 Store playback state
-    private animTargetPos = new pc.Vec3();
-    private animTargetPitch = 0;
-    private animTargetYaw = 0;
-    private animStartPos = new pc.Vec3();
-    private animStartPitch = 0;
-    private animStartYaw = 0;
-    private animProgress = 0;
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
@@ -352,27 +260,7 @@ class Viewer {
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
 
-        // #WDD 2026-02-03 Init Face Tracker
-        this.faceTracker = new FaceTracker('face-tracker-video', (pos) => {
-            // Callback when face moves
-            if (this.isFaceTracking) {
-                // Pos.x, Pos.y are roughly -0.5 to 0.5.
-                // Pos.z is depth. Use X and Y for parallax.
-                // Invert X because moving head Right (camera perspective) means user moved Left in world,
-                // so we want camera to move Left to create parallax?
-                // Visual check: Head moves Right -> We see Left side of object -> Camera moves Left.
-                // Input X is positive right (in image).
-                // If mirroring is on (scale -1), user Right is image Right?
-                // Let's rely on config.
-
-                const targetX = (this.faceTrackingInvertX ? -pos.x : pos.x) * this.faceTrackingScale;
-                const targetY = (this.faceTrackingInvertY ? -pos.y : pos.y) * this.faceTrackingScale * 0.7; // Reduce Y sensitivity
-
-                // Smoothly interpolate
-                this.faceTrackingOffset.x = pc.math.lerp(this.faceTrackingOffset.x, targetX, 0.1);
-                this.faceTrackingOffset.y = pc.math.lerp(this.faceTrackingOffset.y, targetY, 0.1);
-            }
-        });
+        // #WDD 2026-02-03 Face Tracker is initialized by ViewerFaceTrackingManager
 
         // #WDD 2026-04-11 Init Performance Monitor
         this.performanceMonitor = new PerformanceMonitor(this.app, {
@@ -485,95 +373,9 @@ class Viewer {
         activate('panel-common');
     }
 
-    private setupScene() {
-        const app = this.app;
-
-        const camera = new pc.Entity('Camera');
-        camera.addComponent('camera', {
-            clearColor: new pc.Color(0.1, 0.1, 0.1, 1), // Updated to match #2a2b2f
-            farClip: 1000,
-            nearClip: 0.1,
-            fov: 60
-        });
-
-        camera.setPosition(0, 1, 5);
-        app.root.addChild(camera);
-        this.camera = camera;
-
-        this.initGrid();
-        this.initAxes();
-    }
-
-    private initGrid() {
-        const size = 20;
-        const divisions = 40;
-        // 使用稍亮的颜色，但不开启透明混合，确保它能写入深度图
-        const color = new pc.Color(0.2, 0.2, 0.2, 1);
-
-        const positions: number[] = [];
-        for (let i = 0; i <= divisions; i++) {
-            const coord = (i / divisions - 0.5) * size;
-            // X方向线段 (从一端到另一端)
-            positions.push(coord, 0, -size / 2, coord, 0, size / 2);
-            // Z方向线段
-            positions.push(-size / 2, 0, coord, size / 2, 0, coord);
-        }
-
-        const mesh = new pc.Mesh(this.app.graphicsDevice);
-        mesh.setPositions(new Float32Array(positions));
-        mesh.update(pc.PRIMITIVE_LINES);
-
-        const material = new pc.BasicMaterial();
-        material.color = color;
-        material.blendType = pc.BLEND_NONE; // 关键：关闭混合，作为不透明物体渲染
-        material.depthWrite = true;       // 关键：写入深度，用于高斯遮挡
-        material.update();
-
-        const entity = new pc.Entity('Grid');
-        entity.addComponent('render', {
-            meshInstances: [new pc.MeshInstance(mesh, material)]
-        });
-
-        this.app.root.addChild(entity);
-        this.gridEntity = entity;
-    }
-
-    private initAxes() {
-        const length = 1.0;
-        const thickness = 0.015;
-        const entity = new pc.Entity('Axes');
-
-        const createAxis = (name: string, pos: pc.Vec3, scale: pc.Vec3, color: pc.Color) => {
-            const axis = new pc.Entity(name);
-            // Using primitive box for controlled thickness
-            axis.addComponent('render', {
-                type: 'box'
-            });
-            axis.setLocalPosition(pos);
-            axis.setLocalScale(scale);
-
-            const material = new pc.BasicMaterial();
-            material.color = color;
-            material.depthWrite = true;
-            material.blendType = pc.BLEND_NONE;
-            material.update();
-
-            // Apply material after component is added
-            if (axis.render) {
-                axis.render.meshInstances[0].material = material;
-            }
-
-            entity.addChild(axis);
-        };
-
-        // Create X, Y, Z axes as thin boxes
-        createAxis('AxisX', new pc.Vec3(length / 2, 0, 0), new pc.Vec3(length, thickness, thickness), new pc.Color(1, 0, 0));
-        createAxis('AxisY', new pc.Vec3(0, length / 2, 0), new pc.Vec3(thickness, length, thickness), new pc.Color(0, 1, 0));
-        createAxis('AxisZ', new pc.Vec3(0, 0, length / 2), new pc.Vec3(thickness, thickness, length), new pc.Color(0, 0, 1));
-
-        this.app.root.addChild(entity);
-        this.axesEntity = entity;
-    }
+    private setupScene() { return this.sceneManager.setupScene(); }
+    private initGrid() { return this.sceneManager.initGrid(); }
+    private initAxes() { return this.sceneManager.initAxes(); }
 
     // #WDD 2026-01-16 Restored for internal logic / verification
     private setupEventListeners() {
@@ -587,7 +389,7 @@ class Viewer {
         const exportTimestampBtn = document.getElementById('export-timestamp'); // #WDD 2026-01-16
 
         openBtn?.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+        fileInput.addEventListener('change', (e) => this.fileLoader.handleFileSelect(e));
         resetBtn?.addEventListener('click', () => this.resetCamera());
 
         const startArBtn = document.getElementById('start-ar');
@@ -630,9 +432,9 @@ class Viewer {
 
         startArBtn?.addEventListener('click', async () => {
             // Stop Face Tracking if active
-            if (this.isFaceTracking) {
-                this.faceTracker.stop();
-                this.isFaceTracking = false;
+            if (this.faceTrackingManager.isFaceTracking) {
+                this.faceTrackingManager.faceTracker.stop();
+                this.faceTrackingManager.isFaceTracking = false;
                 this.updateToggleButton(document.getElementById('start-face-tracking'), false);
                 document.getElementById('face-tracker-video-container')?.classList.add('hidden');
             }
@@ -693,17 +495,17 @@ class Viewer {
                 this.updateToggleButton(startArBtn, false);
             }
 
-            if (this.isFaceTracking) {
-                this.faceTracker.stop();
-                this.isFaceTracking = false;
+            if (this.faceTrackingManager.isFaceTracking) {
+                this.faceTrackingManager.faceTracker.stop();
+                this.faceTrackingManager.isFaceTracking = false;
                 this.updateToggleButton(faceBtn, false);
                 faceVideoContainer?.classList.add('hidden');
             } else {
                 await populateFaceCameras();
                 const deviceId = faceSelect?.value || undefined;
                 try {
-                    await this.faceTracker.start(deviceId);
-                    this.isFaceTracking = true;
+                    await this.faceTrackingManager.faceTracker.start(deviceId);
+                    this.faceTrackingManager.isFaceTracking = true;
                     this.updateToggleButton(faceBtn, true);
 
                     // Show video container
@@ -712,14 +514,14 @@ class Viewer {
                     // Capture current position as base
                     // Capture base frame for orbit
                     if (this.camera) {
-                        this.faceTrackingBasePos.copy(this.camera.getPosition());
-                        this.faceTrackingBaseRight.copy(this.camera.right);
-                        this.faceTrackingBaseUp.copy(this.camera.up);
+                        this.faceTrackingManager.faceTrackingBasePos.copy(this.camera.getPosition());
+                        this.faceTrackingManager.faceTrackingBaseRight.copy(this.camera.right);
+                        this.faceTrackingManager.faceTrackingBaseUp.copy(this.camera.up);
 
                         // User requested LookAt Origin (0,0,0)
-                        this.faceTrackingTarget.set(0, 0, 0);
+                        this.faceTrackingManager.faceTrackingTarget.set(0, 0, 0);
                     }
-                    this.faceTrackingOffset.set(0, 0, 0);
+                    this.faceTrackingManager.faceTrackingOffset.set(0, 0, 0);
 
                 } catch (e) {
                     console.error("Failed to start face tracking", e);
@@ -730,9 +532,9 @@ class Viewer {
 
         // Handle select change for face tracking
         faceSelect?.addEventListener('change', () => {
-            if (this.isFaceTracking) {
-                this.faceTracker.stop();
-                this.faceTracker.start(faceSelect.value);
+            if (this.faceTrackingManager.isFaceTracking) {
+                this.faceTrackingManager.faceTracker.stop();
+                this.faceTrackingManager.faceTracker.start(faceSelect.value);
             }
         });
 
@@ -779,16 +581,16 @@ class Viewer {
         const simpleToggleUI = document.getElementById('simple-toggle-ui');
 
         simplePrev?.addEventListener('click', () => {
-            if (this.cameraPresets.length === 0) return;
-            let nextIdx = this.currentPresetIndex - 1;
-            if (nextIdx < 0) nextIdx = this.cameraPresets.length - 1;
-            this.jumpToPreset(nextIdx);
+            if (this.presetManager.cameraPresets.length === 0) return;
+            let nextIdx = this.presetManager.currentPresetIndex - 1;
+            if (nextIdx < 0) nextIdx = this.presetManager.cameraPresets.length - 1;
+            this.presetManager.jumpToPreset(nextIdx);
         });
         simpleNext?.addEventListener('click', () => {
-            if (this.cameraPresets.length === 0) return;
-            let nextIdx = this.currentPresetIndex + 1;
-            if (nextIdx >= this.cameraPresets.length) nextIdx = 0;
-            this.jumpToPreset(nextIdx);
+            if (this.presetManager.cameraPresets.length === 0) return;
+            let nextIdx = this.presetManager.currentPresetIndex + 1;
+            if (nextIdx >= this.presetManager.cameraPresets.length) nextIdx = 0;
+            this.presetManager.jumpToPreset(nextIdx);
         });
         simplePlay?.addEventListener('click', () => this.togglePlay());
         simpleToggleUI?.addEventListener('click', doToggle);
@@ -832,9 +634,9 @@ class Viewer {
             dropZone?.classList.remove('active');
             if (dropMsg) dropMsg.style.opacity = '0.1';
 
-            const files = await this.collectDroppedFiles(e);
+            const files = await this.fileLoader.collectDroppedFiles(e);
             if (files.length > 0) {
-                await this.handleDroppedFiles(files);
+                await this.fileLoader.handleDroppedFiles(files);
             }
         });
 
@@ -1016,7 +818,7 @@ class Viewer {
                 const isPresetBtn = target.closest('.add-text');
 
                 if (!isOverlay && !isPanel && !isPresetBtn) {
-                    this.closeTextEdit();
+                    this.presetManager.closeTextEdit();
                 }
             }
         });
@@ -1338,47 +1140,7 @@ class Viewer {
         });
 
         this.app.on('update', (dt: number) => {
-            // #WDD 2026-01-15 Update text visibility based on camera proximity
-            this.updateTextVisibility();
-
-            // Smooth Camera Animation
-            if (this.isCameraAnimating && this.camera) {
-                this.animProgress += dt / 1.0; // Transition speed: 1.0 second total #WDD 2026-01-15
-                if (this.animProgress >= 1) {
-                    this.animProgress = 1;
-                    this.isCameraAnimating = false;
-                    // Resume playback if it was playing before #WDD 2026-01-15
-                    if (this.wasPlayingBeforeAnim) {
-                        this.togglePlay();
-                        this.wasPlayingBeforeAnim = false;
-                    }
-                }
-
-                // Ease out cubic
-                const t = 1 - Math.pow(1 - this.animProgress, 3);
-
-                const currentPos = new pc.Vec3().lerp(this.animStartPos, this.animTargetPos, t);
-                const currentPitch = pc.math.lerp(this.animStartPitch, this.animTargetPitch, t);
-                const currentYaw = pc.math.lerp(this.animStartYaw, this.animTargetYaw, t);
-
-                this.camera.setPosition(currentPos);
-                this.camera.setEulerAngles(currentPitch, currentYaw, 0);
-                this.pitch = currentPitch;
-                this.yaw = currentYaw;
-
-                // Update Transition Effect #WDD 2026-01-15
-                const material = (this.splatEntity?.gsplat as any)?.instance?.material;
-                if (material) {
-                    material.setParameter('uTime', this.currentTime); // Ensure uTime is also updated
-                    this.effects.update(this.animProgress, material);
-                }
-            } else {
-                // Ensure effect is reset when not animating
-                const material = (this.splatEntity?.gsplat as any)?.instance?.material;
-                if (material) {
-                    this.effects.reset(material);
-                }
-            }
+            this.presetManager.update(dt);
 
             // WASD Camera Movement - blocked only if we are actively scrubbing or focused on UI
             const activeEl = document.activeElement as HTMLElement;
@@ -1386,7 +1148,7 @@ class Viewer {
 
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
             // #WDD 2026-01-18 Lock Camera in AR (Added isARRunning check)
-            if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.isCameraAnimating && !isTyping && !(this.arHandler && this.arHandler.isARRunning)) {
+            if (this.camera && !isUIInteracting && !isHoveringUI && !isEditing && !this.presetManager.isCameraAnimating && !isTyping && !(this.arHandler && this.arHandler.isARRunning)) {
                 const speed = dt * 5;
                 if (this.isOrbitMode) {
                     // In orbit mode, WASD should behave like zoom (W/S) and not break the orbit constraints.
@@ -1540,7 +1302,7 @@ class Viewer {
                     `;
                     btn.addEventListener('click', () => {
                         console.log(`[SmartLoader] Loading ${sample.name} via ${mode}: ${pUrl}`);
-                        this.loadSampleFile(pUrl);
+                        this.fileLoader.loadSampleFile(pUrl);
                         samplesDropdown?.classList.add('hidden');
                         toggleSamples?.classList.remove('open');
                     });
@@ -1557,480 +1319,27 @@ class Viewer {
         const addPresetBtn = document.getElementById('add-preset');
         const clearPresetsBtn = document.getElementById('clear-presets');
 
-        this.renderPresets();
+        this.presetManager.renderPresets();
         addPresetBtn?.addEventListener('click', () => {
             if (!this.camera) return;
-            this.cameraPresets.push({
-                name: `CAM_${this.cameraPresets.length + 1}`,
+            this.presetManager.cameraPresets.push({
+                name: `CAM_${this.presetManager.cameraPresets.length + 1}`,
                 pos: this.camera.getPosition().clone(),
                 pitch: this.pitch,
                 yaw: this.yaw
             });
-            this.renderPresets();
+            this.presetManager.renderPresets();
         });
 
         clearPresetsBtn?.addEventListener('click', () => {
             if (confirm('Clear all presets?')) {
-                this.cameraPresets = [];
-                this.renderPresets();
+                this.presetManager.cameraPresets = [];
+                this.presetManager.renderPresets();
             }
         });
     }
 
-    private renderPresets() {
-        const presetsList = document.getElementById('presets-list');
-        if (!presetsList) return;
-        presetsList.innerHTML = '';
-        this.cameraPresets.forEach((preset, index) => {
-            const item = document.createElement('div');
-            item.className = 'flex flex-col gap-1';
-
-            const mainRow = document.createElement('div');
-            mainRow.className = 'ui-item group justify-between py-1.5 px-2 cursor-grab active:cursor-grabbing';
-            mainRow.setAttribute('draggable', 'true');
-            mainRow.dataset.index = index.toString();
-
-            mainRow.innerHTML = `
-                <div class="flex items-center gap-2 overflow-hidden flex-1 cursor-pointer justify-between">
-                    <div class="flex items-center gap-2 overflow-hidden">
-                        <div class="ui-dot"></div>
-                        <span class="preset-name text-[9px] ui-text-primary font-medium truncate">${preset.name}</span>
-                    </div>
-                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current opacity-40 flex-shrink-0">
-                        <path d="M7 10l5 5 5-5z"/>
-                    </svg>
-                </div>
-                <div class="flex items-center gap-1">
-                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text" data-tip="Text">
-                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                    </button>
-                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Preset" data-tip="Delete">
-                        <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                    </button>
-                </div>
-            `;
-
-            // --- Text Objects List for this preset #WDD 2026-01-15 ---
-            const textObjectsList = document.createElement('div');
-            textObjectsList.className = 'flex flex-col gap-0.5 ml-6 mb-1';
-            if (preset.textObjects && preset.textObjects.length > 0) {
-                preset.textObjects.forEach((textObj) => {
-                    const textItem = document.createElement('div');
-                    textItem.className = 'flex items-center justify-between group/text hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer';
-                    textItem.innerHTML = `
-                        <span class="text-[8px] opacity-40 group-hover/text:opacity-100 truncate flex-1">${textObj.content || '(Empty)'}</span>
-                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Text" data-tip="Delete">
-                             <svg viewBox="0 0 24 24" class="w-2.5 h-2.5 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                        </button>
-                    `;
-                    textItem.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.openTextEdit(textObj, index);
-                    });
-                    textItem.querySelector('.delete-text')?.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        preset.textObjects = preset.textObjects?.filter(t => t.id !== textObj.id);
-                        this.renderPresets();
-                        this.syncTextOverlays();
-                    });
-                    textObjectsList.appendChild(textItem);
-                });
-            }
-
-            item.appendChild(mainRow);
-            item.appendChild(textObjectsList);
-
-            // --- Rename Logic ---
-            const nameSpan = mainRow.querySelector('.preset-name') as HTMLElement;
-            nameSpan.addEventListener('dblclick', (e) => {
-                e.stopPropagation();
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.value = preset.name;
-                input.className = 'bg-black/50 border-none outline-none text-[9px] w-full ui-text-highlight px-1 rounded';
-
-                const finishEdit = () => {
-                    const newName = input.value.trim() || `CAM_${index + 1}`;
-                    preset.name = newName;
-                    this.renderPresets();
-                };
-
-                input.addEventListener('blur', finishEdit);
-                input.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') finishEdit();
-                    if (e.key === 'Escape') this.renderPresets();
-                });
-
-                nameSpan.replaceWith(input);
-                input.focus();
-                input.select();
-            });
-
-            // --- Drag and Drop Logic ---
-            mainRow.addEventListener('dragstart', (e) => {
-                if (e.dataTransfer) {
-                    e.dataTransfer.setData('text/plain', index.toString());
-                    mainRow.classList.add('opacity-40');
-                }
-            });
-
-            mainRow.addEventListener('dragend', () => {
-                mainRow.classList.remove('opacity-40');
-            });
-
-            mainRow.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                mainRow.classList.add('bg-white/5');
-            });
-
-            mainRow.addEventListener('dragleave', () => {
-                mainRow.classList.remove('bg-white/5');
-            });
-
-            mainRow.addEventListener('drop', (e) => {
-                e.preventDefault();
-                mainRow.classList.remove('bg-white/5');
-                const sourceIdx = parseInt(e.dataTransfer?.getData('text/plain') || '-1');
-                if (sourceIdx !== -1 && sourceIdx !== index) {
-                    const movedItem = this.cameraPresets.splice(sourceIdx, 1)[0];
-                    this.cameraPresets.splice(index, 0, movedItem);
-                    this.renderPresets();
-                }
-            });
-
-            // Jump to preset
-            mainRow.querySelector('.flex')?.addEventListener('click', (e) => {
-                if ((e.target as HTMLElement).tagName === 'INPUT') return;
-
-                if (!this.camera) return;
-
-                // --- Stop playback during animation #WDD 2026-01-15 ---
-                this.wasPlayingBeforeAnim = this.isPlaying;
-                if (this.isPlaying) {
-                    this.togglePlay();
-                }
-
-                this.isCameraAnimating = true;
-                this.animProgress = 0;
-                this.animStartPos.copy(this.camera.getPosition());
-                this.animStartPitch = this.pitch;
-                this.animStartYaw = this.yaw;
-
-                this.animTargetPos.copy(preset.pos);
-                this.animTargetPitch = preset.pitch;
-                this.animTargetYaw = preset.yaw;
-            });
-
-            // Add Text
-            mainRow.querySelector('.add-text')?.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.addTextToPreset(index);
-            });
-
-            // Delete preset
-            mainRow.querySelector('.delete-preset')?.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.cameraPresets.splice(index, 1);
-                this.renderPresets();
-                this.syncTextOverlays();
-            });
-
-            presetsList.appendChild(item);
-        });
-    }
-
-    // --- Text Object Management Methods #WDD 2026-01-15 ---
-
-    private addTextToPreset(index: number) {
-        const preset = this.cameraPresets[index];
-        if (!preset.textObjects) preset.textObjects = [];
-
-        const id = `text_${Date.now()}`;
-        const newText = {
-            id: id,
-            content: "New Annotation",
-            font: "'Inter', sans-serif",
-            fontSize: 24,
-            color: "#ffffff",
-            fontWeight: "normal",
-            fontStyle: "normal",
-            top: 50,
-            left: 50
-        };
-
-        preset.textObjects.push(newText);
-        this.renderPresets();
-        this.syncTextOverlays();
-        this.openTextEdit(newText, index);
-    }
-
-    private openTextEdit(textObj: any, presetIndex: number) {
-        this.activeTextId = textObj.id;
-        const panel = document.getElementById('text-edit-panel');
-        const contentArea = document.getElementById('text-edit-content') as HTMLTextAreaElement;
-        const sizeSelect = document.getElementById('text-edit-size') as HTMLSelectElement;
-        const colorInput = document.getElementById('text-edit-color') as HTMLInputElement;
-        const fontSelect = document.getElementById('text-edit-font') as HTMLSelectElement;
-
-        if (!panel || !contentArea || !sizeSelect || !colorInput || !fontSelect) return;
-
-        contentArea.value = textObj.content;
-        sizeSelect.value = textObj.fontSize.toString();
-        colorInput.value = textObj.color;
-        fontSelect.value = textObj.font;
-
-        const boldBtn = document.getElementById('text-bold');
-        const italicBtn = document.getElementById('text-italic');
-
-        const updateStyleToggle = () => {
-            if (boldBtn) boldBtn.classList.toggle('ui-text-highlight', textObj.fontWeight === 'bold');
-            if (italicBtn) italicBtn.classList.toggle('ui-text-highlight', textObj.fontStyle === 'italic');
-        };
-        updateStyleToggle();
-
-        panel.classList.add('show');
-
-        // --- Dynamic Positioning near text obj #WDD 2026-01-15 ---
-        const textEl = this.textOverlays.get(textObj.id);
-        if (textEl) {
-            const rect = textEl.getBoundingClientRect();
-            let top = rect.bottom + 10;
-            let left = rect.left;
-
-            // Constrain to window
-            const panelWidth = 288; // w-72
-            const panelHeight = panel.offsetHeight || 300;
-            if (left + panelWidth > window.innerWidth) left = window.innerWidth - panelWidth - 20;
-            if (top + panelHeight > window.innerHeight) top = rect.top - panelHeight - 10;
-            if (left < 10) left = 10;
-            if (top < 10) top = 10;
-
-            panel.style.top = `${top}px`;
-            panel.style.left = `${left}px`;
-            panel.style.bottom = 'auto'; // Override fixed bottom if any
-            panel.style.right = 'auto';  // Override fixed right if any
-            panel.style.transform = 'scale(1)'; // Ensure scale is 1
-        }
-
-        // --- Make Panel Draggable #WDD 2026-01-15 ---
-        const header = panel.querySelector('.flex.items-center.justify-between');
-        if (header) {
-            (header as HTMLElement).style.cursor = 'move';
-            let isDragging = false;
-            let startX = 0, startY = 0;
-            let initialTop = 0, initialLeft = 0;
-
-            const onMouseDown = (e: MouseEvent) => {
-                isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
-                initialTop = panel.offsetTop;
-                initialLeft = panel.offsetLeft;
-                e.preventDefault();
-            };
-
-            const onMouseMove = (e: MouseEvent) => {
-                if (!isDragging) return;
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
-                panel.style.top = `${initialTop + dy}px`;
-                panel.style.left = `${initialLeft + dx}px`;
-            };
-
-            const onMouseUp = () => { isDragging = false; };
-
-            header.addEventListener('mousedown', onMouseDown as any);
-            window.addEventListener('mousemove', onMouseMove as any);
-            window.addEventListener('mouseup', onMouseUp as any);
-        }
-
-        // Update handlers
-        const updateText = () => {
-            if (this.activeTextId !== textObj.id) return;
-            textObj.content = contentArea.value;
-            textObj.fontSize = parseInt(sizeSelect.value) || 24;
-            textObj.color = colorInput.value;
-            textObj.font = fontSelect.value;
-
-            this.renderPresets();
-            this.syncTextOverlays();
-        };
-
-        contentArea.oninput = updateText;
-        sizeSelect.onchange = updateText;
-        colorInput.oninput = updateText;
-        fontSelect.onchange = updateText;
-
-        if (boldBtn) {
-            boldBtn.onclick = () => {
-                textObj.fontWeight = textObj.fontWeight === 'bold' ? 'normal' : 'bold';
-                updateStyleToggle();
-                updateText();
-            };
-        }
-        if (italicBtn) {
-            italicBtn.onclick = () => {
-                textObj.fontStyle = textObj.fontStyle === 'italic' ? 'normal' : 'italic';
-                updateStyleToggle();
-                updateText();
-            };
-        }
-
-        const deleteBtn = document.getElementById('delete-text-obj');
-        if (deleteBtn) {
-            deleteBtn.onclick = () => {
-                const preset = this.cameraPresets[presetIndex];
-                preset.textObjects = preset.textObjects?.filter(t => t.id !== textObj.id);
-                this.closeTextEdit();
-                this.renderPresets();
-                this.syncTextOverlays();
-            };
-        }
-    }
-
-    private closeTextEdit() {
-        this.activeTextId = null;
-        document.getElementById('text-edit-panel')?.classList.remove('show');
-    }
-
-    private syncTextOverlays() {
-        const container = document.getElementById('text-overlay-container');
-        if (!container) return;
-
-        // Collect all text objects across all presets
-        const allTextObjects: { text: any, preset: any }[] = [];
-        this.cameraPresets.forEach(preset => {
-            if (preset.textObjects) {
-                preset.textObjects.forEach(t => allTextObjects.push({ text: t, preset }));
-            }
-        });
-
-        // Remove old ones that no longer exist
-        this.textOverlays.forEach((el, id) => {
-            if (!allTextObjects.find(o => o.text.id === id)) {
-                el.remove();
-                this.textOverlays.delete(id);
-            }
-        });
-
-        // Create or update
-        allTextObjects.forEach(({ text, preset }) => {
-            let el = this.textOverlays.get(text.id);
-            if (!el) {
-                el = document.createElement('div');
-                el.className = 'text-object';
-                el.id = text.id;
-                container.appendChild(el);
-                this.textOverlays.set(text.id, el);
-
-                // Make draggable in screen space
-                let isDragging = false;
-                el.addEventListener('mousedown', (e) => {
-                    isDragging = true;
-                    this.openTextEdit(text, this.cameraPresets.indexOf(preset));
-                    e.stopPropagation();
-                });
-                window.addEventListener('mousemove', (e) => {
-                    if (isDragging && el) {
-                        const top = (e.clientY / window.innerHeight) * 100;
-                        const left = (e.clientX / window.innerWidth) * 100;
-                        text.top = top;
-                        text.left = left;
-                        el.style.top = `${top}%`;
-                        el.style.left = `${left}%`;
-                    }
-                });
-                window.addEventListener('mouseup', () => { isDragging = false; });
-            }
-
-            el.innerText = text.content;
-            el.style.fontFamily = text.font;
-            el.style.fontSize = `${text.fontSize}px`;
-            el.style.color = text.color;
-            el.style.fontWeight = text.fontWeight;
-            el.style.fontStyle = text.fontStyle;
-            el.style.top = `${text.top}%`;
-            el.style.left = `${text.left}%`;
-
-            if (this.activeTextId === text.id) {
-                el.classList.add('active');
-            } else {
-                el.classList.remove('active');
-            }
-        });
-    }
-
-    private updateTextVisibility() {
-        if (!this.camera) return;
-        const camPos = this.camera.getPosition();
-
-        this.cameraPresets.forEach(preset => {
-            if (!preset.textObjects) return;
-
-            // Distance-based fade #WDD 2026-01-15
-            const dist = camPos.distance(preset.pos);
-            const fadeStart = 0.5;
-            const fadeEnd = 3.0;
-            let opacity = 1.0 - (dist - fadeStart) / (fadeEnd - fadeStart);
-            opacity = Math.max(0, Math.min(1, opacity));
-
-            preset.textObjects.forEach(textObj => {
-                const el = this.textOverlays.get(textObj.id);
-                if (el) {
-                    el.style.opacity = opacity.toString();
-                    el.style.pointerEvents = opacity > 0.1 ? 'auto' : 'none';
-                    el.style.display = opacity > 0 ? 'block' : 'none';
-                }
-            });
-        });
-    }
-
-    private togglePlay() {
-        this.isPlaying = !this.isPlaying;
-        if (this.isPlaying) {
-            this.normalizeLoopRange();
-            if (this.loopEnabled && (this.currentTime < this.loopStartFrame || this.currentTime > this.loopEndFrame)) {
-                this.currentTime = this.loopStartFrame;
-            }
-            this.playbackTime = this.currentTime;
-        }
-        const playBtn = document.getElementById('play-pause');
-        const simplePlayBtn = document.getElementById('simple-play-pause');
-
-        const icon = this.isPlaying
-            ? '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
-            : '<svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M8 5v14l11-7z"/></svg>';
-
-        const simpleIcon = this.isPlaying
-            ? '<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
-            : '<svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M8 5v14l11-7z"/></svg>';
-
-        if (playBtn) playBtn.innerHTML = icon;
-        if (simplePlayBtn) simplePlayBtn.innerHTML = simpleIcon;
-    }
-
-    private jumpToPreset(index: number) {
-        if (index < 0 || index >= this.cameraPresets.length) return;
-        this.currentPresetIndex = index;
-        const preset = this.cameraPresets[index];
-        if (!this.camera) return;
-
-        // --- Stop playback during animation #WDD 2026-01-15 ---
-        this.wasPlayingBeforeAnim = this.isPlaying;
-        if (this.isPlaying) {
-            this.togglePlay();
-        }
-
-        this.isCameraAnimating = true;
-        this.animProgress = 0;
-        this.animStartPos.copy(this.camera.getPosition());
-        this.animStartPitch = this.pitch;
-        this.animStartYaw = this.yaw;
-
-        this.animTargetPos.copy(preset.pos);
-        this.animTargetPitch = preset.pitch;
-        this.animTargetYaw = preset.yaw;
-    }
+    private togglePlay() { return this.timelineManager.togglePlay(); }
 
     private isUIHidden() {
         const sidebar = document.getElementById('sidebar');
@@ -2067,7 +1376,7 @@ class Viewer {
         // Actually, for consistency: Simple UI -> Orbit Mode. Full UI -> Editor Mode.
         this.isOrbitMode = shouldHide;
         if (shouldHide && !wasOrbitMode) {
-            this.syncOrbitFromCamera();
+            this.faceTrackingManager.syncOrbitFromCamera();
         }
 
         // #WDD 2026-01-21 Auto-hide Grid and Axes in Simple Mode
@@ -2084,457 +1393,9 @@ class Viewer {
         }
     }
 
-    private syncOrbitFromCamera() {
-        if (!this.camera) return;
-        const pos = this.camera.getPosition().clone();
-        const dist = pos.length();
-        if (dist <= 0.0001) return;
-        const dir = pos.clone().mulScalar(1 / dist);
-        this.orbitDistance = Math.max(1.0, dist);
-        this.yaw = Math.atan2(dir.x, dir.z) * pc.math.RAD_TO_DEG;
-        this.pitch = -Math.asin(pc.math.clamp(dir.y, -1, 1)) * pc.math.RAD_TO_DEG;
-        this.orbitCameraUpdates();
-    }
 
-    // #WDD 2026-01-22: Concurrent Chunk Downloader
-    // #WDD 2026-01-22: Simplified Single Stream Downloader (with Progress)
-    private async downloadFileConcurrent(url: string, onProgress: (loaded: number, total: number) => void): Promise<Blob> {
-        console.log("[SmartLoader] Starting Direct Download...");
 
-        // 1. Start Fetch
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
 
-        const contentLength = res.headers.get('content-length');
-        const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
-
-        const reader = res.body!.getReader();
-        let loaded = 0;
-        const chunks: Uint8Array[] = [];
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            loaded += value.length;
-            onProgress(loaded, totalSize || loaded);
-        }
-
-        return new Blob(chunks as any[]);
-    }
-
-    private async loadSampleFile(url: string) {
-        // #WDD 2026-01-22: Sanitize filename (remove query params and decode)
-        let filename = url.split('/').pop() || 'sample.truesplats';
-        filename = decodeURIComponent(filename.split('?')[0]);
-
-        // Get New Download UI Elements
-        const dlOverlay = document.getElementById('download-overlay');
-        const dlPercent = document.getElementById('download-percent');
-        const dlBar = document.getElementById('download-progress-bar');
-        const dlFilename = document.getElementById('download-filename');
-        const dlSize = document.getElementById('download-size');
-
-        // Get Old Loading UI Elements (for parsing phase)
-        const loadOverlay = document.getElementById('loading-overlay');
-        const loadStatus = document.getElementById('loading-status');
-        const stepSquares = document.querySelectorAll('.step-square');
-
-        const updateDownloadUI = (percent: number, loadedObj: { loaded: number, total: number }) => {
-            if (dlOverlay && dlOverlay.classList.contains('hidden')) dlOverlay.classList.remove('hidden');
-
-            if (dlPercent) dlPercent.innerText = `${Math.round(percent)}%`;
-            if (dlBar) dlBar.style.width = `${percent}%`;
-
-            if (dlFilename) dlFilename.innerText = filename;
-            if (dlSize) {
-                const sizeMB = (loadedObj.loaded / (1024 * 1024)).toFixed(1);
-                const totalMB = (loadedObj.total / (1024 * 1024)).toFixed(1);
-                dlSize.innerText = `${sizeMB} MB / ${totalMB} MB`;
-            }
-        };
-
-        try {
-            // SHOW UI IMMEDIATELY
-            if (dlOverlay) dlOverlay.classList.remove('hidden');
-            if (dlFilename) dlFilename.innerText = filename;
-            if (dlPercent) dlPercent.innerText = "0%";
-            if (dlSize) dlSize.innerText = "Initializing...";
-
-            // Ensure old overlay is hidden
-            if (loadOverlay) loadOverlay.classList.add('hidden');
-
-            // Fetch Blob using Concurrent Downloader
-            const blob = await this.downloadFileConcurrent(url, (loaded, total) => {
-                const percent = total > 0 ? (loaded / total) * 100 : 0;
-                updateDownloadUI(percent, { loaded, total });
-            });
-
-            // #WDD 2026-01-22: Validate content is not HTML
-            const headerHelper = new Uint8Array(await blob.slice(0, 100).arrayBuffer());
-            const headerStr = new TextDecoder().decode(headerHelper);
-            if (headerStr.trim().startsWith('<') || headerStr.includes('<!DOCTYPE html') || headerStr.includes('<html')) {
-                throw new Error("The downloaded file appears to be an HTML page (likely a 404 or Proxy Error), not a valid model file.");
-            }
-
-            // Switch to Parsing UI (Download Complete)
-            if (dlOverlay) dlOverlay.classList.add('hidden');
-            if (loadOverlay) {
-                loadOverlay.classList.remove('hidden');
-                if (loadStatus) loadStatus.innerText = "PARSING";
-                // Reset step progress for parsing
-                stepSquares.forEach((sq, idx) => {
-                    if (idx === 0) (sq as HTMLElement).classList.add('reached');
-                    else (sq as HTMLElement).classList.remove('reached');
-                });
-            }
-
-            const file = new File([blob], filename, { type: 'application/octet-stream' });
-            this.loadFile(file);
-
-        } catch (error) {
-            console.error('Error loading sample file:', error);
-            alert('Failed to load sample file.');
-            if (dlOverlay) dlOverlay.classList.add('hidden');
-            if (loadOverlay) loadOverlay.classList.add('hidden');
-        }
-    }
-
-    private handleFileSelect(e: Event) {
-        const input = e.target as HTMLInputElement;
-        if (input.files && input.files.length > 0) this.loadFile(input.files[0]);
-    }
-
-    // #WDD 2026-01-22: Connectivity Check Helper
-    private async checkConnectivity(url: string, timeout: number = 2000): Promise<boolean> {
-        return new Promise(resolve => {
-            const controller = new AbortController();
-            const signal = controller.signal;
-            const timer = setTimeout(() => controller.abort(), timeout);
-
-            fetch(url, { method: 'HEAD', mode: 'no-cors', signal })
-                .then(() => {
-                    clearTimeout(timer);
-                    resolve(true); // Connected (even opaque response means reachable)
-                })
-                .catch(() => {
-                    clearTimeout(timer);
-                    resolve(false); // Failed or Timed out
-                });
-        });
-    }
-
-    private async loadFile(file: File, options: { keepSog4Sequence?: boolean } = {}) {
-        // If on small screen (phone/tablet), auto-hide UI to simplified mode
-        if (window.innerWidth < 1024) {
-            this.toggleUIVisibility(true);
-        }
-
-        if (!options.keepSog4Sequence) {
-            this.isSog4SequenceMode = false;
-            this.sog4SequenceFiles = [];
-            this.sog4SequenceSegments = [];
-            this.sog4SequenceTotalFrames = 0;
-            this.sog4SequenceOffsets = [];
-            this.sog4SequenceName = null;
-            this.sog4SequenceSharedTransform = null;
-            this.sog4SequenceIndex = 0;
-            this.sog4SequenceLoading = false;
-            this.sog4SequenceRequestId++;
-            this.splatSequence = null;
-            this.resetTimelineTools();
-        }
-
-        const name = file.name.toLowerCase();
-        if (!name.endsWith('.truesplats') && !name.endsWith('.sog4') && !name.endsWith('.ply4') && !name.endsWith('.ply')) {
-            alert('Please drop a .truesplats, .sog4, or .ply4 file');
-            return;
-        }
-
-        console.log(`[Viewer] Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
-
-        const overlay = document.getElementById('loading-overlay');
-        const status = document.getElementById('loading-status');
-        const detail = document.getElementById('loading-detail');
-        const stepProgress = document.getElementById('loading-step-progress');
-        const stepSquares = document.querySelectorAll('.step-square');
-
-        const setProgress = (stepIndex: number, s: string, d?: string) => {
-            if (overlay) overlay.classList.remove('hidden');
-            if (status) status.innerText = s;
-            if (detail && d) detail.innerText = d || "";
-
-            // 1. Update Line Progress immediately to the current point
-            if (stepProgress) {
-                const percentage = (stepIndex / (stepSquares.length - 1)) * 100;
-                stepProgress.style.width = `${percentage}%`;
-            }
-
-            // 2. Highlight only squares that are reached by the line
-            stepSquares.forEach((sq, idx) => {
-                const element = sq as HTMLElement;
-                if (idx <= stepIndex) {
-                    element.classList.add('reached');
-                } else {
-                    element.classList.remove('reached');
-                }
-            });
-        };
-
-        setProgress(0, "PREPARING", file.name);
-
-        // Update filename for caching
-        this.currentFileName = file.name;
-        this.currentTransformCacheKey = file.name;
-
-        if (!options.keepSog4Sequence) {
-            if (this.splatEntity) this.splatEntity.destroy();
-            this.cameraPresets = [];
-            this.renderPresets();
-            this.isSequenceMode = false;
-            this.sequenceAssets = [];
-            this.sequenceFrameIndex = -1;
-            this.sequenceBands = 0;
-        }
-
-        const scElem = document.getElementById('splat-count');
-        if (scElem) scElem.innerText = "--";
-
-        try {
-            setProgress(9, "READY", "Processing Asset...");
-
-            // #WDD 2026-04-11 Performance: Start load phase tracking
-            this.performanceMonitor.startLoadPhase('file-load', `Loading ${file.name}`);
-
-            let parsed;
-            let loader: any;
-            const lowerName = file.name.toLowerCase();
-
-            // #WDD 2026-01-19 Fix: Support both .sog and .sog4
-            if (lowerName.endsWith('.sog4') || lowerName.endsWith('.sog')) {
-                console.log("[Viewer] Using SOG4Loader for", file.name);
-                loader = new SOG4Loader(this.app);
-                this.performanceMonitor.startLoadPhase('sog4-parse', 'Parsing SOG4 format');
-                parsed = await loader.load(file, (p: number, msg: string) => {
-                    setProgress(Math.floor(p / 10), "LOADING", msg);
-                });
-                this.performanceMonitor.endLoadPhase('sog4-parse');
-            } else if (lowerName.endsWith('.ply4') || lowerName.endsWith('.ply')) {
-                console.log("[Viewer] Using PLY4Loader for", file.name);
-                loader = new PLY4Loader(); // #WDD 2026-01-21 Use PLY4Loader
-                this.performanceMonitor.startLoadPhase('ply4-parse', 'Parsing PLY4 format');
-                parsed = await loader.load(file, (p: number, msg: string) => {
-                    setProgress(Math.floor(p / 10), "LOADING", msg);
-                });
-            } else if (lowerName.endsWith('.truesplats')) {
-                console.log("[Viewer] Using TrueSplatsLoader for", file.name);
-                loader = new TrueSplatsLoader(this.app);
-                parsed = await loader.load(file, (p: number, msg: string) => {
-                    setProgress(Math.floor(p / 10), "LOADING", msg);
-                });
-            } else {
-                console.warn("[Viewer] Unknown extension, defaulting to TrueSplatsLoader:", file.name);
-                loader = new TrueSplatsLoader(this.app);
-                parsed = await loader.load(file, (p: number, msg: string) => {
-                    setProgress(Math.floor(p / 10), "LOADING", msg);
-                });
-            }
-
-            // #WDD 2026-01-16 DEBUG: Sort by Frame 20 - REMOVED
-            // We rely on updateDynamicPositions now.
-
-
-            if (parsed) {
-                this.lastParsedData = parsed; // #WDD 2026-01-18 Fix: Persist loaded data
-                const count = parsed.count;
-
-                // #WDD 2026-01-16: Force Static Frame 0 for debugging
-                const forceStatic = false;
-                let elements = parsed.plyData.elements;
-                if (forceStatic) {
-                    console.log(`[Debug] Forcing Static Frame 0 Reconstruction (Verified getFrameElements Path)...`);
-                    elements = loader.getFrameElements(0);
-                }
-
-                // TrueSplatsLoader returns a ready-to-use vertexElement in plyData
-                let vertexElement = elements[0];
-
-                // Instantiating GSplatData with the elements option correctly
-                this.performanceMonitor.startLoadPhase('gsplat-create', 'Creating GSplat data');
-                const splatData = new (pc.GSplatData as any)([vertexElement]);
-
-                const resource = new pc.GSplatResource(this.app.graphicsDevice, splatData);
-
-                const url = URL.createObjectURL(file);
-                const asset = new pc.Asset(file.name, 'gsplat', { url: url });
-                asset.resource = resource;
-                asset.loaded = true;
-
-                this.app.assets.add(asset);
-
-                const entity = new pc.Entity('GSplat');
-                entity.addComponent('gsplat', { asset: asset });
-                this.performanceMonitor.endLoadPhase('gsplat-create');
-
-                // #WDD 2026-01-18 AR Compatibility: Robust Parenting
-                let arScaleFactor = 1.0;
-
-                // 1. Always add to Root first (World Origin)
-                this.app.root.addChild(entity);
-
-                // 2. If AR is running, move to Anchor
-                if (this.arHandler && this.arHandler.isARRunning && this.arHandler.arAnchor) {
-                    console.log("[Viewer] AR Active: Reparenting new Splat to AR Anchor");
-
-                    // Reparent to Anchor.
-                    // IMPORTANT: We want it to SNAP to the Anchor's position (the Marker), 
-                    // not keep its world position (which is 0,0,0 / the Camera).
-                    // So we use addChild (keeps local transform) if we were creating fresh, 
-                    // but since we added to root, we `reparent`.
-                    // Wait, `reparent` KEEPS World Position. If World was 0, it stays 0.
-                    // We WANT it to go to the Marker. The Marker is at Anchor Pos.
-                    // So we want Local Position to be (0,0,0).
-
-                    this.arHandler.arAnchor.addChild(entity); // Start as child
-
-                    // Reset Local Transform to Snap to Marker
-                    entity.setLocalPosition(0, 0, 0);
-                    entity.setLocalRotation(new pc.Quat().setFromEulerAngles(0, 0, 0));
-
-                    // Normalize Scale Logic
-                    const pScale = this.arHandler.arAnchor.getLocalScale().x;
-                    console.log(`[Viewer] AR Anchor Scale: ${pScale}`);
-                    if (pScale !== 0) {
-                        arScaleFactor = 1.0 / pScale;
-                        // #WDD 2026-01-18 Fix: Do NOT compensate Entity Scale. 
-                        // We WANT it to inherit the 5x magnification. 
-                        // Only compensate Position so it doesn't fly away.
-                        // entity.setLocalScale(arScaleFactor, arScaleFactor, arScaleFactor); 
-                    }
-                }
-
-                this.splatEntity = entity;
-
-                // #WDD 2026-01-18: Restore Model Transform if present (SOG4/TrueSplats format)
-                if (parsed.model_transform) {
-                    const t = parsed.model_transform;
-                    console.log("[TrueSplats] applying model_transform with arFactor for Pos:", arScaleFactor, t);
-
-                    // Apply AR Compensation to Loaded Transform
-                    // Compensate POS (multiply by 0.2) because Parent is scaled 5x. 5 * 0.2 = 1.0 (World Units maintained)
-                    if (t.pos) entity.setLocalPosition(t.pos[0] * arScaleFactor, t.pos[1] * arScaleFactor, t.pos[2] * arScaleFactor);
-
-                    if (t.rot) entity.setLocalRotation(new pc.Quat(t.rot[0], t.rot[1], t.rot[2], t.rot[3]));
-
-                    // Do NOT compensate Scale. Let it inherit AR Scale (Magnified).
-                    if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
-                } 
-                // #WDD 2026-03-31: Restore Model Transform from PLY4 format (parsed.meta)
-                else if (parsed.meta) {
-                    console.log("[PLY4] applying meta transform:", parsed.meta);
-                    console.log("[PLY4] modelPos:", parsed.meta.modelPos, "modelRot:", parsed.meta.modelRot, "modelScale:", parsed.meta.modelScale);
-                    if (parsed.meta.modelPos) {
-                        entity.setLocalPosition(parsed.meta.modelPos);
-                        console.log("[PLY4] Applied position:", parsed.meta.modelPos);
-                    }
-                    if (parsed.meta.modelRot) {
-                        entity.setLocalRotation(parsed.meta.modelRot);
-                        console.log("[PLY4] Applied rotation:", parsed.meta.modelRot);
-                    }
-                    if (parsed.meta.modelScale) {
-                        entity.setLocalScale(parsed.meta.modelScale);
-                        console.log("[PLY4] Applied scale:", parsed.meta.modelScale);
-                    }
-                } else {
-                    console.log("[PLY4] No parsed.meta found! parsed keys:", Object.keys(parsed));
-                    console.log("[TrueSplats] No model_transform found. Using default 0,0,0 local.");
-                }
-
-                console.log("[Viewer] Final Entity World Pos:", entity.getPosition().toString());
-                console.log("[Viewer] Final Entity World Scale:", entity.getLocalScale().toString());
-
-                // #WDD 2026-01-18: Restore Camera Presets if present
-                if (parsed.cameras && Array.isArray(parsed.cameras)) {
-                    this.cameraPresets = parsed.cameras.map((c: any) => ({
-                        name: c.name,
-                        pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
-                        pitch: c.pitch,
-                        yaw: c.yaw,
-                        textObjects: c.textObjects
-                    }));
-                    this.renderPresets(); // Ensure UI updates
-                    console.log(`[TrueSplats] Restored \${this.cameraPresets.length} Camera Presets`);
-                }
-
-                setProgress(9, "READY", "System Update Complete");
-                setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
-
-                // #WDD 2026-04-11 Performance: End load phase tracking
-                this.performanceMonitor.endLoadPhase('file-load');
-
-                // Finalize
-                this.updateStats(asset);
-                this.updateStats(asset);
-                // #WDD 2026-03-31: 同步 entity 变换到 UI（PLY4 meta 已在上面的代码中应用）
-                console.log("[Load] About to call updateTransformUIFromEntity. Entity pos:", this.splatEntity?.getLocalPosition()?.toString());
-                this.updateTransformUIFromEntity();
-                console.log("[Load] UI should be updated now");
-                this.resetCamera();
-                this.resetCamera();
-                const container = document.getElementById('timeline-ticks');
-                if (container) container.innerHTML = '';
-
-                // Call legacy finalize to setup shaders
-                // #WDD 2026-01-16
-                
-const duration = parsed.frames || parsed.maxMu || 100;
-                // #WDD-gpt 2026-04-20 - 单文件先注册到序列，再生成运行时资源，确保资源归属到队列元素
-                if (lowerName.endsWith('.ply4') || lowerName.endsWith('.sog4')) {
-                    this.configureSingleElementTemporalSequence(file, parsed, asset, entity, duration);
-                }
-                this.finalizeGSplatLoad(asset, count, null, duration, parsed);
-
-                // #WDD 2026-01-30 Apply postProcessing parameters from file parameters from file
-                if (parsed.postProcessing) {
-                    console.log('[Viewer] Applying postProcessing from file:', parsed.postProcessing);
-                    this.postProcessingTool.exposure = parsed.postProcessing.exposure || 1.0;
-                    this.postProcessingTool.brightness = parsed.postProcessing.brightness || 0.0;
-                    this.postProcessingTool.contrast = parsed.postProcessing.contrast || 0.0;
-                    this.postProcessingTool.applySettings();
-                    // Update UI to reflect loaded values
-                    const expInput = document.getElementById('pp-exposure') as HTMLInputElement;
-                    const briInput = document.getElementById('pp-brightness') as HTMLInputElement;
-                    const conInput = document.getElementById('pp-contrast') as HTMLInputElement;
-                    if (expInput) {
-                        expInput.value = this.postProcessingTool.exposure.toString();
-                        const expVal = document.getElementById('val-exposure');
-                        if (expVal) expVal.innerText = this.postProcessingTool.exposure.toFixed(1);
-                    }
-                    if (briInput) {
-                        briInput.value = this.postProcessingTool.brightness.toString();
-                        const briVal = document.getElementById('val-brightness');
-                        if (briVal) briVal.innerText = this.postProcessingTool.brightness > 0 ? '+' + this.postProcessingTool.brightness.toFixed(2) : this.postProcessingTool.brightness.toFixed(2);
-                    }
-                    if (conInput) {
-                        conInput.value = this.postProcessingTool.contrast.toString();
-                        const conVal = document.getElementById('val-contrast');
-                        if (conVal) conVal.innerText = this.postProcessingTool.contrast > 0 ? '+' + this.postProcessingTool.contrast.toFixed(2) : this.postProcessingTool.contrast.toFixed(2);
-                    }
-                }
-
-                // #WDD 2026-01-22: Auto-Play and Switch to Play Mode
-                console.log("[Viewer] Auto-starting playback and switching to Play Mode");
-                this.toggleUIVisibility(true); // Switch to Simplified UI
-                if (!this.isPlaying) this.togglePlay(); // Start Animation
-
-                return;
-            }
-        } catch (e) {
-            console.error("Load Error:", e);
-            alert("Error loading file: " + (e instanceof Error ? e.message : String(e)));
-            if (overlay) overlay.classList.add('hidden');
-        }
-    }
 
     private createSequenceProgressUpdater() {
         const overlay = document.getElementById('loading-overlay');
@@ -2563,8 +1424,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.splatEntity.destroy();
             this.splatEntity = null;
         }
-        this.cameraPresets = [];
-        this.renderPresets();
+        this.presetManager.cameraPresets = [];
+        this.presetManager.renderPresets();
         this.isSequenceMode = false;
         this.sequenceAssets = [];
         this.sequenceFrameIndex = -1;
@@ -3120,7 +1981,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 cached.setLocalScale(active.getLocalScale());
             }
             this.swapSequenceActiveEntity(cached, frameIndex);
-            this.updateStats(this.sequenceAssets[frameIndex]);
+            this.fileLoader.updateStats(this.sequenceAssets[frameIndex]);
             return;
         }
 
@@ -3137,7 +1998,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 ready.setLocalScale(active.getLocalScale());
             }
             this.swapSequenceActiveEntity(ready, frameIndex);
-            this.updateStats(this.sequenceAssets[frameIndex]);
+            this.fileLoader.updateStats(this.sequenceAssets[frameIndex]);
         }
     }
 
@@ -3393,14 +2254,14 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
             const first = this.sog4SequenceSegments[0];
             if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
-                this.cameraPresets = first.parsed.cameras.map((c: any) => ({
+                this.presetManager.cameraPresets = first.parsed.cameras.map((c: any) => ({
                     name: c.name,
                     pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
                     pitch: c.pitch,
                     yaw: c.yaw,
                     textObjects: c.textObjects
                 }));
-                this.renderPresets();
+                this.presetManager.renderPresets();
             }
             if (first?.parsed?.postProcessing) {
                 this.postProcessingTool.exposure = first.parsed.postProcessing.exposure || 1.0;
@@ -3485,14 +2346,14 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
             const first = this.sog4SequenceSegments[0];
             if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
-                this.cameraPresets = first.parsed.cameras.map((c: any) => ({
+                this.presetManager.cameraPresets = first.parsed.cameras.map((c: any) => ({
                     name: c.name,
                     pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
                     pitch: c.pitch,
                     yaw: c.yaw,
                     textObjects: c.textObjects
                 }));
-                this.renderPresets();
+                this.presetManager.renderPresets();
             }
             if (first?.parsed?.postProcessing) {
                 this.postProcessingTool.exposure = first.parsed.postProcessing.exposure || 1.0;
@@ -3542,8 +2403,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
         if (!options.preload) {
             if (this.splatEntity) this.splatEntity.destroy();
-            this.cameraPresets = [];
-            this.renderPresets();
+            this.presetManager.cameraPresets = [];
+            this.presetManager.renderPresets();
             this.isSequenceMode = false;
             this.sequenceAssets = [];
             this.sequenceFrameIndex = -1;
@@ -3611,15 +2472,15 @@ const duration = parsed.frames || parsed.maxMu || 100;
         console.log("[Viewer] Final Entity World Scale:", entity.getLocalScale().toString());
 
         if (!options.preload && !this.isSog4SequenceMode && parsed.cameras && Array.isArray(parsed.cameras)) {
-            this.cameraPresets = parsed.cameras.map((c: any) => ({
+            this.presetManager.cameraPresets = parsed.cameras.map((c: any) => ({
                 name: c.name,
                 pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
                 pitch: c.pitch,
                 yaw: c.yaw,
                 textObjects: c.textObjects
             }));
-            this.renderPresets();
-            console.log(`[TrueSplats] Restored ${this.cameraPresets.length} Camera Presets`);
+            this.presetManager.renderPresets();
+            console.log(`[TrueSplats] Restored ${this.presetManager.cameraPresets.length} Camera Presets`);
         }
 
         const duration = parsed.frames || parsed.maxMu || 100;
@@ -3943,7 +2804,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         this.applySog4LocalTime(0);
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
         this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(this.sog4SequenceTotalFrames || this.duration) - 1));
-        this.updateStats(segment.asset);
+        this.fileLoader.updateStats(segment.asset);
     }
 
     private async loadSogSequence(files: File[]): Promise<void> {
@@ -3978,103 +2839,12 @@ const duration = parsed.frames || parsed.maxMu || 100;
         }
     }
 
-    private async collectDroppedFiles(e: DragEvent): Promise<File[]> {
-        const collected: File[] = [];
-        const items = e.dataTransfer?.items;
-        if (items && items.length > 0) {
-            const tasks: Promise<void>[] = [];
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                if (item.kind !== 'file') continue;
-                const entry = item.webkitGetAsEntry?.();
-                if (entry) {
-                    tasks.push(this.walkDroppedEntry(entry, collected));
-                } else {
-                    const file = item.getAsFile();
-                    if (file) collected.push(file);
-                }
-            }
-            await Promise.all(tasks);
-        } else if (e.dataTransfer?.files) {
-            collected.push(...Array.from(e.dataTransfer.files));
-        }
-        return collected;
-    }
 
-    private async walkDroppedEntry(entry: FileSystemEntry, collector: File[]): Promise<void> {
-        if (entry.isFile) {
-            return new Promise((resolve, reject) => {
-                (entry as FileSystemFileEntry).file((file) => {
-                    collector.push(file);
-                    resolve();
-                }, reject);
-            });
-        }
-        if (entry.isDirectory) {
-            const reader = (entry as FileSystemDirectoryEntry).createReader();
-            return new Promise((resolve, reject) => {
-                const readNext = () => {
-                    reader.readEntries(async (entries) => {
-                        if (!entries.length) {
-                            resolve();
-                            return;
-                        }
-                        await Promise.all(entries.map((child) => this.walkDroppedEntry(child, collector)));
-                        readNext();
-                    }, reject);
-                };
-                readNext();
-            });
-        }
-        return Promise.resolve();
-    }
 
-    private async handleDroppedFiles(files: File[]): Promise<void> {
-        const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
-        const ply4Seq = sorted.filter((f) => this.isPly4SequenceCandidate(f));
-        if (ply4Seq.length > 1) {
-            await this.loadPly4Sequence(ply4Seq);
-            return;
-        }
-        const plySeq = sorted.filter((f) => this.isPlySequenceCandidate(f));
-        if (plySeq.length > 1) {
-            await this.loadPlySequence(plySeq);
-            return;
-        }
-        const sog4Seq = sorted.filter((f) => this.isSog4SequenceCandidate(f));
-        if (sog4Seq.length > 1) {
-            await this.loadSog4Sequence(sog4Seq);
-            return;
-        }
-        const sogSeq = sorted.filter((f) => this.isSogSequenceCandidate(f));
-        if (sogSeq.length > 1) {
-            await this.loadSogSequence(sogSeq);
-            return;
-        }
-        if (sorted.length > 0) {
-            await this.loadFile(sorted[0]);
-        }
-    }
 
-    private isPlySequenceCandidate(file: File): boolean {
-        const name = file.name.toLowerCase();
-        return name.endsWith('.ply') && !name.endsWith('.ply4');
-    }
 
-    private isSogSequenceCandidate(file: File): boolean {
-        const name = file.name.toLowerCase();
-        return name.endsWith('.sog') && !name.endsWith('.sog4');
-    }
 
-    private isSog4SequenceCandidate(file: File): boolean {
-        const name = file.name.toLowerCase();
-        return name.endsWith('.sog4');
-    }
 
-    private isPly4SequenceCandidate(file: File): boolean {
-        const name = file.name.toLowerCase();
-        return name.endsWith('.ply4');
-    }
 
     // #WDD 2026-01-17: Dynamic Sorting Update
     // #WDD 2026-01-17: Dynamic Sorting Update
@@ -4284,7 +3054,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
         const height = Math.ceil(numSplats / width);
 
         if (parsed?.trajectory || parsed?.rotTrajectory || parsed?.dcTrajectory) {
-            this.ensure4DTextureBudget(numSplats, width, parsed);
+            this.fileLoader.ensure4DTextureBudget(numSplats, width, parsed);
         }
 
         // --- Cache Positions for Selection ---
@@ -4329,13 +3099,13 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
         // --- Camera Presets ---
         if (parsed.cameras && parsed.cameras.length > 0) {
-            this.cameraPresets = parsed.cameras.map((c: any) => ({
+            this.presetManager.cameraPresets = parsed.cameras.map((c: any) => ({
                 name: c.name, pos: new pc.Vec3(c.pos[0], c.pos[1], c.pos[2]),
                 pitch: c.pitch, yaw: c.yaw, textObjects: c.textObjects
             }));
-            this.renderPresets();
-            this.renderPresets();
-            this.syncTextOverlays();
+            this.presetManager.renderPresets();
+            this.presetManager.renderPresets();
+            this.presetManager.syncTextOverlays();
         }
 
         // #WDD-kimi 2026-04-20 - 序列切段时不要重复套用初始 deleted_indices，避免覆盖 undo/redo 恢复结果
@@ -4644,7 +3414,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.syncTimelineUI(0, maxIdx);
 
             setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
-            this.updateStats(asset);
+            this.fileLoader.updateStats(asset);
         }
 
         const hasPly4TransformMeta = !!(parsed?.meta && (
@@ -4839,143 +3609,16 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
 
 
-    private updateTimelineTicks(duration: number) {
-        const container = document.getElementById('timeline-ticks');
-        if (!container) return;
-        container.innerHTML = '';
-
-        // #WDD 2026-01-16 Fix: Ticks up to N-1
-        const maxFrame = Math.max(0, Math.ceil(duration) - 1);
-        // Determine step size to keep UI clean
-        let step = 1;
-        if (maxFrame > 20) step = 5;
-        if (maxFrame > 50) step = 10;
-        if (maxFrame > 100) step = 20; // e.g. 0, 20, 40...
-
-        for (let i = 0; i <= maxFrame; i += step) {
-            // Ensure we don't overflow too much if duration isn't exact multiple, but standard loops cover it.
-            // Create tick element
-            const tick = document.createElement('div');
-            tick.className = 'flex flex-col items-center';
-            tick.innerHTML = `
-                <div class="tick-mark"></div>
-                <div class="tick-label">${i}</div>
-            `;
-            container.appendChild(tick);
-        }
-
-        this.renderTimelineDecorations();
-    }
-
-    private getTimelineTotalFrames(): number {
-        return this.isSog4SequenceMode ? (this.sog4SequenceTotalFrames || this.duration || 1) : (this.duration || 1);
-    }
-
-    private getTimelineMaxFrame(): number {
-        return Math.max(0, Math.ceil(this.getTimelineTotalFrames()) - 1);
-    }
-
-    private clampTimelineFrame(frame: number): number {
-        const maxFrame = this.getTimelineMaxFrame();
-        return Math.max(0, Math.min(maxFrame, Math.floor(frame)));
-    }
-
-    private normalizeLoopRange() {
-        const maxFrame = this.getTimelineMaxFrame();
-        this.loopStartFrame = Math.max(0, Math.min(maxFrame, Math.floor(this.loopStartFrame)));
-        this.loopEndFrame = Math.max(0, Math.min(maxFrame, Math.floor(this.loopEndFrame || maxFrame)));
-        if (this.loopEndFrame < this.loopStartFrame) {
-            [this.loopStartFrame, this.loopEndFrame] = [this.loopEndFrame, this.loopStartFrame];
-        }
-    }
-
-    private resetTimelineTools() {
-        this.loopEnabled = false;
-        this.loopStartFrame = 0;
-        this.loopEndFrame = this.getTimelineMaxFrame();
-        this.renderTimelineDecorations();
-    }
-
-    private syncTimelineUI(displayFrame = Math.floor(this.currentTime), total = this.getTimelineMaxFrame()) {
-        const slider = document.getElementById('time-slider') as HTMLInputElement | null;
-        const timeLabel = document.getElementById('time-label');
-        if (slider) {
-            slider.max = total.toString();
-            slider.step = '1';
-            slider.value = Math.max(0, Math.min(total, Math.floor(displayFrame))).toString();
-        }
-        if (timeLabel) {
-            timeLabel.innerText = `${Math.floor(displayFrame)} / ${Math.max(0, total)}`;
-        }
-    }
-
-    private renderTimelineDecorations() {
-        const maxFrame = this.getTimelineMaxFrame();
-        const loopRange = document.getElementById('timeline-loop-range') as HTMLDivElement | null;
-        const loopLabel = document.getElementById('timeline-loop-label');
-        const loopToggle = document.getElementById('timeline-loop-toggle');
-        if (!loopRange || !loopLabel) return;
-
-        this.normalizeLoopRange();
-        const percentFor = (frame: number) => maxFrame <= 0 ? 0 : (frame / maxFrame) * 100;
-
-        if (this.loopEnabled && maxFrame > 0) {
-            const startPct = percentFor(this.loopStartFrame);
-            const endPct = percentFor(this.loopEndFrame);
-            loopRange.classList.remove('hidden');
-            loopRange.style.left = `${startPct}%`;
-            loopRange.style.width = `${Math.max(0, endPct - startPct)}%`;
-            loopLabel.textContent = `Loop ${this.loopStartFrame}-${this.loopEndFrame}`;
-            loopToggle?.classList.add('active');
-        } else {
-            loopRange.classList.add('hidden');
-            loopRange.style.left = '0%';
-            loopRange.style.width = '0%';
-            loopLabel.textContent = this.loopStartFrame !== 0 || this.loopEndFrame !== maxFrame
-                ? `Range ${this.loopStartFrame}-${this.loopEndFrame}`
-                : 'Full Range';
-            loopToggle?.classList.remove('active');
-        }
-    }
-
-    private seekToFrame(frame: number, options: { pause?: boolean } = {}) {
-        const target = this.clampTimelineFrame(frame);
-        if (options.pause && this.isPlaying) {
-            this.togglePlay();
-        }
-
-        this.playbackTime = target;
-
-        if (this.isSog4SequenceMode) {
-            this.currentTime = target;
-            const info = this.updateSog4SequenceTime();
-            this.syncTimelineUI(info.displayFrame, Math.max(0, Math.ceil(info.total) - 1));
-            return;
-        }
-
-        if (this.is4DGS && this.trajectoryData && !this.isSequenceMode) {
-            this.requestSortedFrame(target);
-        } else {
-            this.currentTime = target;
-            if (this.splatEntity?.gsplat) {
-                (this.splatEntity.gsplat as any).time = target;
-                const material = (this.splatEntity.gsplat as any).instance?.material;
-                if (material) {
-                    material.setParameter('uTime', target);
-                    material.setParameter('uGlobalTotalFrames', this.duration);
-                }
-            }
-            if (this.isSequenceMode) {
-                void this.applySequenceFrame(target);
-            }
-        }
-
-        this.syncTimelineUI(target, this.getTimelineMaxFrame());
-    }
-
-    private stepFrame(delta: number) {
-        this.seekToFrame(this.currentTime + delta, { pause: true });
-    }
+    private updateTimelineTicks(duration: number) { return this.timelineManager.updateTimelineTicks(duration); }
+    private getTimelineTotalFrames(): number { return this.timelineManager.getTimelineTotalFrames(); }
+    private getTimelineMaxFrame(): number { return this.timelineManager.getTimelineMaxFrame(); }
+    private clampTimelineFrame(frame: number): number { return this.timelineManager.clampTimelineFrame(frame); }
+    private normalizeLoopRange() { return this.timelineManager.normalizeLoopRange(); }
+    private resetTimelineTools() { return this.timelineManager.resetTimelineTools(); }
+    private syncTimelineUI(displayFrame?: number, total?: number) { return this.timelineManager.syncTimelineUI(displayFrame, total); }
+    private renderTimelineDecorations() { return this.timelineManager.renderTimelineDecorations(); }
+    private seekToFrame(frame: number, options?: { pause?: boolean }) { return this.timelineManager.seekToFrame(frame, options); }
+    private stepFrame(delta: number) { return this.timelineManager.stepFrame(delta); }
 
     private resetObjectTransformUI() {
         ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z'].forEach(id => {
@@ -5027,71 +3670,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
 
 
 
-    private resetCamera() {
-        if (!this.camera) return;
-        // #WDD 2026-01-18 Skip reset if AR is running to maintain alignment
-        if (this.arHandler && this.arHandler.isARRunning) return;
-
-        if (this.isOrbitMode) {
-            this.orbitDistance = 5.0; // Reset distance
-            this.pitch = 0;
-            this.yaw = 0;
-            this.orbitCameraUpdates();
-        } else if (this.cameraPresets.length > 0) {
-            const first = this.cameraPresets[0];
-            this.camera.setPosition(first.pos);
-            this.pitch = first.pitch;
-            this.yaw = first.yaw;
-            this.camera.setLocalEulerAngles(this.pitch, this.yaw, 0);
-        } else {
-            this.camera.setPosition(0, 1, 5);
-            this.camera.setEulerAngles(0, 0, 0);
-            this.pitch = 0;
-            this.yaw = 0;
-        }
-    }
-
-    // #WDD 2026-01-21 Orbit Camera Update Implementation
-    private orbitCameraUpdates() {
-        if (!this.camera) return;
-
-        // Calculate position on sphere
-        // PlayCanvas uses Y-up.
-        // Yaw rotates around Y. Pitch rotates X.
-        // Convert Euler (pitch/yaw) to vector direction
-        const rot = new pc.Quat().setFromEulerAngles(this.pitch, this.yaw, 0);
-        const dir = new pc.Vec3(0, 0, 1); // Forward is +Z in generic math, but check PlayCanvas camera forward
-        // PlayCanvas camera looks down -Z?
-        // Actually simplest way:
-        // 1. Create a pivot at 0,0,0
-        // 2. Rotate the pivot? No.
-        // 3. Just set rotation of camera to look at origin from distance.
-
-        // Or even simpler manual spherical coords:
-        // x = r * sin(theta) * cos(phi)
-        // y = r * sin(phi)
-        // z = r * cos(theta) * cos(phi)
-
-        // Using PlayCanvas API for robustness:
-        // Set rotation first (same as FPS look, basically)
-        // Then move BACKWARDS by orbitDistance
-        // BUT we want to Rotate around Origin.
-        // So:
-        // position = Origin - (ForwardVector * Distance)
-
-        // 1. Calculate Rotation Quaternion from Pitch/Yaw
-        const q = new pc.Quat().setFromEulerAngles(this.pitch, this.yaw, 0);
-
-        // 2. Get Back Vector (0,0,1) rotated by q => Camera Position Direction relative to origin
-        const offset = new pc.Vec3(0, 0, this.orbitDistance);
-        q.transformVector(offset, offset);
-
-        // 3. Set Position = Origin + Offset
-        this.camera.setPosition(offset);
-
-        // 4. Set Rotation: Look at Origin (0,0,0)
-        this.camera.lookAt(pc.Vec3.ZERO);
-    }
+    private resetCamera() { return this.sceneManager.resetCamera(); }
+    private orbitCameraUpdates() { return this.sceneManager.orbitCameraUpdates(); }
 
     // #WDD 2026-01-21 Skybox Support
     private skyboxes = [
@@ -5167,87 +3747,14 @@ const duration = parsed.frames || parsed.maxMu || 100;
         });
     }
 
-    private updateStats(asset: pc.Asset) {
-        if (!asset || !asset.resource) return;
-        const resource = asset.resource as pc.GSplatResource;
-        const splatData = resource.splatData;
-        if (!splatData) return;
 
-        const splatCountElem = document.getElementById('splat-count');
-        if (splatCountElem) {
-            // Use local format for better readability (e.g., 1,234,567)
-            splatCountElem.innerText = splatData.numSplats.toLocaleString();
-        }
-    }
 
-    private formatMemoryMB(bytes: number): string {
-        return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
-    }
-
-    private ensure4DTextureBudget(numSplats: number, width: number, parsed: any) {
-        const maxTextureSize = this.app.graphicsDevice.maxTextureSize || 4096;
-        const rgba32fBytesPerPixel = 16;
-        let estimatedBytes = width * Math.ceil(numSplats / width) * rgba32fBytesPerPixel * 2; // lifetime + scales
-
-        const checks: { label: string; height: number }[] = [];
-        if (parsed?.keyframes > 0) {
-            const trajHeight = Math.ceil((numSplats * parsed.keyframes) / 4096);
-            checks.push({ label: 'trajectoryTexture', height: trajHeight });
-            estimatedBytes += 4096 * trajHeight * rgba32fBytesPerPixel;
-        }
-        if (parsed?.rotKeyframes > 0) {
-            const rotHeight = Math.ceil((numSplats * parsed.rotKeyframes) / 4096);
-            checks.push({ label: 'rotationTexture', height: rotHeight });
-            estimatedBytes += 4096 * rotHeight * rgba32fBytesPerPixel;
-        }
-        if (parsed?.dcKeyframes > 0) {
-            const dcHeight = Math.ceil((numSplats * parsed.dcKeyframes) / 4096);
-            checks.push({ label: 'dcTrajectoryTexture', height: dcHeight });
-            estimatedBytes += 4096 * dcHeight * rgba32fBytesPerPixel;
-        }
-
-        const oversize = checks.find((entry) => entry.height > maxTextureSize);
-        if (oversize) {
-            throw new Error(
-                `4D texture '${oversize.label}' would be ${4096}x${oversize.height}, ` +
-                `exceeding this GPU's max texture size ${maxTextureSize}.`
-            );
-        }
-
-        // Browser-side RGBA32F allocations are heavy, but a fixed 1 GB cap turned out
-        // to be too conservative for valid 4D PLY workloads on this viewer.
-        // Keep the texture-size guard above, and allow larger datasets to attempt loading
-        // up to a more practical soft budget.
-        const gpuBudgetBytes = 5000 * 1024 * 1024;
-        if (estimatedBytes > gpuBudgetBytes) {
-            throw new Error(
-                `4D textures are too large for browser/GPU memory. ` +
-                `Estimated RGBA32F texture allocation: ${this.formatMemoryMB(estimatedBytes)} ` +
-                `(limit ${this.formatMemoryMB(gpuBudgetBytes)}).`
-            );
-        }
-    }
 
     private onUpdate(dt: number) {
         if (this.arHandler) this.arHandler.update();
 
         // #WDD 2026-02-03 Face Tracking Camera Update
-        if (this.isFaceTracking && this.camera) {
-            // Calculate Orbital Position
-            // NewPos = BasePos + (BaseRight * OffX) + (BaseUp * OffY)
-            // Then LookAt Origin
-
-            const rightOffset = this.faceTrackingBaseRight.clone();
-            rightOffset.mulScalar(this.faceTrackingOffset.x);
-
-            const upOffset = this.faceTrackingBaseUp.clone();
-            upOffset.mulScalar(this.faceTrackingOffset.y);
-
-            const targetPos = this.faceTrackingBasePos.clone().add(rightOffset).add(upOffset);
-
-            this.camera.setPosition(targetPos);
-            this.camera.lookAt(this.faceTrackingTarget);
-        }
+        this.faceTrackingManager.update();
 
         // Sequence playback is driven by the main update loop in the constructor; avoid double-advancing time here.
         if (this.isSequenceMode) {
@@ -5367,573 +3874,25 @@ const duration = parsed.frames || parsed.maxMu || 100;
     }
 
     // Public method for window binding
+    private exportManager = new ViewerExportManager(this);
+    private timelineManager = new ViewerTimelineManager(this);
+    private sceneManager = new ViewerSceneManager(this);
+    private presetManager = new ViewerPresetManager(this);
+    private faceTrackingManager = new ViewerFaceTrackingManager(this);
+    private fileLoader = new ViewerFileLoader(this);
+
     public async exportPlySequence() {
-        if (!this.splatEntity || !this.splatEntity.gsplat) {
-            alert("No Splat loaded to export!");
-            return;
-        }
-
-        const component = this.splatEntity.gsplat as any;
-        const asset = component.asset;
-        if (!asset || !asset.resource) return;
-
-        const resource = asset.resource as pc.GSplatResource;
-        const splatData = resource.splatData;
-
-        // Collect extra props from loader
-        // We know we attached some custom props to vertex element 0?
-        // Or we pass the whole splatData structure and let the exporter inspect it.
-        // But PlyExporter expects a { count, plyData, ... } object similar to 'parsed'.
-        // We need to re-construct a suitable object or pass splatData directly if upgraded.
-
-        // Actually, PlyExporter.exportSequence takes 'data' which has 'trajectory', 'lifetime_mu' etc.
-        // We need to check if 'splatData' holds these.
-        // In finalizeGSplatLoad, we see:
-        // const x = splatData.getProp('x')...
-        // const reorderedMu = splatData.getProp('lifetime_mu');
-        // So splatData IS the source of truth.
-
-        // We construct a 'data' object that PlyExporter expects.
-        // It seems PlyExporter was designed to take the 'parsed' object from loader, or similar.
-        // But here we might not have 'parsed' anymore.
-        // We must reconstruct it from splatData props.
-
-        const data: any = {
-            count: splatData.numSplats,
-            plyData: { elements: [{ properties: [] }] }, // Mock if needed, or Exporter uses getProp from data?
-            // Wait, PlyExporter uses data.plyData.elements[0] to find properties?
-            // See PlyExporter.ts:43: const vertexElement = data.plyData.elements[0];
-            // So we need to provide that structure.
-        };
-
-        // Re-build vertex properties list from splatData
-        // We can just iterate the vertex element from splatData (it has one).
-        const elem = (splatData as any).elements[0]; // Access internal elements
-        data.plyData.elements[0] = elem;
-
-        // Pass validation props
-        // We need to ensure we pass keyframes/strides if 4DGS
-        if (this.is4DGS) {
-            data.is4DGS = true;
-            data.keyframes = this.keyframes;
-            data.rotKeyframes = this.rotKeyframes;
-            data.xyzStride = this.xyzStride;
-            data.rotStride = this.rotStride;
-
-            // Attaching arrays directly for convenience if Exporter needs them
-            data.trajectory = this.trajectoryData;
-            data.rotTrajectory = this.rotTrajectoryData;
-
-            data.lifetime_mu = splatData.getProp('lifetime_mu');
-            data.lifetime_w = splatData.getProp('lifetime_w');
-            data.lifetime_k = splatData.getProp('lifetime_k');
-        }
-
-        const totalFrames = this.totalFrames || Math.ceil(this.duration);
-
-        await PlyExporter.exportSequence(data, totalFrames, `sequence_${this.currentFileName}`);
+        return this.exportManager.exportPlySequence();
     }
 
-    /**
-     * Reconstructs current frame from real textures sent to GPU.
-     * #WDD 2026-01-16 Verification path requested by user.
-     */
-    private async exportCurrentFrameToPly() {
-        if (!this.lastParsedData || !this.lifeTexData || !this.scalesTexData) {
-            console.error("[Export] Cannot export: metadata or textures missing.", {
-                parsed: !!this.lastParsedData,
-                life: !!this.lifeTexData,
-                scales: !!this.scalesTexData
-            });
-            alert("No 4DGS data loaded for texture export. (Is it 4DGS?)");
-            return;
-        }
-
-        console.log(`[Export] Reconstructing frame ${this.currentTime.toFixed(2)} from textures...`);
-        const component = (this.splatEntity?.gsplat || (this as any).splatComponent) as any;
-        if (!component) {
-            console.error("[Export] No GSplatComponent found on entity.");
-            alert("No GSplatComponent found. Please ensure a splat is loaded.");
-            return;
-        }
-
-        const asset = component.asset;
-        const resource = (asset?.resource || (component as any).instance?.splatData?._resource) as any;
-        const splatData = resource?.splatData || component.instance?.splatData || (this.lastParsedData as any);
-
-        if (!splatData && !this.lastParsedData) {
-            console.error("[Export] SplatData not found.", { resource: !!resource, instance: !!component.instance });
-            alert("SplatData not found for export.");
-            return;
-        }
-
-        const numSplats = splatData.numSplats || this.lastParsedData.count;
-
-        const params = {
-            keyframes: this.keyframes,
-            xyzStride: this.xyzStride,
-            rotKeyframes: this.rotKeyframes,
-            rotStride: this.rotStride,
-            dcKeyframes: this.dcKeyframes,
-            dcStride: this.dcStride,
-            texWidth: 4096 // We use 4096 in our creation logic
-        };
-
-        const exportSource = {
-            getProp: (name: string) => splatData.getProp(name),
-            originalIndices: this.originalIndices,
-            opacitySemantic: this.lastParsedData.opacitySemantic,
-            rotationSemantic: this.lastParsedData.rotationSemantic
-        };
-
-        const buffer = await PlyExporter.exportFrameFromTextures(
-            numSplats,
-            this.currentTime,
-            this.duration,
-            this.lifeTexData!,
-            this.trajectoryData!, // Raw trajectory keyframes
-            this.rotTrajectoryData!, // Raw rotation keyframes
-            this.dcTrajectoryData!, // Raw color keyframes
-            this.scalesTexData, // Pack of scale_0,1,2,0
-            params,
-            exportSource
-        );
-
-        const filename = `gpu_reconstruct_${this.currentFileName}_f${this.currentTime.toFixed(1)}.ply`;
-        const blob = new Blob([buffer], { type: "application/octet-stream" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-        console.log(`[Export] Saved: ${filename}`);
-    }
-
-    private captureCurrentEntityModelTransform(): ModelTransform {
-        if (!this.splatEntity) return cloneModelTransform(DEFAULT_MODEL_TRANSFORM);
-        const p = this.splatEntity.getLocalPosition();
-        const r = this.splatEntity.getLocalRotation();
-        const s = this.splatEntity.getLocalScale();
-        return {
-            pos: [p.x, p.y, p.z],
-            rot: [r.x, r.y, r.z, r.w],
-            scale: [s.x, s.y, s.z]
-        };
-    }
-
+    // #WDD 2026-04-20 Delegation to export manager
     private rememberLoadedModelTransform(parsed: any) {
-        this.sourceModelTransform =
-            normalizeModelTransform(parsed?.model_transform) ||
-            normalizeLegacyModelTransform(parsed?.meta);
-        this.modelTransformEdited = false;
+        return this.exportManager.rememberLoadedModelTransform(parsed);
     }
 
-    private resolveExportModelTransform(): ModelTransform {
-        const entityTransform = this.captureCurrentEntityModelTransform();
-        const preserveSource = !!(this.lastParsedData?.isSOG4 && this.sourceModelTransform && !this.modelTransformEdited);
-        if (preserveSource) {
-            console.log('[Export] Preserving original SOG4 model_transform to avoid coordinate-system drift.', {
-                source: this.sourceModelTransform,
-                entity: entityTransform
-            });
-        }
-        return chooseExportModelTransform({
-            entityTransform,
-            sourceTransform: this.sourceModelTransform,
-            preserveSource
-        });
-    }
-
-
-    // #WDD 2026-01-18
-    async saveAsTrueSplats() {
-        if (!this.lastParsedData) {
-            console.error("[Export] No data loaded.");
-            return;
-        }
-
-        console.log(`[Export] Saving .truesplats...`);
-        try {
-            const transform = this.resolveExportModelTransform();
-
-            const cameras = this.cameraPresets.map(c => ({
-                name: c.name,
-                pos: [c.pos.x, c.pos.y, c.pos.z],
-                pitch: c.pitch,
-                yaw: c.yaw,
-                textObjects: c.textObjects
-            }));
-
-            // #WDD 2026-01-18: Capture Deleted Indices
-            const deletedIndices: number[] = [];
-            if (this.selectionTool.selectionData) {
-                const selData = this.selectionTool.selectionData;
-                const numSplats = selData.length / 4;
-                for (let i = 0; i < numSplats; i++) {
-                    if (selData[i * 4 + 1] > 0) { // Green channel = Deleted
-                        deletedIndices.push(i);
-                    }
-                }
-            }
-
-            const buffer = await TrueSplatsLoader.save(this.lastParsedData, {
-                model_transform: transform,
-                cameras: cameras,
-                deleted_indices: deletedIndices, // #WDD 2026-01-18
-                apply_deleted: true
-            });
-            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
-            const filename = `saved_${baseName}.truesplats`;
-
-            const blob = new Blob([buffer], { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-            console.log(`[Export] Saved .truesplats: ${filename}`);
-        } catch (e: any) { // Explicit any for error
-            console.error("[Export] Save failed:", e);
-            alert("Save failed: " + e.message);
-        }
-    }
-
-    /**
-     * saveAsPLY4: Lossless 4DGS export
-     * #WDD 2026-03-31: Created for high-fidelity comparison
-     */
-    async saveAsPLY4() {
-        console.log("[Export] saveAsPLY4 called. LastParsed:", this.lastParsedData);
-        if (!this.lastParsedData) {
-            alert("No data loaded.");
-            return;
-        }
-
-        try {
-            const overlay = document.getElementById('loading-overlay');
-            const statusEl = document.getElementById('loading-status');
-            const detailEl = document.getElementById('loading-detail');
-            const bar = document.getElementById('loading-step-progress');
-            const squares = Array.from(document.querySelectorAll('.step-square'));
-
-            const setExportProgress = (pct: number, detail: string) => {
-                overlay?.classList.remove('hidden');
-                if (statusEl) statusEl.innerText = 'EXPORTING PLY4';
-                if (detailEl) detailEl.innerText = detail || '';
-                if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
-                const stepMax = Math.max(squares.length - 1, 1);
-                const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
-                squares.forEach((square, idx) => {
-                    if (idx <= step) square.classList.add('reached');
-                    else square.classList.remove('reached');
-                });
-            };
-
-            setExportProgress(5, 'Encoding PLY4 binary...');
-
-            // #WDD 2026-03-31: Pass current transform to metadata
-            const encodeOverrides = {
-                selectionData: this.selectionTool?.selectionData,
-                model_pos: this.splatEntity?.getLocalPosition(),
-                model_rot: this.splatEntity?.getLocalRotation(),
-                model_scale: this.splatEntity?.getLocalScale()
-            };
-
-            const buffer = await PLY4Encoder.encode(this.lastParsedData, encodeOverrides, (pct, msg) => {
-                setExportProgress(10 + pct * 0.85, msg);
-            });
-
-            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
-            const filename = `saved_${baseName}.ply4`;
-
-            const blob = new Blob([buffer], { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-
-            setExportProgress(100, 'Export Complete');
-
-        } catch (err) {
-            console.error(err);
-            alert("PLY4 Export failed: " + err);
-        } finally {
-            setTimeout(() => {
-                const overlay = document.getElementById('loading-overlay');
-                if (overlay) overlay.classList.add('hidden');
-            }, 1000);
-        }
-    }
-
-    async saveAsSOG4() {
-        console.log("[Export] saveAsSOG4 called. LastParsed:", this.lastParsedData);
-        if (!this.lastParsedData) {
-            alert("No data loaded.");
-            return;
-        }
-
-        console.log(`[Export] Saving .sog4...`);
-        try {
-            const overlay = document.getElementById('loading-overlay');
-            const statusEl = document.getElementById('loading-status');
-            const detailEl = document.getElementById('loading-detail');
-            const bar = document.getElementById('loading-step-progress');
-            const substepsEl = document.getElementById('loading-substeps');
-            const squares = Array.from(document.querySelectorAll('.step-square'));
-            const propertyNames = this.lastParsedData?.plyData?.elements?.[0]?.properties?.map((prop: any) => prop.name) || [];
-            const hasShn = propertyNames.some((name: string) => /^f_rest_\d+$/.test(name)) ||
-                Object.keys(this.lastParsedData || {}).some((name) => /^f_rest_\d+$/.test(name));
-            const hasXyzBank = Boolean(
-                (this.lastParsedData?.keyframes > 0 && this.lastParsedData?.trajectory) ||
-                this.lastParsedData?.xyzBank
-            );
-            const hasColorBank = Boolean(this.lastParsedData?.dcKeyframes > 0 && this.lastParsedData?.dcTrajectory);
-            const hasRotationBank = Boolean(
-                (this.lastParsedData?.rotKeyframes > 0 && this.lastParsedData?.rotTrajectory) ||
-                this.lastParsedData?.rotBank
-            );
-            const hasParams = Boolean(this.lastParsedData?.lifetime_mu && this.lastParsedData?.lifetime_w);
-            const stepDefinitions = [
-                { id: 'prepare', label: 'Prepare Export', enabled: true },
-                { id: 'filter', label: 'Filter Deleted', enabled: true },
-                { id: 'means', label: 'Means (XYZ)', enabled: true },
-                { id: 'rotations', label: 'Rotations', enabled: true },
-                { id: 'scales_opacity', label: 'Scales & Opacity', enabled: true },
-                { id: 'shn', label: 'SHN Palette', enabled: hasShn },
-                { id: 'xyz_bank', label: 'XYZ Bank', enabled: hasXyzBank },
-                { id: 'color_bank', label: 'Color Bank', enabled: hasColorBank },
-                { id: 'rotation_bank', label: 'Rotation Bank', enabled: hasRotationBank },
-                { id: 'params', label: 'Params', enabled: hasParams },
-                { id: 'zip', label: 'Package ZIP', enabled: true },
-                { id: 'finalize', label: 'Finalize Download', enabled: true }
-            ].filter((step) => step.enabled);
-            const stepNodes = new Map<string, {
-                row: HTMLDivElement;
-                detail: HTMLDivElement;
-                pct: HTMLDivElement;
-                fill: HTMLDivElement;
-            }>();
-            const resetSubsteps = () => {
-                if (!substepsEl) return;
-                substepsEl.innerHTML = '';
-                substepsEl.classList.add('hidden');
-                substepsEl.classList.remove('flex');
-                stepNodes.clear();
-            };
-            const initializeSubsteps = () => {
-                if (!substepsEl) return;
-                substepsEl.innerHTML = '';
-                substepsEl.classList.remove('hidden');
-                substepsEl.classList.add('flex');
-                stepDefinitions.forEach((step) => {
-                    const row = document.createElement('div');
-                    // #WDD 2026-04-03 默认隐藏所有子任务，只显示正在进行的
-                    row.className = 'loading-substep rounded-lg px-3 py-2 hidden flex-col gap-1';
-                    row.dataset.stepId = step.id;
-
-                    const header = document.createElement('div');
-                    header.className = 'flex items-center justify-between gap-3';
-
-                    const label = document.createElement('div');
-                    label.className = 'text-[9px] font-bold uppercase tracking-[0.18rem] ui-text-primary';
-                    label.innerText = step.label;
-
-                    const pct = document.createElement('div');
-                    pct.className = 'text-[9px] font-mono uppercase ui-text-secondary opacity-80';
-                    pct.innerText = '0%';
-
-                    header.appendChild(label);
-                    header.appendChild(pct);
-
-                    const detail = document.createElement('div');
-                    detail.className = 'text-[8px] font-mono uppercase tracking-tight ui-text-secondary opacity-60';
-                    detail.innerText = 'Pending';
-
-                    const barWrap = document.createElement('div');
-                    barWrap.className = 'loading-substep-bar h-[4px] rounded-full overflow-hidden';
-
-                    const fill = document.createElement('div');
-                    fill.className = 'loading-substep-fill h-full rounded-full transition-all duration-200';
-                    fill.style.width = '0%';
-
-                    barWrap.appendChild(fill);
-                    row.appendChild(header);
-                    row.appendChild(detail);
-                    row.appendChild(barWrap);
-                    substepsEl.appendChild(row);
-                    stepNodes.set(step.id, { row, detail, pct, fill });
-                });
-            };
-            const updateSubstep = (stepId: string, pctValue: number, detail: string, state: 'pending' | 'active' | 'done' = 'active') => {
-                const node = stepNodes.get(stepId);
-                if (!node) return;
-                const clamped = Math.min(Math.max(pctValue, 0), 100);
-                node.fill.style.width = `${clamped}%`;
-                node.pct.innerText = `${Math.round(clamped)}%`;
-                node.detail.innerText = detail || 'Working';
-                node.row.classList.toggle('is-active', state === 'active');
-                node.row.classList.toggle('is-done', state === 'done');
-                
-                // #WDD 2026-04-03 动态显示/隐藏：只显示 state === 'active' 的任务
-                if (state === 'active') {
-                    node.row.classList.remove('hidden');
-                    node.row.classList.add('flex');
-                } else {
-                    node.row.classList.remove('flex');
-                    node.row.classList.add('hidden');
-                }
-            };
-            const completeMissingIntermediateSteps = (currentStepId: string) => {
-                const currentIndex = stepDefinitions.findIndex((step) => step.id === currentStepId);
-                if (currentIndex <= 0) return;
-                for (let i = 0; i < currentIndex; i++) {
-                    const prev = stepDefinitions[i];
-                    const node = stepNodes.get(prev.id);
-                    if (!node) continue;
-                    if (node.fill.style.width !== '100%') {
-                        updateSubstep(prev.id, 100, 'Done', 'done');
-                    }
-                }
-            };
-            const setExportProgress = (pct: number, detail: string, meta?: SOG4EncodeProgressMeta) => {
-                overlay?.classList.remove('hidden');
-                if (statusEl) statusEl.innerText = 'EXPORTING SOG4';
-                if (detailEl) detailEl.innerText = detail || '';
-                if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
-                const stepMax = Math.max(squares.length - 1, 1);
-                const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
-                squares.forEach((square, idx) => {
-                    if (idx <= step) square.classList.add('reached');
-                    else square.classList.remove('reached');
-                });
-                if (meta?.stageId) {
-                    completeMissingIntermediateSteps(meta.stageId);
-                    updateSubstep(
-                        meta.stageId,
-                        meta.stagePct,
-                        meta.detail || detail,
-                        meta.stagePct >= 100 ? 'done' : 'active'
-                    );
-                }
-            };
-
-            initializeSubsteps();
-            setExportProgress(0, 'Preparing export', {
-                stageId: 'prepare',
-                stageLabel: 'Prepare Export',
-                stagePct: 0,
-                overallPct: 0,
-                detail: 'Collecting export inputs'
-            });
-
-            const transform = this.resolveExportModelTransform();
-
-            const cameras = this.cameraPresets.map(c => ({
-                name: c.name, pos: [c.pos.x, c.pos.y, c.pos.z], pitch: c.pitch, yaw: c.yaw,
-                textObjects: c.textObjects
-            }));
-
-            const deletedIndices: number[] = [];
-            if (this.selectionTool.selectionData) {
-                const selData = this.selectionTool.selectionData;
-                const numSplats = selData.length / 4;
-                for (let i = 0; i < numSplats; i++) {
-                    if (selData[i * 4 + 1] > 0) deletedIndices.push(i);
-                }
-            }
-            setExportProgress(5, `Deleted splats: ${deletedIndices.length}`, {
-                stageId: 'prepare',
-                stageLabel: 'Prepare Export',
-                stagePct: 100,
-                overallPct: 5,
-                detail: `Transform, cameras, and source state ready`
-            });
-            setExportProgress(6, `Deleted splats: ${deletedIndices.length}`, {
-                stageId: 'filter',
-                stageLabel: 'Filter Deleted',
-                stagePct: deletedIndices.length > 0 ? 10 : 100,
-                overallPct: 6,
-                detail: deletedIndices.length > 0
-                    ? `Marked ${deletedIndices.length} deleted splats`
-                    : 'No deleted splats'
-            });
-
-            const origIndices = this.originalIndices || this.lastParsedData?.original_index || undefined;
-            const hasDeletes = deletedIndices.length > 0;
-            let buffer: Uint8Array;
-
-            const encodeOverrides: any = {
-                rawFloatPayload: false,
-                model_transform: transform,
-                cameras: cameras,
-                postProcessing: {
-                    exposure: this.postProcessingTool.exposure,
-                    brightness: this.postProcessingTool.brightness,
-                    contrast: this.postProcessingTool.contrast
-                }
-            };
-            if (hasDeletes) {
-                encodeOverrides.apply_deleted = true;
-                encodeOverrides.deleted_indices = deletedIndices;
-                if (origIndices) encodeOverrides.original_indices = origIndices;
-            }
-
-            buffer = await SOG4Encoder.encode(this.lastParsedData, encodeOverrides, {
-                mode: 'standard',
-                progress: (pct: number, msg: string, meta?: SOG4EncodeProgressMeta) => {
-                    setExportProgress(8 + (pct * 0.84), `Encoding: ${msg}`, meta ? {
-                        ...meta,
-                        overallPct: 8 + (pct * 0.84)
-                    } : undefined);
-                }
-            });
-            this.lastParsedData.sogBuffer = buffer;
-            this.lastParsedData.isSOG4 = true;
-            this.lastParsedData.needsSOG4Rewrite = false;
-            setExportProgress(94, 'Final archive ready', {
-                stageId: 'finalize',
-                stageLabel: 'Finalize Download',
-                stagePct: 40,
-                overallPct: 94,
-                detail: 'Preparing browser download'
-            });
-            const baseName = (this.currentFileName || 'model').replace(/\.[^/.]+$/, "");
-            const filename = `saved_${baseName}.sog4`;
-
-            const blob = new Blob([buffer.buffer as ArrayBuffer], { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-            console.log(`[Export] Saved .sog4: ${filename}`);
-            setExportProgress(100, 'Export complete', {
-                stageId: 'finalize',
-                stageLabel: 'Finalize Download',
-                stagePct: 100,
-                overallPct: 100,
-                detail: filename
-            });
-            setTimeout(() => {
-                overlay?.classList.add('hidden');
-                resetSubsteps();
-            }, 600);
-        } catch (e: any) {
-            console.error("[Export] Save SOG4 failed:", e);
-            alert("Save failed: " + e.message);
-            document.getElementById('loading-overlay')?.classList.add('hidden');
-            const substepsEl = document.getElementById('loading-substeps');
-            if (substepsEl) {
-                substepsEl.innerHTML = '';
-                substepsEl.classList.add('hidden');
-                substepsEl.classList.remove('flex');
-            }
-        }
-    }
+    async saveAsTrueSplats() { return this.exportManager.saveAsTrueSplats(); }
+    async saveAsPLY4() { return this.exportManager.saveAsPLY4(); }
+    async saveAsSOG4() { return this.exportManager.saveAsSOG4(); }
 
 }
 
