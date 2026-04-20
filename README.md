@@ -97,6 +97,7 @@
 - **批量转换**
   - 独立页面 `batch-convert.html`
   - 将多个 `.ply4` 批量转换为 `.sog4`
+  - 将多帧 `.ply4` 逐帧导出为 PLY 序列；多个文件时合并为统一序列，按第一个文件名连续编号（打包为 zip）
   - 支持文件夹拖拽上传
 
 - **SOG4 保存内容**
@@ -117,7 +118,9 @@
 - 新增独立的 `batch-convert.html` 批量转换页面。
 - 支持拖拽上传多个 `.ply4` 文件或整个文件夹。
 - 队列管理，显示每个任务的 Prepare / Load PLY4 / Encode SOG4 / Download 四阶段进度。
-- 转换时会保留原始 PLY4 中的模型变换信息（位置 / 旋转 / 缩放）并写入 SOG4。
+- 支持两种导出格式切换（默认 SOG4）：
+  - **SOG4**：将 `.ply4` 编码为压缩的 `.sog4`，保留模型变换信息。
+  - **PLY 序列**：将多帧 `.ply4` 逐帧插值导出为单帧 `.ply4`；拖入多个文件时合并为统一序列，所有帧按第一个文件名连续编号（`name_000.ply4`, `name_001.ply4`…），打包为 zip 下载。
 - 支持自动下载转换完成的文件。
 - 任务失败后可单独重试。
 
@@ -210,7 +213,7 @@
 │   └── style.css               # 主样式
 ├── scripts/                    # 构建脚本
 ├── index.html                  # 主页面
-├── batch-convert.html          # 批量转换页面 (PLY4 → SOG4)
+├── batch-convert.html          # 批量转换页面 (PLY4 → SOG4 / PLY Sequence)
 ├── vite.config.ts              # Vite 配置
 └── package.json                # 依赖配置
 ```
@@ -306,6 +309,9 @@ npm run build
 - 点击左上角 `Samples` 下拉菜单中的 `Batch` 进入批量转换页面，或访问 `batch-convert.html`
 - 支持拖拽 `.ply4` 文件或整个文件夹到上传区
 - 也可通过 `Choose Files` 或 `Choose Folder` 按钮手动选择
+- **导出格式**：选择 `SOG4`（默认）或 `PLY Sequence`
+  - `SOG4`：将 `.ply4` 编码为压缩的 `.sog4`
+  - `PLY Sequence`：将多帧 `.ply4` 逐帧插值导出为单帧 `.ply4`；拖入多个文件时合并为统一序列，所有帧按第一个文件名连续编号，打包为 `{文件名}_frames.zip`
 - `Auto download` 开关可控制转换完成后是否自动下载
 - 点击 `Convert Entire Queue` 开始批量转换，`Clear Queue` 清空队列
 - 左侧面板显示 Batch Summary（Queued / Completed / Failed / Output Size）和整体进度

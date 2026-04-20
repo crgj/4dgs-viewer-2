@@ -1,5 +1,9 @@
 import { PLY4Loader, type PLY4LoadProgressMeta } from './utils/ply4-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
+import { PLYEncoder } from './utils/ply-encoder';
+// #WDD 2026-04-19 弃用4DGS格式序列导出，改为导出为独立的标准PLY单帧文件，以便于外部的3DGS查看器兼容。
+import { exportPLYSequence } from './utils/ply-sequence-exporter';
+import JSZip from 'jszip';
 
 type TaskStatus = 'queued' | 'preparing' | 'loading' | 'encoding' | 'downloading' | 'done' | 'error';
 type StepStateKind = 'pending' | 'active' | 'done' | 'error';
@@ -91,6 +95,8 @@ class BatchConvertApp {
     private readonly dropzone = document.getElementById('batch-dropzone') as HTMLDivElement;
     private readonly taskList = document.getElementById('batch-task-list') as HTMLDivElement;
     private readonly autoDownloadToggle = document.getElementById('auto-download-toggle') as HTMLInputElement;
+    private readonly formatSog4 = document.getElementById('format-sog4') as HTMLInputElement;
+    private readonly formatPlySeq = document.getElementById('format-plyseq') as HTMLInputElement;
     private readonly summaryQueued = document.getElementById('summary-queued') as HTMLDivElement;
     private readonly summaryDone = document.getElementById('summary-done') as HTMLDivElement;
     private readonly summaryError = document.getElementById('summary-error') as HTMLDivElement;
@@ -161,11 +167,17 @@ class BatchConvertApp {
         });
     }
 
+    private getExportFormat(): 'sog4' | 'plyseq' {
+        if (this.formatPlySeq?.checked) return 'plyseq';
+        return 'sog4';
+    }
+
     private createSteps(): Record<StepKey, BatchStep> {
+        const format = this.getExportFormat();
         return {
             prepare: createStep('Prepare Queue Item'),
             load: createStep('Load PLY4'),
-            encode: createStep('Encode SOG4'),
+            encode: createStep(format === 'plyseq' ? 'Export PLY Sequence' : 'Encode SOG4'),
             download: createStep('Download Output')
         };
     }
@@ -212,15 +224,20 @@ class BatchConvertApp {
         this.isConverting = true;
         this.render();
 
+        const format = this.getExportFormat();
+        let frameOffset = 0;
         for (const task of queue) {
-            await this.convertTask(task);
+            await this.convertTask(task, frameOffset);
+            if (format === 'plyseq') {
+                frameOffset += task.frameCount || 0;
+            }
         }
 
         this.isConverting = false;
         this.render();
     }
 
-    private async convertTask(task: BatchTask) {
+    private async convertTask(task: BatchTask, baseFrameOffset: number = 0) {
         let parsed: any = null;
         try {
             task.status = 'preparing';
@@ -279,32 +296,77 @@ class BatchConvertApp {
             });
 
             task.status = 'encoding';
-            const encodeOverrides = {
-                rawFloatPayload: false,
-                model_transform: buildTransformOverride(parsed)
-            };
+            const format = this.getExportFormat();
+            let buffer: ArrayBuffer | Uint8Array;
+            let outputName: string;
 
-            const buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
-                mode: 'standard',
-                progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
-                    const detail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+            if (format === 'plyseq') {
+                const baseName = task.file.name.replace(/\.[^/.]+$/, '');
+                
+                // #WDD 2026-04-19 使用专门的新工具类导出为标准PLY序列，并自带结合了生命周期的透明度过滤。
+                const { frameCount: totalFrames, buffers } = await exportPLYSequence(parsed, baseName, (pct, msg) => {
                     this.setStep(task, 'encode', {
                         state: pct >= 100 ? 'done' : 'active',
                         pct,
-                        detail,
-                        childLabel: meta?.stageLabel || message,
-                        childPct: meta?.stagePct ?? pct,
-                        grandchildLabel: detail,
-                        grandchildPct: meta?.stagePct ?? pct
+                        detail: msg,
+                        childLabel: 'Export PLY Sequence',
+                        childPct: pct,
+                        grandchildLabel: msg,
+                        grandchildPct: pct
                     });
-                    task.summary = detail;
-                    this.pushLog(task, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                    task.summary = msg;
                     this.render();
-                }
-            });
+                });
 
-            const outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
-            const blob = new Blob([buffer.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+                for (let i = 0; i < totalFrames; i++) {
+                    const globalFrameIndex = baseFrameOffset + i;
+                    const paddedIdx = String(globalFrameIndex).padStart(3, '0');
+                    const fileName = `${baseName}_${paddedIdx}.ply`;
+
+                    const blob = new Blob([buffers[i]], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    this.triggerDownload(url, fileName);
+                    URL.revokeObjectURL(url);
+                    
+                    if (i < totalFrames - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                    }
+                }
+
+                task.status = 'done';
+                this.setStep(task, 'encode', { state: 'done', pct: 100 });
+                this.setStep(task, 'download', { state: 'done', pct: 100 });
+                task.summary = `Completed • ${totalFrames} frames saved`;
+                this.render();
+                return;
+            } else {
+                const encodeOverrides = {
+                    rawFloatPayload: false,
+                    model_transform: buildTransformOverride(parsed)
+                };
+                buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
+                    mode: 'standard',
+                    progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
+                        const detail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+                        this.setStep(task, 'encode', {
+                            state: pct >= 100 ? 'done' : 'active',
+                            pct,
+                            detail,
+                            childLabel: meta?.stageLabel || message,
+                            childPct: meta?.stagePct ?? pct,
+                            grandchildLabel: detail,
+                            grandchildPct: meta?.stagePct ?? pct
+                        });
+                        task.summary = detail;
+                        this.pushLog(task, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                        this.render();
+                    }
+                });
+                outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
+            }
+
+            const blob = new Blob([buffer as BlobPart], { type: 'application/octet-stream' });
             if (task.outputUrl) URL.revokeObjectURL(task.outputUrl);
             task.outputUrl = URL.createObjectURL(blob);
             task.outputName = outputName;

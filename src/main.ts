@@ -5080,7 +5080,16 @@ const duration = parsed.frames || parsed.maxMu || 100;
             xyzStride: this.xyzStride,
             rotKeyframes: this.rotKeyframes,
             rotStride: this.rotStride,
+            dcKeyframes: this.dcKeyframes,
+            dcStride: this.dcStride,
             texWidth: 4096 // We use 4096 in our creation logic
+        };
+
+        const exportSource = {
+            getProp: (name: string) => splatData.getProp(name),
+            originalIndices: this.originalIndices,
+            opacitySemantic: this.lastParsedData.opacitySemantic,
+            rotationSemantic: this.lastParsedData.rotationSemantic
         };
 
         const buffer = await PlyExporter.exportFrameFromTextures(
@@ -5090,9 +5099,10 @@ const duration = parsed.frames || parsed.maxMu || 100;
             this.lifeTexData!,
             this.trajectoryData!, // Raw trajectory keyframes
             this.rotTrajectoryData!, // Raw rotation keyframes
+            this.dcTrajectoryData!, // Raw color keyframes
             this.scalesTexData, // Pack of scale_0,1,2,0
             params,
-            this.lastParsedData
+            exportSource
         );
 
         const filename = `gpu_reconstruct_${this.currentFileName}_f${this.currentTime.toFixed(1)}.ply`;

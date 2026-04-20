@@ -50,126 +50,206 @@ def extract_checkpoint_to_ply(model_path, iteration, output_path):
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     params = list(ckpt[0])
     
-    # Extract parameters based on known indices from post_save.py/gaussian_model.py
-    # 0: ? (active_sh_degree)
-    # 1: _xyz (Don't save)
-    # 2: _features_dc
-    # 3: _features_rest
-    # 4: _scaling
-    # 5: _rotation (Don't save)
-    # 6: _opacity
-    # 7: lifetime_bank (Don't save)
-    # 8: _xyz_bank
-    # 9: max_radii2D (Don't save)
-    # ...
-    # 16: _lifetime_mu
-    # 17: _lifetime_w
-    # 18: total_frames (int)
-    # 19: xyz_bank_keyframe_stride (int)
-    # 20: _rot_bank
-    # 21: rot_bank_keyframe_stride (int)
-
-    # Note: Indices might vary if implementation changes, but these match previous research.
-    
-    xyz_bank_param = params[8]
-    if xyz_bank_param is None or len(xyz_bank_param) == 0:
-        raise ValueError("xyz_bank is missing or empty in checkpoint.")
-        
-    # Get frame 0 for sorting anchors
-    anchor = xyz_bank_param[:, 0, :].detach().cpu().numpy()
-    
-    print("Sorting data via Morton codes...")
-    indices = morton_sort(anchor[:, 0], anchor[:, 1], anchor[:, 2])
-    
-    # Apply sort to arrays we need
-    def sort_param(idx):
+    # Helper to get numpy array from params safely
+    def get_numpy(idx):
         if idx < len(params) and params[idx] is not None:
-             # Check if it's a tensor
-             if isinstance(params[idx], torch.Tensor):
-                 return params[idx][indices].detach().cpu().numpy()
-             else:
-                 # Scalar values or other types likely don't need sorting, 
-                 # but we are only sorting per-point arrays here.
-                 return params[idx]
+             p = params[idx]
+             if isinstance(p, torch.Tensor):
+                 return p.detach().cpu().numpy()
+             return p
         return None
 
-    # Retrieve and sort required data
-    f_dc = sort_param(2)
-    f_rest = sort_param(3)
-    scale = sort_param(4)
-    opacity = sort_param(6)
-    xyz_bank = sort_param(8)
-    mu = sort_param(16)
-    w = sort_param(17)
-    rot_bank = sort_param(20)
+    # Check for static mask (index 24)
+    static_mask = get_numpy(24)
+    if static_mask is not None:
+        static_mask = static_mask.astype(bool)
+        
+    # Retrieve raw data chunks
+    xyz_static = get_numpy(1)        # _xyz
+    f_dc_static = get_numpy(2)       # _features_dc
+    rot_static = get_numpy(5)        # _rotation 
     
-    # Constants
+    xyz_dyn_bank = get_numpy(8)      # _xyz_bank
+    rot_dyn_bank = get_numpy(20)     # _rot_bank
+    f_dc_dyn_bank = get_numpy(22)    # _features_dc_bank
+    
+    # Unified Attributes (already N)
+    f_rest = get_numpy(3)
+    scale = get_numpy(4)
+    opacity = get_numpy(6)
+    mu = get_numpy(16)
+    w = get_numpy(17)
+    
+    # Determine N
+    if static_mask is not None:
+        N = len(static_mask)
+    else:
+        # Fallback: assume xyz_bank is everything if present, else xyz
+        if xyz_dyn_bank is not None:
+            N = xyz_dyn_bank.shape[0]
+        elif xyz_static is not None:
+            N = xyz_static.shape[0]
+        else:
+             raise ValueError("Cannot determine N (no xyz or xyz_bank)")
+
+    print(f"Total points: {N}")
+    if static_mask is not None:
+        print(f"Static: {np.sum(static_mask)}, Dynamic: {np.sum(~static_mask)}")
+
+    # Prepare Unified Banks
+    # XYZ Bank
+    K_xyz = 1
+    if xyz_dyn_bank is not None and xyz_dyn_bank.ndim == 3: K_xyz = xyz_dyn_bank.shape[1]
+    
+    xyz_bank = np.zeros((N, K_xyz, 3), dtype=np.float32)
+    
+    if static_mask is not None:
+        if np.any(static_mask) and xyz_static is not None:
+             # Replicate static xyz for all K
+             xyz_bank[static_mask] = xyz_static[:, None, :]
+        if np.any(~static_mask) and xyz_dyn_bank is not None:
+             xyz_bank[~static_mask] = xyz_dyn_bank
+    else:
+        if xyz_dyn_bank is not None:
+            xyz_bank = xyz_dyn_bank
+        elif xyz_static is not None:
+            # Assume constant motion if only static
+            xyz_bank[:, 0, :] = xyz_static 
+            for k_idx in range(1, K_xyz):
+                xyz_bank[:, k_idx, :] = xyz_static
+             
+    # ROT Bank
+    K_rot = 0
+    if rot_dyn_bank is not None and rot_dyn_bank.ndim == 3: 
+        K_rot = rot_dyn_bank.shape[1]
+    
+    # If dynamic bank exists, we should populate rot_bank
+    rot_bank = None
+    if K_rot > 0:
+        rot_bank = np.zeros((N, K_rot, 4), dtype=np.float32)
+        rot_bank[:, :, 0] = 1.0 # Default quaternion (1, 0, 0, 0)
+        
+        if static_mask is not None:
+             if np.any(static_mask) and rot_static is not None:
+                 rot_bank[static_mask] = rot_static[:, None, :]
+             if np.any(~static_mask) and rot_dyn_bank is not None:
+                 rot_bank[~static_mask] = rot_dyn_bank
+        else:
+            if rot_dyn_bank is not None: rot_bank = rot_dyn_bank
+    
+    # DC Bank
+    K_dc = 0
+    if f_dc_dyn_bank is not None and f_dc_dyn_bank.ndim == 4: # (N_d, K, 1, 3)
+         K_dc = f_dc_dyn_bank.shape[1]
+         
+    f_dc_bank = None
+    if K_dc > 0:
+        f_dc_bank = np.zeros((N, K_dc, 1, 3), dtype=np.float32)
+        if static_mask is not None:
+            if np.any(static_mask) and f_dc_static is not None:
+                # f_dc_static is (N_s, 1, 3) -> broadcast to (N_s, K, 1, 3)
+                f_dc_bank[static_mask] = f_dc_static[:, None, :, :]
+            if np.any(~static_mask) and f_dc_dyn_bank is not None:
+                f_dc_bank[~static_mask] = f_dc_dyn_bank
+        else:
+             if f_dc_dyn_bank is not None: f_dc_bank = f_dc_dyn_bank
+             
+    # Construct "f_dc" (N, 1, 3) for base attributes (e.g. at t=0 or frame 0)
+    if static_mask is not None:
+        f_dc = np.zeros((N, 1, 3), dtype=np.float32)
+        if np.any(static_mask) and f_dc_static is not None:
+             f_dc[static_mask] = f_dc_static
+        if np.any(~static_mask):
+             if f_dc_dyn_bank is not None:
+                 # Use first frame of dynamic bank as "base" DC
+                 f_dc[~static_mask] = f_dc_dyn_bank[:, 0, :, :]
+             elif f_dc_static is not None: 
+                 # Fallback logic if dynamic bank missing?
+                 pass 
+    else:
+        # If no static mask, maybe it's all static or all dynamic
+        if f_dc_static is not None:
+             f_dc = f_dc_static
+        elif f_dc_dyn_bank is not None:
+             f_dc = f_dc_dyn_bank[:, 0, :, :]
+        
+    # Sort
+    anchor = xyz_bank[:, 0, :]
+    print("Sorting data via Morton codes...")
+    indices = morton_sort(anchor[:, 0], anchor[:, 1], anchor[:, 2])
+
+    def apply_sort(arr):
+        if arr is not None:
+            return arr[indices]
+        return None
+        
+    xyz_bank = apply_sort(xyz_bank)
+    rot_bank = apply_sort(rot_bank)
+    f_dc_bank = apply_sort(f_dc_bank)
+    f_dc = apply_sort(f_dc)
+    f_rest = apply_sort(f_rest)
+    scale = apply_sort(scale)
+    opacity = apply_sort(opacity)
+    mu = apply_sort(mu)
+    w = apply_sort(w)
+    
+    # Retrieve Strides
     total_frames = int(params[18])
     xyz_stride = int(params[19])
-    if len(params) > 21:
-        rot_stride = int(params[21])
-    else:
-        rot_stride = xyz_stride # Fallback
-        
-    N = xyz_bank.shape[0]
     
+    rot_stride = xyz_stride
+    if len(params) > 21: rot_stride = int(params[21])
+    
+    f_dc_stride = xyz_stride
+    if len(params) > 23: f_dc_stride = int(params[23])
+
+    print(f"Preparing PLY data: N={N}, K_xyz={K_xyz}, K_rot={K_rot}, K_dc={K_dc}")
+
     # Construct PLY attributes
-    # 1. xyz (use frame 0 of xyz_bank as anchor/display position)
+    # 1. xyz (frame 0)
     xyz = xyz_bank[:, 0, :]
     
     # 2. f_dc (flattened)
-    # f_dc shape: (N, 1, 3) -> (N, 3) -> f_dc_0, f_dc_1, f_dc_2
-    f_dc = f_dc.transpose(0, 2, 1).reshape(N, -1)
+    if f_dc is not None:
+        # f_dc is (N, 1, 3) -> reshape to (N, 3)
+        f_dc = f_dc.transpose(0, 2, 1).reshape(N, -1)
     
     # 3. f_rest (flattened)
-    # f_rest shape: (N, 15, 3) -> (N, 45) -> f_rest_0...
-    f_rest = f_rest.transpose(0, 2, 1).reshape(N, -1)
+    if f_rest is not None:
+        # f_rest is (N, feature_dim, 3)
+        f_rest = f_rest.transpose(0, 2, 1).reshape(N, -1)
     
-    # 4. opacity (N, 1) -> opacity
-    if opacity.ndim == 2:
+    # 4. opacity
+    if opacity is not None and opacity.ndim == 2:
         opacity = opacity.flatten()
         
-    # 5. scale (N, 3) -> scale_0, scale_1, scale_2
-    # 6. mu (N, 1) -> lifetime_mu
-    if mu is not None:
-        mu = mu.flatten()
-    else:
-        mu = np.zeros(N) # Or handle as missing
-        
-    # 7. w (N, 1) -> lifetime_w
-    if w is not None:
-        w = w.flatten()
-    else:
-        w = np.zeros(N)
+    # 5. mu / w
+    if mu is not None: mu = mu.flatten()
+    else: mu = np.zeros(N)
+    
+    if w is not None: w = w.flatten()
+    else: w = np.zeros(N)
 
-    # 8. xyz_bank (N, K, 3) -> xyz_bank_{k}_{x,y,z}
-    K_xyz = xyz_bank.shape[1]
-    
-    # 9. rot_bank (N, K_rot, 4) -> rot_bank_{k}_{x,y,z,w}
-    if rot_bank is not None:
-        K_rot = rot_bank.shape[1]
-    else:
-        K_rot = 0
-        
-    print(f"Preparing PLY data: N={N}, K_xyz={K_xyz}, K_rot={K_rot}")
-    
     # Define Dtype
     dtype_list = [
         ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
         ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')
     ]
     
-    for i in range(f_dc.shape[1]):
-        dtype_list.append((f'f_dc_{i}', 'f4'))
-    for i in range(f_rest.shape[1]):
-        dtype_list.append((f'f_rest_{i}', 'f4'))
+    if f_dc is not None:
+        for i in range(f_dc.shape[1]):
+            dtype_list.append((f'f_dc_{i}', 'f4'))
+    
+    if f_rest is not None:
+        for i in range(f_rest.shape[1]):
+            dtype_list.append((f'f_rest_{i}', 'f4'))
         
     dtype_list.append(('opacity', 'f4'))
     
-    for i in range(scale.shape[1]):
-        dtype_list.append((f'scale_{i}', 'f4'))
+    if scale is not None:
+        for i in range(scale.shape[1]):
+            dtype_list.append((f'scale_{i}', 'f4'))
         
-    # User requested lifetime mu and w
     dtype_list.append(('lifetime_mu', 'f4'))
     dtype_list.append(('lifetime_w', 'f4'))
     
@@ -180,15 +260,19 @@ def extract_checkpoint_to_ply(model_path, iteration, output_path):
              
     if K_rot > 0:
         for k in range(K_rot):
-            for coord in ['x', 'y', 'z', 'w']:
+            for coord in ['w', 'x', 'y', 'z']:
                 dtype_list.append((f'rot_bank_{k}_{coord}', 'f4'))
+
+    if K_dc > 0:
+        for k in range(K_dc):
+            for ch in range(3):
+                dtype_list.append((f'f_dc_bank_{k}_{ch}', 'f4'))
+
     
     # Assemble Data
-    # Pre-allocate structured array
     dtype = np.dtype(dtype_list)
     arr = np.empty(N, dtype=dtype)
     
-    # Fill Data
     arr['x'] = xyz[:, 0]
     arr['y'] = xyz[:, 1]
     arr['z'] = xyz[:, 2]
@@ -196,64 +280,22 @@ def extract_checkpoint_to_ply(model_path, iteration, output_path):
     arr['ny'] = 0
     arr['nz'] = 0
     
-    for i in range(f_dc.shape[1]):
-        arr[f'f_dc_{i}'] = f_dc[:, i]
-    for i in range(f_rest.shape[1]):
-        arr[f'f_rest_{i}'] = f_rest[:, i]
+    if f_dc is not None:
+        for i in range(f_dc.shape[1]):
+            arr[f'f_dc_{i}'] = f_dc[:, i]
+            
+    if f_rest is not None:
+        for i in range(f_rest.shape[1]):
+            arr[f'f_rest_{i}'] = f_rest[:, i]
         
     arr['opacity'] = opacity
     
-    for i in range(scale.shape[1]):
-        arr[f'scale_{i}'] = scale[:, i]
+    if scale is not None:
+        for i in range(scale.shape[1]):
+            arr[f'scale_{i}'] = scale[:, i]
         
     arr['lifetime_mu'] = mu
     arr['lifetime_w'] = w
-    
-    # XYZ Bank
-    # Flattening xyz_bank to (N, K*3)
-    xyz_bank_flat = xyz_bank.reshape(N, -1)
-    # Fill by name
-    # The order of columns in flattened array matches the nested loop order [k, coord]
-    # provided we constructed the flatten correctly (C-order).
-    # xyz_bank is (N, K, 3). Flatten -> (N, K*3): sorted as k=0(x,y,z), k=1(x,y,z)...
-    
-    idx = 0
-    for k in range(K_xyz):
-        for coord in ['x', 'y', 'z']:
-            # xyz_bank_{k}_{coord}
-            arr[dtype_list[6 + f_dc.shape[1] + f_rest.shape[1] + 1 + scale.shape[1] + 2 + idx][0]] = xyz_bank_flat[:, idx]
-            idx += 1
-            
-    # ROT Bank
-    if K_rot > 0:
-        rot_bank_flat = rot_bank.reshape(N, -1)
-        rot_idx = 0
-        start_rot_idx = 6 + f_dc.shape[1] + f_rest.shape[1] + 1 + scale.shape[1] + 2 + idx
-        for k in range(K_rot):
-            for coord in ['x', 'y', 'z', 'w']:
-                 arr[dtype_list[start_rot_idx + rot_idx][0]] = rot_bank_flat[:, rot_idx]
-                 rot_idx += 1
-                 
-    # Better way to fill safely by name to avoid index arithmetic errors
-    # (Though slower, but safer. Optimizing with bulk assignment above is fine if indices match)
-    # Let's double check bulk assignment logic or just loop keys.
-    # To be extremely safe and given N is ~millions, loop over columns.
-    
-    # Redo bank assignment safely
-    print("Populating data structure...")
-    col_idx = 0
-    # xyz, n
-    col_idx += 6
-    # f_dc
-    col_idx += f_dc.shape[1]
-    # f_rest
-    col_idx += f_rest.shape[1]
-    # opac
-    col_idx += 1
-    # scale
-    col_idx += scale.shape[1]
-    # life
-    col_idx += 2
     
     # XYZ Bank assignment
     for k in range(K_xyz):
@@ -261,13 +303,20 @@ def extract_checkpoint_to_ply(model_path, iteration, output_path):
         arr[f'xyz_bank_{k}_y'] = xyz_bank[:, k, 1]
         arr[f'xyz_bank_{k}_z'] = xyz_bank[:, k, 2]
         
-    # ROT Bank assignment
+    # ROT Bank assignment (quaternion order: w, x, y, z)
     if K_rot > 0:
         for k in range(K_rot):
-            arr[f'rot_bank_{k}_x'] = rot_bank[:, k, 0]
-            arr[f'rot_bank_{k}_y'] = rot_bank[:, k, 1]
-            arr[f'rot_bank_{k}_z'] = rot_bank[:, k, 2]
-            arr[f'rot_bank_{k}_w'] = rot_bank[:, k, 3]
+            arr[f'rot_bank_{k}_w'] = rot_bank[:, k, 0]
+            arr[f'rot_bank_{k}_x'] = rot_bank[:, k, 1]
+            arr[f'rot_bank_{k}_y'] = rot_bank[:, k, 2]
+            arr[f'rot_bank_{k}_z'] = rot_bank[:, k, 3]
+
+    if K_dc > 0:
+        for k in range(K_dc):
+            arr[f'f_dc_bank_{k}_0'] = f_dc_bank[:, k, 0, 0]
+            arr[f'f_dc_bank_{k}_1'] = f_dc_bank[:, k, 0, 1]
+            arr[f'f_dc_bank_{k}_2'] = f_dc_bank[:, k, 0, 2]
+
 
     print(f"Saving PLY to {output_path}...")
     
@@ -275,12 +324,415 @@ def extract_checkpoint_to_ply(model_path, iteration, output_path):
     comments = [
         f"total_frames {total_frames}",
         f"xyz_bank_keyframe_stride {xyz_stride}",
-        f"rot_bank_keyframe_stride {rot_stride}"
+        f"rot_bank_keyframe_stride {rot_stride}",
+        f"features_dc_bank_keyframe_stride {f_dc_stride}"
     ]
     
     el = PlyElement.describe(arr, 'vertex')
     PlyData([el], comments=comments).write(output_path)
     print("Done.")
+
+def extract_checkpoint_to_ply_filter(model_path, iteration, output_path):
+    """
+    Extract checkpoint to PLY with filtering: zero out bank data for inactive time slots.
+    Uses conservative strategy to ensure active time slots are absolutely correct.
+    """
+    ckpt_path = os.path.join(model_path, f"chkpnt{iteration}.pth")
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
+
+    print(f"Loading checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    params = list(ckpt[0])
+
+    # Helper to get numpy array from params safely
+    def get_numpy(idx):
+        if idx < len(params) and params[idx] is not None:
+             p = params[idx]
+             if isinstance(p, torch.Tensor):
+                 return p.detach().cpu().numpy()
+             return p
+        return None
+
+    # Check for static mask (index 24)
+    static_mask = get_numpy(24)
+    if static_mask is not None:
+        static_mask = static_mask.astype(bool)
+
+    # Retrieve raw data chunks
+    xyz_static = get_numpy(1)        # _xyz
+    f_dc_static = get_numpy(2)       # _features_dc
+    rot_static = get_numpy(5)        # _rotation
+
+    xyz_dyn_bank = get_numpy(8)      # _xyz_bank
+    rot_dyn_bank = get_numpy(20)     # _rot_bank
+    f_dc_dyn_bank = get_numpy(22)    # _features_dc_bank
+
+    # Unified Attributes (already N)
+    f_rest = get_numpy(3)
+    scale = get_numpy(4)
+    opacity = get_numpy(6)
+    mu = get_numpy(16)
+    w = get_numpy(17)
+
+    # Determine N
+    if static_mask is not None:
+        N = len(static_mask)
+    else:
+        # Fallback: assume xyz_bank is everything if present, else xyz
+        if xyz_dyn_bank is not None:
+            N = xyz_dyn_bank.shape[0]
+        elif xyz_static is not None:
+            N = xyz_static.shape[0]
+        else:
+             raise ValueError("Cannot determine N (no xyz or xyz_bank)")
+
+    print(f"Total points: {N}")
+    if static_mask is not None:
+        print(f"Static: {np.sum(static_mask)}, Dynamic: {np.sum(~static_mask)}")
+
+    # Retrieve Strides and total_frames first (needed for filtering)
+    total_frames = int(params[18])
+    xyz_stride = int(params[19])
+
+    rot_stride = xyz_stride
+    if len(params) > 21: rot_stride = int(params[21])
+
+    f_dc_stride = xyz_stride
+    if len(params) > 23: f_dc_stride = int(params[23])
+
+    print(f"Total frames: {total_frames}, xyz_stride: {xyz_stride}, rot_stride: {rot_stride}, f_dc_stride: {f_dc_stride}")
+
+    # Prepare Unified Banks
+    # XYZ Bank
+    K_xyz = 1
+    if xyz_dyn_bank is not None and xyz_dyn_bank.ndim == 3: K_xyz = xyz_dyn_bank.shape[1]
+
+    xyz_bank = np.zeros((N, K_xyz, 3), dtype=np.float32)
+
+    if static_mask is not None:
+        if np.any(static_mask) and xyz_static is not None:
+             # Replicate static xyz for all K
+             xyz_bank[static_mask] = xyz_static[:, None, :]
+        if np.any(~static_mask) and xyz_dyn_bank is not None:
+             xyz_bank[~static_mask] = xyz_dyn_bank
+    else:
+        if xyz_dyn_bank is not None:
+            xyz_bank = xyz_dyn_bank
+        elif xyz_static is not None:
+            # Assume constant motion if only static
+            xyz_bank[:, 0, :] = xyz_static
+            for k_idx in range(1, K_xyz):
+                xyz_bank[:, k_idx, :] = xyz_static
+
+    # ROT Bank
+    K_rot = 0
+    if rot_dyn_bank is not None and rot_dyn_bank.ndim == 3:
+        K_rot = rot_dyn_bank.shape[1]
+
+    # If dynamic bank exists, we should populate rot_bank
+    rot_bank = None
+    if K_rot > 0:
+        rot_bank = np.zeros((N, K_rot, 4), dtype=np.float32)
+        rot_bank[:, :, 0] = 1.0 # Default quaternion (1, 0, 0, 0)
+
+        if static_mask is not None:
+             if np.any(static_mask) and rot_static is not None:
+                 rot_bank[static_mask] = rot_static[:, None, :]
+             if np.any(~static_mask) and rot_dyn_bank is not None:
+                 rot_bank[~static_mask] = rot_dyn_bank
+        else:
+            if rot_dyn_bank is not None: rot_bank = rot_dyn_bank
+
+    # DC Bank
+    K_dc = 0
+    if f_dc_dyn_bank is not None and f_dc_dyn_bank.ndim == 4: # (N_d, K, 1, 3)
+         K_dc = f_dc_dyn_bank.shape[1]
+
+    f_dc_bank = None
+    if K_dc > 0:
+        f_dc_bank = np.zeros((N, K_dc, 1, 3), dtype=np.float32)
+        if static_mask is not None:
+            if np.any(static_mask) and f_dc_static is not None:
+                # f_dc_static is (N_s, 1, 3) -> broadcast to (N_s, K, 1, 3)
+                f_dc_bank[static_mask] = f_dc_static[:, None, :, :]
+            if np.any(~static_mask) and f_dc_dyn_bank is not None:
+                f_dc_bank[~static_mask] = f_dc_dyn_bank
+        else:
+             if f_dc_dyn_bank is not None: f_dc_bank = f_dc_dyn_bank
+
+    # Construct "f_dc" (N, 1, 3) for base attributes (e.g. at t=0 or frame 0)
+    if static_mask is not None:
+        f_dc = np.zeros((N, 1, 3), dtype=np.float32)
+        if np.any(static_mask) and f_dc_static is not None:
+             f_dc[static_mask] = f_dc_static
+        if np.any(~static_mask):
+             if f_dc_dyn_bank is not None:
+                 # Use first frame of dynamic bank as "base" DC
+                 f_dc[~static_mask] = f_dc_dyn_bank[:, 0, :, :]
+             elif f_dc_static is not None:
+                 # Fallback logic if dynamic bank missing?
+                 pass
+    else:
+        # If no static mask, maybe it's all static or all dynamic
+        if f_dc_static is not None:
+             f_dc = f_dc_static
+        elif f_dc_dyn_bank is not None:
+             f_dc = f_dc_dyn_bank[:, 0, :, :]
+
+    # ============ FILTERING: Zero out inactive bank slots ============
+    # Strategy: For each point, find which keyframe slots are needed for interpolation
+    # during its active time range [mu-w, mu+w]. Only zero out slots that are
+    # completely outside this range and not needed for interpolation.
+    #
+    # Key insight: Interpolation at time t uses keyframes idx and idx+1 where
+    # t is in [key_times[idx], key_times[idx+1]]. So we must keep ALL keyframes
+    # that bound ANY active time for this point.
+    #
+    # IMPORTANT: Static points are ALWAYS active and should NEVER be filtered!
+
+    if mu is not None and w is not None:
+        mu_flat = mu.flatten()
+        w_flat = w.flatten()
+
+        # Compute active time range for each point
+        active_start = mu_flat - w_flat  # (N,)
+        active_end = mu_flat + w_flat    # (N,)
+
+        # Static points should never be filtered - mark them as always active
+        if static_mask is not None:
+            active_start[static_mask] = -np.inf
+            active_end[static_mask] = np.inf
+
+        print("Filtering inactive bank slots...")
+        if static_mask is not None:
+            print(f"  (Static points: {np.sum(static_mask)} will NOT be filtered)")
+
+        # Compute keyframe times
+        def get_keyframe_times(stride, K):
+            times = list(range(0, total_frames, stride))
+            if times[-1] != total_frames - 1:
+                times.append(total_frames - 1)
+            return times[:K]
+
+        def compute_needed_keyframes(key_times, K, active_start, active_end):
+            """
+            For each point, compute which keyframe indices are needed.
+            A keyframe k is needed if it's used in interpolation for any time t in [active_start, active_end].
+
+            Interpolation at time t uses keyframes idx and idx+1 where key_times[idx] <= t < key_times[idx+1].
+            So we need all keyframes from the one BEFORE active_start to the one AFTER active_end.
+            """
+            key_times = np.array(key_times)
+            N = len(active_start)
+
+            # For each point, find the first keyframe index needed (the one at or before active_start)
+            # searchsorted returns insertion point, so we need idx-1 for the keyframe before
+            first_needed = np.searchsorted(key_times, active_start, side='right') - 1
+            first_needed = np.clip(first_needed, 0, K - 1)
+
+            # Find the last keyframe index needed (the one at or after active_end)
+            # This is the upper bound of the interpolation interval
+            last_needed = np.searchsorted(key_times, active_end, side='left')
+            last_needed = np.clip(last_needed, 0, K - 1)
+
+            return first_needed, last_needed  # Both are (N,) arrays
+
+        # Filter XYZ bank
+        if K_xyz > 1:
+            xyz_key_times = get_keyframe_times(xyz_stride, K_xyz)
+            first_needed, last_needed = compute_needed_keyframes(xyz_key_times, K_xyz, active_start, active_end)
+
+            zeros_count = 0
+            for k in range(K_xyz):
+                # A slot k is inactive for point i if k < first_needed[i] or k > last_needed[i]
+                inactive_mask = (k < first_needed) | (k > last_needed)
+                xyz_bank[inactive_mask, k, :] = 0.0
+                zeros_count += np.sum(inactive_mask)
+
+            print(f"  XYZ bank: zeroed {zeros_count} / {N * K_xyz} slots ({100.0 * zeros_count / (N * K_xyz):.2f}%)")
+
+        # Filter ROT bank
+        if rot_bank is not None and K_rot > 1:
+            rot_key_times = get_keyframe_times(rot_stride, K_rot)
+            first_needed, last_needed = compute_needed_keyframes(rot_key_times, K_rot, active_start, active_end)
+
+            zeros_count = 0
+            for k in range(K_rot):
+                inactive_mask = (k < first_needed) | (k > last_needed)
+                # For rotation, set to identity quaternion (1, 0, 0, 0)
+                rot_bank[inactive_mask, k, :] = 0.0
+                rot_bank[inactive_mask, k, 0] = 1.0
+                zeros_count += np.sum(inactive_mask)
+
+            print(f"  ROT bank: zeroed {zeros_count} / {N * K_rot} slots ({100.0 * zeros_count / (N * K_rot):.2f}%)")
+
+        # Filter DC bank
+        if f_dc_bank is not None and K_dc > 1:
+            f_dc_key_times = get_keyframe_times(f_dc_stride, K_dc)
+            first_needed, last_needed = compute_needed_keyframes(f_dc_key_times, K_dc, active_start, active_end)
+
+            zeros_count = 0
+            for k in range(K_dc):
+                inactive_mask = (k < first_needed) | (k > last_needed)
+                f_dc_bank[inactive_mask, k, :, :] = 0.0
+                zeros_count += np.sum(inactive_mask)
+
+            print(f"  DC bank: zeroed {zeros_count} / {N * K_dc} slots ({100.0 * zeros_count / (N * K_dc):.2f}%)")
+    else:
+        print("Warning: lifetime_mu or lifetime_w not found, skipping filtering")
+
+    # ============ END FILTERING ============
+
+    # Sort
+    anchor = xyz_bank[:, 0, :]
+    print("Sorting data via Morton codes...")
+    indices = morton_sort(anchor[:, 0], anchor[:, 1], anchor[:, 2])
+
+    def apply_sort(arr):
+        if arr is not None:
+            return arr[indices]
+        return None
+
+    xyz_bank = apply_sort(xyz_bank)
+    rot_bank = apply_sort(rot_bank)
+    f_dc_bank = apply_sort(f_dc_bank)
+    f_dc = apply_sort(f_dc)
+    f_rest = apply_sort(f_rest)
+    scale = apply_sort(scale)
+    opacity = apply_sort(opacity)
+    mu = apply_sort(mu)
+    w = apply_sort(w)
+
+    print(f"Preparing PLY data: N={N}, K_xyz={K_xyz}, K_rot={K_rot}, K_dc={K_dc}")
+
+    # Construct PLY attributes
+    # 1. xyz (frame 0)
+    xyz = xyz_bank[:, 0, :]
+
+    # 2. f_dc (flattened)
+    if f_dc is not None:
+        # f_dc is (N, 1, 3) -> reshape to (N, 3)
+        f_dc = f_dc.transpose(0, 2, 1).reshape(N, -1)
+
+    # 3. f_rest (flattened)
+    if f_rest is not None:
+        # f_rest is (N, feature_dim, 3)
+        f_rest = f_rest.transpose(0, 2, 1).reshape(N, -1)
+
+    # 4. opacity
+    if opacity is not None and opacity.ndim == 2:
+        opacity = opacity.flatten()
+
+    # 5. mu / w
+    if mu is not None: mu = mu.flatten()
+    else: mu = np.zeros(N)
+
+    if w is not None: w = w.flatten()
+    else: w = np.zeros(N)
+
+    # Define Dtype
+    dtype_list = [
+        ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+        ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')
+    ]
+
+    if f_dc is not None:
+        for i in range(f_dc.shape[1]):
+            dtype_list.append((f'f_dc_{i}', 'f4'))
+
+    if f_rest is not None:
+        for i in range(f_rest.shape[1]):
+            dtype_list.append((f'f_rest_{i}', 'f4'))
+
+    dtype_list.append(('opacity', 'f4'))
+
+    if scale is not None:
+        for i in range(scale.shape[1]):
+            dtype_list.append((f'scale_{i}', 'f4'))
+
+    dtype_list.append(('lifetime_mu', 'f4'))
+    dtype_list.append(('lifetime_w', 'f4'))
+
+    # Banks
+    for k in range(K_xyz):
+        for coord in ['x', 'y', 'z']:
+             dtype_list.append((f'xyz_bank_{k}_{coord}', 'f4'))
+
+    if K_rot > 0:
+        for k in range(K_rot):
+            for coord in ['w', 'x', 'y', 'z']:
+                dtype_list.append((f'rot_bank_{k}_{coord}', 'f4'))
+
+    if K_dc > 0:
+        for k in range(K_dc):
+            for ch in range(3):
+                dtype_list.append((f'f_dc_bank_{k}_{ch}', 'f4'))
+
+
+    # Assemble Data
+    dtype = np.dtype(dtype_list)
+    arr = np.empty(N, dtype=dtype)
+
+    arr['x'] = xyz[:, 0]
+    arr['y'] = xyz[:, 1]
+    arr['z'] = xyz[:, 2]
+    arr['nx'] = 0
+    arr['ny'] = 0
+    arr['nz'] = 0
+
+    if f_dc is not None:
+        for i in range(f_dc.shape[1]):
+            arr[f'f_dc_{i}'] = f_dc[:, i]
+
+    if f_rest is not None:
+        for i in range(f_rest.shape[1]):
+            arr[f'f_rest_{i}'] = f_rest[:, i]
+
+    arr['opacity'] = opacity
+
+    if scale is not None:
+        for i in range(scale.shape[1]):
+            arr[f'scale_{i}'] = scale[:, i]
+
+    arr['lifetime_mu'] = mu
+    arr['lifetime_w'] = w
+
+    # XYZ Bank assignment
+    for k in range(K_xyz):
+        arr[f'xyz_bank_{k}_x'] = xyz_bank[:, k, 0]
+        arr[f'xyz_bank_{k}_y'] = xyz_bank[:, k, 1]
+        arr[f'xyz_bank_{k}_z'] = xyz_bank[:, k, 2]
+
+    # ROT Bank assignment (quaternion order: w, x, y, z)
+    if K_rot > 0:
+        for k in range(K_rot):
+            arr[f'rot_bank_{k}_w'] = rot_bank[:, k, 0]
+            arr[f'rot_bank_{k}_x'] = rot_bank[:, k, 1]
+            arr[f'rot_bank_{k}_y'] = rot_bank[:, k, 2]
+            arr[f'rot_bank_{k}_z'] = rot_bank[:, k, 3]
+
+    if K_dc > 0:
+        for k in range(K_dc):
+            arr[f'f_dc_bank_{k}_0'] = f_dc_bank[:, k, 0, 0]
+            arr[f'f_dc_bank_{k}_1'] = f_dc_bank[:, k, 0, 1]
+            arr[f'f_dc_bank_{k}_2'] = f_dc_bank[:, k, 0, 2]
+
+
+    print(f"Saving PLY to {output_path}...")
+
+    # Metadata comments
+    comments = [
+        f"total_frames {total_frames}",
+        f"xyz_bank_keyframe_stride {xyz_stride}",
+        f"rot_bank_keyframe_stride {rot_stride}",
+        f"features_dc_bank_keyframe_stride {f_dc_stride}"
+    ]
+
+    el = PlyElement.describe(arr, 'vertex')
+    PlyData([el], comments=comments).write(output_path)
+    print("Done.")
+
 
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20)))
@@ -346,17 +798,22 @@ def save_per_frame_ply(master_ply_path, output_dir):
     # 1. Parse Metadata from comments
     total_frames = 0
     xyz_stride = 1
-    rot_stride = 1 
+    rot_stride = 1
+    f_dc_stride = 1
     
     for comment in plydata.comments:
+
         if "total_frames" in comment:
             total_frames = int(comment.split()[-1])
         elif "xyz_bank_keyframe_stride" in comment:
             xyz_stride = int(comment.split()[-1])
         elif "rot_bank_keyframe_stride" in comment:
             rot_stride = int(comment.split()[-1])
+        elif "features_dc_bank_keyframe_stride" in comment:
+            f_dc_stride = int(comment.split()[-1])
             
-    print(f"Metadata: Total Frames={total_frames}, XYZ Stride={xyz_stride}, ROT Stride={rot_stride}")
+    print(f"Metadata: Total Frames={total_frames}, XYZ Stride={xyz_stride}, ROT Stride={rot_stride}, DC Stride={f_dc_stride}")
+
     if total_frames == 0:
         print("Warning: total_frames not found in comments, assuming single frame or failing.")
         
@@ -371,9 +828,23 @@ def save_per_frame_ply(master_ply_path, output_dir):
     # Load attributes
     print("Loading attributes...")
     # Static attributes
-    f_dc_names = sorted([p.name for p in v.properties if p.name.startswith("f_dc_")], key=lambda x: int(x.split('_')[-1]))
-    f_rest_names = sorted([p.name for p in v.properties if p.name.startswith("f_rest_")], key=lambda x: int(x.split('_')[-1]))
-    scale_names = sorted([p.name for p in v.properties if p.name.startswith("scale_")], key=lambda x: int(x.split('_')[-1]))
+    # NOTE: strictly match "<prefix><index>" to avoid pulling in bank fields
+    # like "f_dc_bank_0_0" when loading base static channels.
+    def get_indexed_prop_names(prefix):
+        names = []
+        for p in v.properties:
+            name = p.name
+            if not name.startswith(prefix):
+                continue
+            suffix = name[len(prefix):]
+            if suffix.isdigit():
+                names.append((int(suffix), name))
+        names.sort(key=lambda x: x[0])
+        return [name for _, name in names]
+
+    f_dc_names = get_indexed_prop_names("f_dc_")
+    f_rest_names = get_indexed_prop_names("f_rest_")
+    scale_names = get_indexed_prop_names("scale_")
     
     f_dc = np.stack([get_prop(n) for n in f_dc_names], axis=1)
     f_rest = np.stack([get_prop(n) for n in f_rest_names], axis=1)
@@ -421,16 +892,35 @@ def save_per_frame_ply(master_ply_path, output_dir):
         
         rot_bank = np.zeros((N, K_rot, 4), dtype=np.float32)
         for k in range(K_rot):
-            rot_bank[:, k, 0] = get_prop(f"rot_bank_{k}_x")
-            rot_bank[:, k, 1] = get_prop(f"rot_bank_{k}_y")
-            rot_bank[:, k, 2] = get_prop(f"rot_bank_{k}_z")
-            rot_bank[:, k, 3] = get_prop(f"rot_bank_{k}_w")
-            
+            rot_bank[:, k, 0] = get_prop(f"rot_bank_{k}_w")
+            rot_bank[:, k, 1] = get_prop(f"rot_bank_{k}_x")
+            rot_bank[:, k, 2] = get_prop(f"rot_bank_{k}_y")
+            rot_bank[:, k, 3] = get_prop(f"rot_bank_{k}_z")
+    
+    f_dc_bank = None
+    K_dc = 0
+    f_dc_bank_props = [p.name for p in v.properties if p.name.startswith("f_dc_bank_")]
+    if f_dc_bank_props:
+        k_dc_max = 0
+        for n in f_dc_bank_props:
+             parts = n.split('_')
+             # f, dc, bank, k, ch
+             k = int(parts[3])
+             if k > k_dc_max: k_dc_max = k
+        K_dc = k_dc_max + 1
+        
+        f_dc_bank = np.zeros((N, K_dc, 3), dtype=np.float32)
+        for k in range(K_dc):
+            f_dc_bank[:, k, 0] = get_prop(f"f_dc_bank_{k}_0")
+            f_dc_bank[:, k, 1] = get_prop(f"f_dc_bank_{k}_1")
+            f_dc_bank[:, k, 2] = get_prop(f"f_dc_bank_{k}_2")
+
     # 3. Generate Frames
     print(f"Generating {total_frames} frames...")
     
     # Compute Keyframe Times
     xyz_key_times = list(range(0, total_frames, xyz_stride))
+
     if xyz_key_times[-1] != total_frames - 1:
         xyz_key_times.append(total_frames - 1)
     xyz_key_times = np.array(xyz_key_times)
@@ -439,6 +929,12 @@ def save_per_frame_ply(master_ply_path, output_dir):
     if rot_key_times[-1] != total_frames - 1:
         rot_key_times.append(total_frames - 1)
     rot_key_times = np.array(rot_key_times)
+
+    f_dc_key_times = list(range(0, total_frames, f_dc_stride))
+    if f_dc_key_times[-1] != total_frames - 1:
+        f_dc_key_times.append(total_frames - 1)
+    f_dc_key_times = np.array(f_dc_key_times)
+
     
     # Prepare Dtype for output
     dtype_list = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')]
@@ -491,6 +987,28 @@ def save_per_frame_ply(master_ply_path, output_dir):
             q0 = rot_bank[:, ridx]
             q1 = rot_bank[:, ridx+1]
             curr_rot = slerp_np(q0, q1, ralpha)
+
+        # Interpolate DC
+        if f_dc_bank is not None:
+            if K_dc == 1:
+                curr_f_dc = f_dc_bank[:, 0]
+            else:
+                didx = np.searchsorted(f_dc_key_times, t, side='right') - 1
+                if didx >= K_dc - 1: didx = K_dc - 2
+                
+                dt0 = f_dc_key_times[didx]
+                dt1 = f_dc_key_times[didx+1]
+                
+                dnumer = float(t - dt0)
+                ddenom = float(dt1 - dt0)
+                dalpha = dnumer / ddenom if ddenom > 0 else 0.0
+                
+                c0 = f_dc_bank[:, didx]
+                c1 = f_dc_bank[:, didx+1]
+                curr_f_dc = c0 * (1.0 - dalpha) + c1 * dalpha
+        else:
+             curr_f_dc = f_dc # Fallback to static
+
             
         # Opacity Gating (Correct Processing: Logit -> Prob -> Gate -> Logit)
         if lifetime_mu is not None and lifetime_w is not None:
@@ -522,8 +1040,15 @@ def save_per_frame_ply(master_ply_path, output_dir):
         arr['z'] = curr_xyz[alive_mask, 2]
         arr['nx'] = 0; arr['ny'] = 0; arr['nz'] = 0
         
-        for i in range(f_dc.shape[1]): arr[f'f_dc_{i}'] = f_dc[alive_mask, i]
+        # Use interpolated DC if available
+        if f_dc_bank is not None:
+             # f_dc is 3 channels
+             for i in range(3): arr[f'f_dc_{i}'] = curr_f_dc[alive_mask, i]
+        else:
+             for i in range(f_dc.shape[1]): arr[f'f_dc_{i}'] = f_dc[alive_mask, i]
+
         for i in range(f_rest.shape[1]): arr[f'f_rest_{i}'] = f_rest[alive_mask, i]
+
         
         arr['opacity'] = curr_opac_logit
         
@@ -538,23 +1063,31 @@ def save_per_frame_ply(master_ply_path, output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract Gaussian Splatting checkpoint to PLY with active attributes")
-    
+
     subparsers = parser.add_subparsers(dest='mode', required=True, help="Mode of operation")
-    
+
     # Extract Mode
     parser_extract = subparsers.add_parser('extract', help="Extract checkpoint to Master PLY")
     parser_extract.add_argument("--model_path", required=True, help="Path to model directory containing checkpoints")
     parser_extract.add_argument("--iteration", type=int, default=30000, help="Iteration number of checkpoint")
     parser_extract.add_argument("--output_path", required=True, help="Output Master PLY file path")
-    
+
+    # Extract Filter Mode (zero out inactive bank slots for better compression)
+    parser_extract_filter = subparsers.add_parser('extract_filter', help="Extract checkpoint to Master PLY with inactive bank slots zeroed out")
+    parser_extract_filter.add_argument("--model_path", required=True, help="Path to model directory containing checkpoints")
+    parser_extract_filter.add_argument("--iteration", type=int, default=30000, help="Iteration number of checkpoint")
+    parser_extract_filter.add_argument("--output_path", required=True, help="Output Master PLY file path")
+
     # Reconstruct Mode
     parser_recon = subparsers.add_parser('reconstruct', help="Reconstruct per-frame PLYs from Master PLY")
     parser_recon.add_argument("--master_ply", required=True, help="Path to Master PLY file")
     parser_recon.add_argument("--output_dir", required=True, help="Directory to save per-frame PLYs")
-    
+
     args = parser.parse_args()
-    
+
     if args.mode == 'extract':
         extract_checkpoint_to_ply(args.model_path, args.iteration, args.output_path)
+    elif args.mode == 'extract_filter':
+        extract_checkpoint_to_ply_filter(args.model_path, args.iteration, args.output_path)
     elif args.mode == 'reconstruct':
         save_per_frame_ply(args.master_ply, args.output_dir)

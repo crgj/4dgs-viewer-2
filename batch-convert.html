@@ -632,10 +632,20 @@
                         <div>
                             <div class="batch-section-title">Input Source</div>
                         </div>
-                        <label class="flex items-center gap-3 text-[11px] ui-text-secondary rounded-2xl px-4 py-3 border border-white/10 bg-white/5">
-                            <input id="auto-download-toggle" type="checkbox" checked />
-                            Auto download
-                        </label>
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
+                                <input id="format-sog4" name="export-format" type="radio" value="sog4" checked class="accent-emerald-500" />
+                                <label for="format-sog4" class="cursor-pointer">SOG4</label>
+                            </div>
+                            <div class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
+                                <input id="format-plyseq" name="export-format" type="radio" value="plyseq" class="accent-blue-500" />
+                                <label for="format-plyseq" class="cursor-pointer">PLY Sequence</label>
+                            </div>
+                            <label class="flex items-center gap-2 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5 ml-1">
+                                <input id="auto-download-toggle" type="checkbox" checked />
+                                Auto download
+                            </label>
+                        </div>
                     </div>
 
                     <div id="batch-dropzone" class="batch-dropzone">
