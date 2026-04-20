@@ -3,6 +3,7 @@ import * as pc from 'playcanvas';
 
 // SVG Icons for Selection Tools
 const ICON_BRUSH = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.93-1.91-1.41 1.41 1.42 1.42L3 19.29V21h1.71l11.96-8.92 1.42 1.42 1.41-1.41-1.92-1.92 3.12-3.12c.4-.4.4-1.03.01-1.42zM5.21 20c-.07.53-.51 1-1.21 1 0 0 0 0 0 0H3v-1.04c-.03.73.5 1.14 1.21 1.21.39.04.79-.12 1-.41z"/></svg>`;
+const ICON_POLY = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 2L20 8l-3 12h-10L4 8l8-6z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="2" r="2"/><circle cx="20" cy="8" r="2"/><circle cx="17" cy="20" r="2"/><circle cx="7" cy="20" r="2"/><circle cx="4" cy="8" r="2"/></svg>`;
 const ICON_RECT = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/></svg>`;
 const ICON_INVERT = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.49 10 10-4.49 10-10 10zm-1-17.93C7.06 4.56 4 7.92 4 12s3.06 7.44 7 7.93V4.07z"/></svg>`;
 const ICON_CLEAR = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
@@ -19,6 +20,7 @@ const ICON_BRUSH_ALLTIME = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5"><path f
 // All-Time Rect icon with clock badge
 const ICON_RECT_ALLTIME = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5"><path fill="currentColor" transform="scale(0.8) translate(1, 3)" d="M4 6v12h16V6H4zm14 10H6V8h12v8z"/><circle cx="19" cy="5" r="4" fill="currentColor" opacity="0.2"/><circle cx="19" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M19 3v2l1.2 0.8" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
 // Help/Question icon
+const ICON_POLY_ALLTIME = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5"><path fill="none" stroke="currentColor" stroke-width="2" transform="scale(0.8) translate(1, 3)" d="M12 2L20 8l-3 12h-10L4 8l8-6z"/><circle cx="19" cy="5" r="4" fill="currentColor" opacity="0.2"/><circle cx="19" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M19 3v2l1.2 0.8" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
 const ICON_HELP = `<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>`;
 
 
@@ -34,7 +36,7 @@ export class SelectionTool {
     allTimeSelectionData: Uint8Array | null = null;
 
     // Tools
-    currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' = 'none';
+    currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' = 'none';
     selectionMode: 'center' | 'ellipse' = 'center';
     brushRadius = 50; // pixels
 
@@ -44,6 +46,10 @@ export class SelectionTool {
     startPos = new pc.Vec2();
     currentPos = new pc.Vec2();
     brushPath: Array<{x: number, y: number}> = []; // #WDD 2026-04-18: Deferred all-time brush path
+    polyPoints: Array<{x: number, y: number}> = []; // #WDD Poly points
+    polyOverlay: SVGElement | null = null;
+    polyLine: SVGPolylineElement | null = null;
+    polyCursorLine: SVGLineElement | null = null;
 
     // UI
     toolbar!: HTMLElement;
@@ -403,7 +409,7 @@ export class SelectionTool {
         div.className = 'fixed left-6 top-1/2 -translate-y-1/2 z-20 flex flex-row items-start gap-2 pointer-events-none transition-all duration-500';
         div.innerHTML = `
             <div class="flex flex-col gap-2">
-                <!-- Selection Tools (4 tools together) -->
+                <!-- Selection Tools (6 tools together) -->
                 <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto">
                     <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush Selection">
                         ${ICON_BRUSH}
@@ -411,12 +417,18 @@ export class SelectionTool {
                     <button id="tool-rect" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Area Selection">
                         ${ICON_RECT}
                     </button>
+                    <button id="tool-poly" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Polygon Selection">
+                        ${ICON_POLY}
+                    </button>
                     <div class="h-px ui-border w-full my-1"></div>
                     <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush Selection">
                         ${ICON_BRUSH_ALLTIME}
                     </button>
                     <button id="tool-rect-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Area Selection">
                         ${ICON_RECT_ALLTIME}
+                    </button>
+                    <button id="tool-poly-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Polygon Selection">
+                        ${ICON_POLY_ALLTIME}
                     </button>
                 </div>
 
@@ -485,6 +497,36 @@ export class SelectionTool {
         overlay.style.height = '100px';
         document.body.appendChild(overlay);
 
+        // Polygon Overlay
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.id = "poly-cursor-overlay";
+        svg.style.position = "fixed";
+        svg.style.top = "0";
+        svg.style.left = "0";
+        svg.style.width = "100%";
+        svg.style.height = "100%";
+        svg.style.pointerEvents = "none";
+        svg.style.zIndex = "49";
+        svg.style.display = "none";
+        
+        const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        polyline.setAttribute("fill", "rgba(16, 185, 129, 0.2)");
+        polyline.setAttribute("stroke", "var(--text-highlight)");
+        polyline.setAttribute("stroke-width", "2");
+        polyline.setAttribute("stroke-dasharray", "4");
+        svg.appendChild(polyline);
+        
+        const cursorLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        cursorLine.setAttribute("stroke", "var(--text-highlight)");
+        cursorLine.setAttribute("stroke-width", "2");
+        cursorLine.setAttribute("stroke-dasharray", "4");
+        svg.appendChild(cursorLine);
+        
+        document.body.appendChild(svg);
+        this.polyOverlay = svg;
+        this.polyLine = polyline;
+        this.polyCursorLine = cursorLine;
+
         // #WDD 2026-04-10: Create Help Modal
         this.createHelpModal();
 
@@ -495,8 +537,10 @@ export class SelectionTool {
 
         get('tool-brush')?.addEventListener('click', () => this.setTool('brush'));
         get('tool-rect')?.addEventListener('click', () => this.setTool('rect'));
+        get('tool-poly')?.addEventListener('click', () => this.setTool('poly'));
         get('tool-brush-alltime')?.addEventListener('click', () => this.setTool('brush-alltime'));
         get('tool-rect-alltime')?.addEventListener('click', () => this.setTool('rect-alltime'));
+        get('tool-poly-alltime')?.addEventListener('click', () => this.setTool('poly-alltime'));
         get('select-mode-center')?.addEventListener('click', () => this.setSelectionMode('center'));
         get('select-mode-ellipse')?.addEventListener('click', () => this.setSelectionMode('ellipse'));
         get('tool-invert')?.addEventListener('click', () => {
@@ -533,7 +577,7 @@ export class SelectionTool {
         this.setSelectionMode('center');
     }
 
-    setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'none') {
+    setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none') {
         if (this.currentTool === tool && tool !== 'none') {
             this.currentTool = 'none'; // Toggle off if clicking the same tool
         } else {
@@ -551,7 +595,9 @@ export class SelectionTool {
             'brush': 'tool-brush', 
             'rect': 'tool-rect',
             'brush-alltime': 'tool-brush-alltime',
-            'rect-alltime': 'tool-rect-alltime'
+            'rect-alltime': 'tool-rect-alltime',
+            'poly': 'tool-poly',
+            'poly-alltime': 'tool-poly-alltime'
         };
 
         Object.values(map).forEach(id => get(id)?.classList.remove('active'));
@@ -569,6 +615,14 @@ export class SelectionTool {
             settings?.classList.add('hidden');
             settings?.classList.remove('flex');
             document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
+        }
+
+        if (this.currentTool === 'poly' || this.currentTool === 'poly-alltime') {
+            this.polyPoints = [];
+            this.updatePolyOverlay();
+            if (this.polyOverlay) this.polyOverlay.style.display = 'block';
+        } else {
+            if (this.polyOverlay) this.polyOverlay.style.display = 'none';
         }
     }
 
@@ -588,6 +642,7 @@ export class SelectionTool {
         window.addEventListener('mousedown', (e) => this.onMouseDown(e));
         window.addEventListener('mousemove', (e) => this.onMouseMove(e));
         window.addEventListener('mouseup', (e) => this.onMouseUp(e));
+        window.addEventListener('dblclick', (e) => this.onDblClick(e));
 
         // #WDD 2026-04-10: Check if user is typing in an input field
         const isTyping = () => {
@@ -705,6 +760,18 @@ export class SelectionTool {
         }
     }
 
+    onDblClick(e: MouseEvent) {
+        if (this.currentTool !== 'poly' && this.currentTool !== 'poly-alltime') return;
+        console.log("DBL CLICK TRIGGERED! polyPoints: ", this.polyPoints.length);
+        
+        if (this.polyPoints.length > 2) {
+            console.log("CALLING PERFORM POLYGON");
+            this.performPolygon(this.polyPoints);
+        }
+        this.polyPoints = [];
+        this.updatePolyOverlay();
+    }
+
     onMouseDown(e: MouseEvent) {
         if (this.currentTool === 'none') return;
         // Check if hitting UI
@@ -714,6 +781,12 @@ export class SelectionTool {
         this.isSelecting = true;
         this.startPos.set(e.clientX, e.clientY);
         this.currentPos.set(e.clientX, e.clientY);
+
+        if (this.currentTool === 'poly' || this.currentTool === 'poly-alltime') {
+            this.polyPoints.push({x: e.clientX, y: e.clientY});
+            this.updatePolyOverlay();
+            return;
+        }
 
         if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
             if (this.isAllTimeTool()) {
@@ -731,6 +804,14 @@ export class SelectionTool {
         if (overlay && (this.currentTool === 'brush' || this.currentTool === 'brush-alltime')) {
             overlay.style.left = e.clientX + 'px';
             overlay.style.top = e.clientY + 'px';
+        }
+
+        if (this.currentTool === 'poly' || this.currentTool === 'poly-alltime') {
+            if (this.polyPoints.length > 0) {
+                this.polyCursorLine?.setAttribute('x2', e.clientX.toString());
+                this.polyCursorLine?.setAttribute('y2', e.clientY.toString());
+            }
+            return;
         }
 
         if (!this.isSelecting) return;
@@ -787,7 +868,7 @@ export class SelectionTool {
 
     // #WDD 2026-04-18: Check if current tool is an all-time selection tool
     isAllTimeTool(): boolean {
-        return this.currentTool === 'brush-alltime' || this.currentTool === 'rect-alltime';
+        return this.currentTool === 'brush-alltime' || this.currentTool === 'rect-alltime' || this.currentTool === 'poly-alltime';
     }
 
     // #WDD 2026-04-18: Check if a point is visible at a specific time
@@ -1349,4 +1430,103 @@ export class SelectionTool {
 
         if (changed) this.updateTexture();
     }
+
+    updatePolyOverlay() {
+        if (!this.polyLine || !this.polyCursorLine) return;
+        if (this.polyPoints.length === 0) {
+            this.polyLine.setAttribute('points', '');
+            this.polyCursorLine.setAttribute('x1', '0');
+            this.polyCursorLine.setAttribute('y1', '0');
+            this.polyCursorLine.setAttribute('x2', '0');
+            this.polyCursorLine.setAttribute('y2', '0');
+            return;
+        }
+        
+        let ptsStr = this.polyPoints.map(p => `${p.x},${p.y}`).join(' ');
+        this.polyLine.setAttribute('points', ptsStr);
+        
+        const last = this.polyPoints[this.polyPoints.length - 1];
+        this.polyCursorLine.setAttribute('x1', last.x.toString());
+        this.polyCursorLine.setAttribute('y1', last.y.toString());
+    }
+
+    performPolygon(pts: Array<{x: number, y: number}>) {
+        if (pts.length < 3) return;
+        
+        const isAllTime = this.isAllTimeTool();
+        const minX = Math.min(...pts.map(p => p.x));
+        const maxX = Math.max(...pts.map(p => p.x));
+        const minY = Math.min(...pts.map(p => p.y));
+        const maxY = Math.max(...pts.map(p => p.y));
+        
+        const pointInPoly = (x: number, y: number) => {
+            let inside = false;
+            for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+                const xi = pts[i].x, yi = pts[i].y;
+                const xj = pts[j].x, yj = pts[j].y;
+                const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        };
+
+        const checkInPoly = (sx: number, sy: number, sz: number) => {
+            let padding = 0;
+            if (this.selectionMode === 'ellipse') {
+                padding = Math.max(2, Math.min(15, 100 / (sz + 5)));
+            }
+            if (sx < minX - padding || sx > maxX + padding || sy < minY - padding || sy > maxY + padding) return false;
+            return pointInPoly(sx, sy);
+        };
+
+        // #WDD 2026-04-20: For all-time tool, use selectAllTimePoints helper which iterates through all frames
+        if (isAllTime) {
+            const changed = this.selectAllTimePoints((sx, sy, sz) => checkInPoly(sx, sy, sz));
+            if (changed) this.updateTexture();
+            return;
+        }
+
+        // Standard tool: only check current frame
+        const positions = this.getCachedPositions();
+        if (!positions || !this.selectionData) return;
+
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
+
+        let changed = false;
+        const numSplats = positions.length / 3;
+        const screen = new pc.Vec3();
+        const modelMat = this.viewer.splatEntity.getWorldTransform();
+        const localPos = new pc.Vec3();
+        const worldPos = new pc.Vec3();
+        const currentTime = this.getCurrentTime();
+
+        for (let i = 0; i < numSplats; i++) {
+            if (!this.isVisibleAtTime(i, currentTime)) continue;
+            
+            localPos.set(positions[i*3], positions[i*3+1], positions[i*3+2]);
+            modelMat.transformPoint(localPos, worldPos);
+            camera.worldToScreen(worldPos, screen);
+
+            if (screen.z > 0 && checkInPoly(screen.x, screen.y, screen.z)) {
+                const idx = i * 4;
+                if (this.selectionData[idx + 1] > 0) continue; // Skip deleted
+                
+                if (this.isSubtracting) {
+                    if (this.selectionData[idx] > 0) {
+                        this.selectionData[idx] = 0;
+                        changed = true;
+                    }
+                } else {
+                    if (this.selectionData[idx] === 0) {
+                        this.selectionData[idx] = 255;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed) this.updateTexture();
+    }
+
 }

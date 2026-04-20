@@ -106,6 +106,7 @@ class BatchConvertApp {
     private readonly tasks: BatchTask[] = [];
     private isConverting = false;
     private readonly visibleTaskLimit = 4;
+    private sequenceZipCounter = 0;
 
     constructor() {
         this.bindEvents();
@@ -318,21 +319,39 @@ class BatchConvertApp {
                     this.render();
                 });
 
+                task.summary = 'Packing into ZIP limit...';
+                this.render();
+
+                const zip = new JSZip();
+                
                 for (let i = 0; i < totalFrames; i++) {
                     const globalFrameIndex = baseFrameOffset + i;
-                    const paddedIdx = String(globalFrameIndex).padStart(3, '0');
-                    const fileName = `${baseName}_${paddedIdx}.ply`;
-
-                    const blob = new Blob([buffers[i]], { type: 'application/octet-stream' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    this.triggerDownload(url, fileName);
-                    URL.revokeObjectURL(url);
-                    
-                    if (i < totalFrames - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 50));
-                    }
+                    const paddedIdx = String(globalFrameIndex).padStart(6, '0');
+                    const fileName = `${paddedIdx}.ply`;
+                    zip.file(fileName, buffers[i]);
                 }
+
+                const zipBlob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'STORE'
+                }, (meta) => {
+                    this.setStep(task, 'encode', {
+                        state: 'active',
+                        pct: meta.percent,
+                        detail: `Zipping... ${meta.percent.toFixed(0)}%`,
+                        childLabel: 'Compress ZIP',
+                        childPct: meta.percent,
+                        grandchildLabel: 'Archive',
+                        grandchildPct: meta.percent
+                    });
+                    this.render();
+                });
+
+                const url = URL.createObjectURL(zipBlob);
+                const zipFileName = `${String(this.sequenceZipCounter++).padStart(3, '0')}.zip`;
+                this.triggerDownload(url, zipFileName);
+                // Delay revoke to ensure download starts
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
 
                 task.status = 'done';
                 this.setStep(task, 'encode', { state: 'done', pct: 100 });

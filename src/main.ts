@@ -748,21 +748,7 @@ class Viewer {
         simplePlay?.addEventListener('click', () => this.togglePlay());
         simpleToggleUI?.addEventListener('click', doToggle);
 
-        // --- Double Click to Toggle UI ---
-        window.addEventListener('dblclick', (e) => {
-            const target = e.target as HTMLElement;
-            // Only toggle if we double-click on the canvas or background, not on UI panels
-            const isUIPanel = target.closest('.glass-blue') ||
-                target.closest('.ui-playbar') ||
-                target.closest('#selection-toolbar') ||
-                target.closest('header') ||
-                target.closest('#loading-overlay') ||
-                target.closest('#simplified-panel');
-
-            if (!isUIPanel) {
-                this.toggleUIVisibility();
-            }
-        });
+        // --- Double Click to Toggle UI 已经被移除，留给多边形的双击截断操作 ---
 
         // Listen to Grid/Axes toggles in main index.html
         const btnGrid = document.getElementById('toggle-grid');
