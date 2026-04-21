@@ -179,6 +179,7 @@ export class ViewerFileLoader {
             v.sog4SequenceRequestId++;
             v.splatSequence = null;
             v.resetTimelineTools();
+            v.refreshExportButtons?.();
         }
 
         const name = file.name.toLowerCase();
@@ -466,6 +467,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 console.log("[Viewer] Auto-starting playback and switching to Play Mode");
                 v.toggleUIVisibility(true); // Switch to Simplified UI
                 if (!v.isPlaying) v.togglePlay(); // Start Animation
+                v.refreshExportButtons?.();
 
                 return;
             }

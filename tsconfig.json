@@ -27,7 +27,7 @@
     "include": [
         "src",
         "vite.config.ts"
-    ],
+, "back/sog4-encoder-fast.ts"    ],
     "exclude": [
         "src/utils/unzip_ply.ts"
     ]

@@ -7,9 +7,9 @@
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
 
-  <script type="module" crossorigin src="./assets/main-CpETkJSu.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/sog4-encoder-wrapper-BdroatdL.js">
-  <link rel="stylesheet" crossorigin href="./assets/sog4-encoder-wrapper-BH_edYHF.css">
+  <script type="module" crossorigin src="./assets/main-dNzABXKe.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/sog4-encoder-wrapper-Bcv0dl0r.js">
+  <link rel="stylesheet" crossorigin href="./assets/sog4-encoder-wrapper-Bju3Niin.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -37,7 +37,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.16</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.16.5</span>
                 <div class="h-3 w-px ui-border mx-1"></div>
 
                 <div class="relative">
@@ -96,7 +96,7 @@
                 </button>
             </div>
 
-            <div class="grid grid-cols-2 gap-0.5">
+            <div id="export-button-row" class="grid grid-cols-2 gap-0.5">
                 <button id="btn-export-sog"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
                     aria-label="Export SOG4">
@@ -112,6 +112,14 @@
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
                     <span class="text-[8px] font-bold ml-1 tracking-tight">PLY4</span>
+                </button>
+                <button id="btn-export-ply4-sequence"
+                    class="hidden ui-btn col-span-2 px-1 py-1 rounded-md flex items-center justify-center bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20"
+                    aria-label="Export PLY4 Sequence">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM4 19h16v2H4z" />
+                    </svg>
+                    <span class="text-[8px] font-bold ml-1 tracking-tight">PLY4 SEQ</span>
                 </button>
             </div>
             <input type="file" id="file-input" class="hidden" accept=".truesplats,.sog4,.ply4" />

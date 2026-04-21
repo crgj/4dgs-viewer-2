@@ -6,6 +6,9 @@ export default defineConfig({
     // 例如: base: '/4dgs-viewer/',
     base: './',
     publicDir: 'public',
+    worker: {
+        format: 'es'
+    },
     build: {
         outDir: 'docs',
         emptyOutDir: true,

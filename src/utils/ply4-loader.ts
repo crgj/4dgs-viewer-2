@@ -359,6 +359,7 @@ export class PLY4Loader {
         let modelPos: pc.Vec3 | null = null;
         let modelRot: pc.Quat | null = null;
         let modelScale: pc.Vec3 | null = null;
+        const cameras: Array<{ name: string; pos: number[]; pitch: number; yaw: number }> = [];
         let rotationSemantic: 'wxyz' | 'xyzw' = 'wxyz'; // #WDD 2026-04-03 Default to WXYZ per master_ply_format(1).md
         const fdcNames: string[] = [];
         const frestNames: string[] = [];
@@ -415,6 +416,27 @@ export class PLY4Loader {
                     const idx = parts.indexOf('model_scale');
                     modelScale = new pc.Vec3(parseFloat(parts[idx + 1]), parseFloat(parts[idx + 2]), parseFloat(parts[idx + 3]));
                 }
+                if (parts[1] === 'camera' && parts.length >= 8) {
+                    // #WDD-gpt 2026-04-20 - 解析 PLY4 header 中保存的相机预设
+                    const encodedName = parts[2] || 'unnamed';
+                    const name = (() => {
+                        try {
+                            return decodeURIComponent(encodedName);
+                        } catch {
+                            return encodedName;
+                        }
+                    })();
+                    cameras.push({
+                        name,
+                        pos: [
+                            parseFloat(parts[3]),
+                            parseFloat(parts[4]),
+                            parseFloat(parts[5])
+                        ],
+                        pitch: parseFloat(parts[6]) || 0,
+                        yaw: parseFloat(parts[7]) || 0
+                    });
+                }
             }
         }
 
@@ -445,7 +467,7 @@ export class PLY4Loader {
 
         console.log(`[PLY4] Meta: Frames=${totalFrames}, K_xyz=${K_xyz} (Stride ${xyzStride}), K_rot=${K_rot} (Stride ${rotStride}), K_dc=${K_dc} (Stride ${dcStride})`);
 
-        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, rotationSemantic, K_xyz, K_rot, K_dc, fdcNames, frestNames };
+        return { isBinary, isLittleEndian, vertexCount, propertyTypes, totalFrames, xyzStride, rotStride, dcStride, modelPos, modelRot, modelScale, cameras, rotationSemantic, K_xyz, K_rot, K_dc, fdcNames, frestNames };
     }
 
     private createDataArrays(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcNames: string[], frestNames: string[]) {
@@ -675,6 +697,7 @@ export class PLY4Loader {
             dcKeyframes: parsedHeader.K_dc,
             dcStride: parsedHeader.dcStride,
             bands: frestNames.length >= 45 ? 3 : (frestNames.length >= 24 ? 2 : (frestNames.length >= 9 ? 1 : 0)),
+            cameras: parsedHeader.cameras,
             meta: {
                 modelPos: parsedHeader.modelPos,
                 modelRot: parsedHeader.modelRot,

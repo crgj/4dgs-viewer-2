@@ -762,9 +762,8 @@ export class SelectionTool {
                 this.hideHelpModal();
             }
 
-            // #WDD 2026-04-10: Number keys for tool selection
+            // #WDD 2026-04-20: Number keys for six selection tools
             if (e.key === '1') {
-                // Toggle brush tool
                 if (this.currentTool === 'brush') {
                     this.setTool('none');
                 } else {
@@ -772,7 +771,6 @@ export class SelectionTool {
                 }
             }
             if (e.key === '2') {
-                // Toggle rect tool
                 if (this.currentTool === 'rect') {
                     this.setTool('none');
                 } else {
@@ -780,19 +778,31 @@ export class SelectionTool {
                 }
             }
             if (e.key === '3') {
-                // Toggle all-time brush tool
+                if (this.currentTool === 'poly') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('poly');
+                }
+            }
+            if (e.key === '4') {
                 if (this.currentTool === 'brush-alltime') {
                     this.setTool('none');
                 } else {
                     this.setTool('brush-alltime');
                 }
             }
-            if (e.key === '4') {
-                // Toggle all-time rect tool
+            if (e.key === '5') {
                 if (this.currentTool === 'rect-alltime') {
                     this.setTool('none');
                 } else {
                     this.setTool('rect-alltime');
+                }
+            }
+            if (e.key === '6') {
+                if (this.currentTool === 'poly-alltime') {
+                    this.setTool('none');
+                } else {
+                    this.setTool('poly-alltime');
                 }
             }
             

@@ -366,15 +366,31 @@ export class SOG4Encoder {
             stageLabel: 'Prepare',
             stagePct: 0
         });
+        // #WDD-gpt 2026-04-20 - 修复批量页“Encode 0% 卡住”：初始化后立即让出主线程并刷新首个可见进度
+        await scheduler(true);
+        emitProgress(1, "Preparing property map...", {
+            stageId: 'prepare',
+            stageLabel: 'Prepare',
+            stagePct: 15
+        });
 
         // Unpack plyData arrays if not natively on data
         let p: any = {};
         if (data.plyData && data.plyData.elements && data.plyData.elements[0].properties) {
             const props = data.plyData.elements[0].properties;
-            for (let i = 0; i < props.length; i++) p[props[i].name] = props[i].storage;
+            for (let i = 0; i < props.length; i++) {
+                p[props[i].name] = props[i].storage;
+                if ((i & 31) === 0) await scheduler();
+            }
         } else {
             p = data; // Fallback to flat
         }
+        emitProgress(2, "Property map ready", {
+            stageId: 'prepare',
+            stageLabel: 'Prepare',
+            stagePct: 35
+        });
+        await scheduler(true);
 
         // Optional: Apply deletions BEFORE encoding (faster than post-compaction)
         let sourceIndices: Uint32Array | null = null;
@@ -387,6 +403,7 @@ export class SOG4Encoder {
                 const idx = deleted[i];
                 const mapped = origIndices ? Math.round(origIndices[idx]) : idx;
                 if (mapped >= 0 && mapped < originalCount) deletedSet.add(mapped);
+                if ((i & 8191) === 0) await scheduler();
             }
 
             if (deletedSet.size > 0) {
@@ -420,6 +437,12 @@ export class SOG4Encoder {
             postProcessing: overrides.postProcessing || data.postProcessing || { exposure: 1.0, brightness: 0.0, contrast: 0.0 }
         };
         const fRestNames = Object.keys(p).filter((name) => /^f_rest_\d+$/.test(name)).sort((a, b) => extractTrailingIndex(a) - extractTrailingIndex(b));
+        emitProgress(3, "Preparing metadata...", {
+            stageId: 'prepare',
+            stageLabel: 'Prepare',
+            stagePct: 60
+        });
+        await scheduler(true);
         const opacitySemantic = data.opacitySemantic;
         const rawMode = overrides.rawFloatPayload === true;
         emitProgress(5, "Prepared source arrays", {
@@ -550,12 +573,28 @@ export class SOG4Encoder {
             return result;
         }
         const customOut: any = { total_frames: totalFrames };
-        if (data.meta) {
+
+        // Write model_transform into custom metadata from overrides or data
+        const exportTransform = overrides.model_transform || data.model_transform || null;
+        if (exportTransform) {
+            const mt = exportTransform;
+            if (mt.pos && Array.isArray(mt.pos) && mt.pos.length >= 3) {
+                customOut['model_pos'] = `${mt.pos[0]} ${mt.pos[1]} ${mt.pos[2]}`;
+            }
+            if (mt.rot && Array.isArray(mt.rot) && mt.rot.length >= 4) {
+                customOut['model_rot'] = `${mt.rot[0]} ${mt.rot[1]} ${mt.rot[2]} ${mt.rot[3]}`;
+            }
+            if (mt.scale && Array.isArray(mt.scale) && mt.scale.length >= 3) {
+                customOut['model_scale'] = `${mt.scale[0]} ${mt.scale[1]} ${mt.scale[2]}`;
+            }
+        } else if (data.meta) {
+            // Fallback to legacy meta fields if no model_transform object is available
             const m = data.meta;
             if (m.modelPos)   customOut['model_pos'] = `${m.modelPos.x} ${m.modelPos.y} ${m.modelPos.z}`;
             if (m.modelRot)   customOut['model_rot'] = `${m.modelRot.x} ${m.modelRot.y} ${m.modelRot.z} ${m.modelRot.w}`;
             if (m.modelScale) customOut['model_scale'] = `${m.modelScale.x} ${m.modelScale.y} ${m.modelScale.z}`;
         }
+
         meta.custom = Object.assign({}, data.custom || {}, overrides.custom || {}, meta.custom || {}, customOut);
 
         const { width, height, paddedSize } = createPaddedSize(count);
@@ -577,7 +616,7 @@ export class SOG4Encoder {
         };
         const saveTex = async (tex: any, name: string) => {
             zip.file(name, await renderTex(tex, name));
-            await scheduler();
+            await scheduler(true);
         };
         const cpuHint = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency)
             ? Math.floor(navigator.hardwareConcurrency / 2)
@@ -630,7 +669,19 @@ export class SOG4Encoder {
                 await scheduler();
             }
         }
-        await saveTex(mL, 'means_l.webp'); await saveTex(mU, 'means_u.webp');
+        // #WDD-gpt 2026-04-20 - 细化进度：避免在 Packing Means 末尾长时间无反馈
+        emitProgress(21, "Encoding means_l.webp...", {
+            stageId: 'means',
+            stageLabel: 'Means (XYZ)',
+            stagePct: 95
+        });
+        await saveTex(mL, 'means_l.webp');
+        emitProgress(21.5, "Encoding means_u.webp...", {
+            stageId: 'means',
+            stageLabel: 'Means (XYZ)',
+            stagePct: 97
+        });
+        await saveTex(mU, 'means_u.webp');
         emitProgress(22, "Means encoded", {
             stageId: 'means',
             stageLabel: 'Means (XYZ)',

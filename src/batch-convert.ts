@@ -34,6 +34,8 @@ type BatchTask = {
     frameCount?: number;
     logs: string[];
     steps: Record<StepKey, BatchStep>;
+    encodeHeartbeat?: number;
+    encodeStartedAt?: number;
 };
 
 const STEP_ORDER: StepKey[] = ['prepare', 'load', 'encode', 'download'];
@@ -107,10 +109,82 @@ class BatchConvertApp {
     private isConverting = false;
     private readonly visibleTaskLimit = 4;
     private sequenceZipCounter = 0;
+    private renderQueued = false;
+    private readonly logThrottle = new Map<string, { ts: number; pct: number }>();
 
     constructor() {
         this.bindEvents();
         this.render();
+    }
+
+    private requestRender() {
+        // #WDD-gpt 2026-04-20 - 批处理进度刷新节流：避免高频回调导致UI卡顿
+        if (this.renderQueued) return;
+        this.renderQueued = true;
+        requestAnimationFrame(() => {
+            this.renderQueued = false;
+            this.render();
+        });
+    }
+
+    private async yieldToBrowser() {
+        // #WDD-gpt 2026-04-20 - 连续任务间让出主线程，降低第二个文件失败概率
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    private pushProgressLog(task: BatchTask, key: StepKey, pct: number, message: string) {
+        // #WDD-gpt 2026-04-20 - 进度日志限流：减少日志风暴引发的主线程抖动
+        const gateKey = `${task.id}:${key}`;
+        const now = performance.now();
+        const prev = this.logThrottle.get(gateKey);
+        const shouldLog = !prev || (now - prev.ts >= 1200) || (Math.abs(pct - prev.pct) >= 5) || pct >= 99;
+        if (!shouldLog) return;
+        this.logThrottle.set(gateKey, { ts: now, pct });
+        this.pushLog(task, message);
+    }
+
+    private startEncodeHeartbeat(task: BatchTask) {
+        this.stopEncodeHeartbeat(task);
+        task.encodeStartedAt = performance.now();
+        // #WDD-gpt 2026-04-20 - 编码心跳：当某些阶段回调变慢时持续给用户反馈“仍在进行”
+        task.encodeHeartbeat = window.setInterval(() => {
+            if (task.status !== 'encoding') return;
+            const started = task.encodeStartedAt || performance.now();
+            const elapsedSec = Math.max(0, (performance.now() - started) / 1000);
+            const step = task.steps.encode;
+            const baseDetail = (step.detail || 'Encoding').replace(/\s•\s\d+(?:\.\d+)?s$/, '');
+            const baseLabel = (step.grandchildLabel || step.childLabel || 'Working').replace(/\s•\selapsed\s\d+(?:\.\d+)?s$/, '');
+            this.setStep(task, 'encode', {
+                state: step.state === 'error' ? 'error' : 'active',
+                detail: `${baseDetail} • ${elapsedSec.toFixed(1)}s`,
+                grandchildLabel: `${baseLabel} • elapsed ${elapsedSec.toFixed(1)}s`
+            });
+            this.requestRender();
+        }, 500);
+    }
+
+    private stopEncodeHeartbeat(task: BatchTask) {
+        if (task.encodeHeartbeat) {
+            window.clearInterval(task.encodeHeartbeat);
+            task.encodeHeartbeat = undefined;
+        }
+    }
+
+    private releaseParsedData(parsed: any) {
+        // #WDD-gpt 2026-04-20 - 批量转换内存回收提示：显式断开大数组引用，缓解连续文件失败
+        if (!parsed || typeof parsed !== 'object') return;
+        const keys = [
+            'trajectory', 'rotTrajectory', 'dcTrajectory',
+            'sogBuffer', 'plyBuffer', 'rawData', 'rawFloatData'
+        ];
+        for (const key of keys) {
+            if (key in parsed) (parsed as any)[key] = null;
+        }
+        if (parsed?.plyData?.elements?.[0]?.properties) {
+            for (const prop of parsed.plyData.elements[0].properties) {
+                if (prop && 'storage' in prop) prop.storage = null;
+            }
+        }
     }
 
     private bindEvents() {
@@ -229,6 +303,7 @@ class BatchConvertApp {
         let frameOffset = 0;
         for (const task of queue) {
             await this.convertTask(task, frameOffset);
+            await this.yieldToBrowser();
             if (format === 'plyseq') {
                 frameOffset += task.frameCount || 0;
             }
@@ -252,7 +327,7 @@ class BatchConvertApp {
                 grandchildPct: 15
             });
             this.pushLog(task, 'Preparing conversion runtime');
-            this.render();
+            this.requestRender();
 
             const loader = new PLY4Loader();
             this.setStep(task, 'prepare', {
@@ -266,7 +341,7 @@ class BatchConvertApp {
             });
 
             task.status = 'loading';
-            parsed = await loader.load(task.file, (pct: number, message: string, meta?: PLY4LoadProgressMeta) => {
+            const loadOnce = async () => loader.load(task.file, (pct: number, message: string, meta?: PLY4LoadProgressMeta) => {
                 this.setStep(task, 'load', {
                     state: pct >= 100 ? 'done' : 'active',
                     pct,
@@ -277,9 +352,18 @@ class BatchConvertApp {
                     grandchildPct: meta?.substepPct ?? meta?.stagePct ?? pct
                 });
                 task.summary = message;
-                if (meta?.detail) this.pushLog(task, `Load • ${meta.detail}`);
-                this.render();
+                if (meta?.detail) this.pushProgressLog(task, 'load', pct, `Load • ${meta.detail}`);
+                this.requestRender();
             });
+            try {
+                parsed = await loadOnce();
+            } catch (loadError: any) {
+                // #WDD-gpt 2026-04-20 - 第二个文件偶发加载失败：增加一次让步后重试
+                this.pushLog(task, `Load retry • ${loadError?.message || String(loadError)}`);
+                await this.yieldToBrowser();
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                parsed = await loadOnce();
+            }
 
             const pointCount = Number(parsed?.count || 0);
             const frameCount = Number(parsed?.frames || 1);
@@ -316,7 +400,8 @@ class BatchConvertApp {
                         grandchildPct: pct
                     });
                     task.summary = msg;
-                    this.render();
+                    this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
+                    this.requestRender();
                 });
 
                 task.summary = 'Packing into ZIP limit...';
@@ -344,7 +429,8 @@ class BatchConvertApp {
                         grandchildLabel: 'Archive',
                         grandchildPct: meta.percent
                     });
-                    this.render();
+                    this.pushProgressLog(task, 'encode', meta.percent, `Encode • ZIP ${meta.percent.toFixed(0)}%`);
+                    this.requestRender();
                 });
 
                 const url = URL.createObjectURL(zipBlob);
@@ -357,17 +443,22 @@ class BatchConvertApp {
                 this.setStep(task, 'encode', { state: 'done', pct: 100 });
                 this.setStep(task, 'download', { state: 'done', pct: 100 });
                 task.summary = `Completed • ${totalFrames} frames saved`;
-                this.render();
+                this.requestRender();
                 return;
             } else {
+                // #WDD-gpt 2026-04-20 - 按需求禁用 fast/raw 路径，批量导出固定走标准 WebP 压缩
                 const encodeOverrides = {
                     rawFloatPayload: false,
                     model_transform: buildTransformOverride(parsed)
                 };
+                this.startEncodeHeartbeat(task);
                 buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
                     mode: 'standard',
                     progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
-                        const detail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+                        const cleanDetail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+                        const detail = meta?.stageLabel
+                            ? `${meta.stageLabel} ${Math.round(meta?.stagePct ?? pct)}% • ${cleanDetail}`
+                            : cleanDetail;
                         this.setStep(task, 'encode', {
                             state: pct >= 100 ? 'done' : 'active',
                             pct,
@@ -378,11 +469,12 @@ class BatchConvertApp {
                             grandchildPct: meta?.stagePct ?? pct
                         });
                         task.summary = detail;
-                        this.pushLog(task, `Encode • ${meta?.stageLabel || message} • ${detail}`);
-                        this.render();
+                        this.pushProgressLog(task, 'encode', pct, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                        this.requestRender();
                     }
                 });
                 outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
+                this.stopEncodeHeartbeat(task);
             }
 
             const blob = new Blob([buffer as BlobPart], { type: 'application/octet-stream' });
@@ -420,8 +512,9 @@ class BatchConvertApp {
 
             task.status = 'done';
             task.summary = `Completed • ${formatBytes(blob.size)}`;
-            this.render();
+            this.requestRender();
         } catch (error: any) {
+            this.stopEncodeHeartbeat(task);
             const message = error?.message || String(error);
             task.status = 'error';
             task.error = message;
@@ -434,9 +527,12 @@ class BatchConvertApp {
                 grandchildPct: task.steps[activeKey].grandchildPct
             });
             this.pushLog(task, `Error • ${message}`);
-            this.render();
+            this.requestRender();
         } finally {
+            this.stopEncodeHeartbeat(task);
+            this.releaseParsedData(parsed);
             parsed = null;
+            await this.yieldToBrowser();
         }
     }
 

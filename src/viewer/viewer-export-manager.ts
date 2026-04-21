@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import JSZip from 'jszip';
 import { PlyExporter } from '../utils/ply-exporter';
 import { TrueSplatsLoader } from '../utils/truesplats-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../utils/sog4-encoder-wrapper';
@@ -182,7 +183,7 @@ export class ViewerExportManager {
         try {
             const transform = this.resolveExportModelTransform();
 
-            const cameras = v.cameraPresets.map((c: CameraPreset) => ({
+            const cameras = (v.presetManager?.cameraPresets || []).map((c: CameraPreset) => ({
                 name: c.name,
                 pos: [c.pos.x, c.pos.y, c.pos.z],
                 pitch: c.pitch,
@@ -254,11 +255,20 @@ export class ViewerExportManager {
 
             setExportProgress(5, 'Encoding PLY4 binary...');
 
+            const transform = this.resolveExportModelTransform();
+
+            const cameras = (v.presetManager?.cameraPresets || []).map((c: CameraPreset) => ({
+                name: c.name,
+                pos: [c.pos.x, c.pos.y, c.pos.z],
+                pitch: c.pitch,
+                yaw: c.yaw,
+                textObjects: c.textObjects
+            }));
+
             const encodeOverrides = {
                 selectionData: v.selectionTool?.selectionData,
-                model_pos: v.splatEntity?.getLocalPosition(),
-                model_rot: v.splatEntity?.getLocalRotation(),
-                model_scale: v.splatEntity?.getLocalScale()
+                model_transform: transform,
+                cameras: cameras
             };
 
             const buffer = await PLY4Encoder.encode(v.lastParsedData, encodeOverrides, (pct, msg) => {
@@ -450,7 +460,7 @@ export class ViewerExportManager {
 
             const transform = this.resolveExportModelTransform();
 
-            const cameras = v.cameraPresets.map((c: CameraPreset) => ({
+            const cameras = (v.presetManager?.cameraPresets || []).map((c: CameraPreset) => ({
                 name: c.name, pos: [c.pos.x, c.pos.y, c.pos.z], pitch: c.pitch, yaw: c.yaw,
                 textObjects: c.textObjects
             }));
@@ -551,6 +561,99 @@ export class ViewerExportManager {
                 substepsEl.classList.add('hidden');
                 substepsEl.classList.remove('flex');
             }
+        }
+    }
+
+    async saveAsPLY4Sequence() {
+        const v = this.viewer as any;
+        const segments = Array.isArray(v.sog4SequenceSegments) ? v.sog4SequenceSegments : [];
+        if (!v.isSog4SequenceMode || segments.length <= 1) {
+            alert("No multi-segment sequence loaded.");
+            return;
+        }
+
+        const overlay = document.getElementById('loading-overlay');
+        const statusEl = document.getElementById('loading-status');
+        const detailEl = document.getElementById('loading-detail');
+        const bar = document.getElementById('loading-step-progress');
+        const squares = Array.from(document.querySelectorAll('.step-square'));
+        const setExportProgress = (pct: number, detail: string) => {
+            overlay?.classList.remove('hidden');
+            if (statusEl) statusEl.innerText = 'EXPORTING PLY4 SEQUENCE';
+            if (detailEl) detailEl.innerText = detail || '';
+            if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
+            const stepMax = Math.max(squares.length - 1, 1);
+            const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
+            squares.forEach((square, idx) => {
+                if (idx <= step) square.classList.add('reached');
+                else square.classList.remove('reached');
+            });
+        };
+
+        try {
+            const transform = this.resolveExportModelTransform();
+            const cameras = (v.presetManager?.cameraPresets || []).map((c: CameraPreset) => ({
+                name: c.name,
+                pos: [c.pos.x, c.pos.y, c.pos.z],
+                pitch: c.pitch,
+                yaw: c.yaw,
+                textObjects: c.textObjects
+            }));
+            const zip = new JSZip();
+
+            for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                const segmentName = segment?.name || `segment_${i + 1}.ply4`;
+                const outputName = segmentName.replace(/\.(sog4|ply4)$/i, '.ply4');
+                const sequenceElements = typeof v.getSplatSequenceSelectionElements === 'function'
+                    ? v.getSplatSequenceSelectionElements()
+                    : [];
+                const selectionData = sequenceElements[i]?.runtime?.selectionData || null;
+
+                setExportProgress(
+                    (i / segments.length) * 90,
+                    `Encoding ${outputName} (${i + 1}/${segments.length})`
+                );
+
+                const buffer = await PLY4Encoder.encode(segment.parsed, {
+                    selectionData,
+                    // #WDD-gpt 2026-04-20 - 序列导出时将当前场景统一的变换和相机预设写入每一个 PLY4
+                    model_transform: transform,
+                    cameras
+                }, (pct, msg) => {
+                    const overallPct = (i / segments.length) * 90 + (pct / 100) * (90 / segments.length);
+                    setExportProgress(overallPct, `${outputName} • ${msg}`);
+                });
+
+                zip.file(outputName, new Uint8Array(buffer));
+            }
+
+            setExportProgress(92, 'Packaging ZIP...');
+            const zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'STORE'
+            }, (meta) => {
+                setExportProgress(92 + (meta.percent / 100) * 8, `Packaging ZIP ${meta.percent.toFixed(0)}%`);
+            });
+
+            const baseName = (v.sog4SequenceName || v.currentFileName || 'ply4_sequence')
+                .replace(/\.(sog4|ply4)$/i, '');
+            const filename = `${baseName}.zip`;
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+
+            setExportProgress(100, 'PLY4 sequence export complete');
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+        } catch (err) {
+            console.error(err);
+            alert("PLY4 sequence export failed: " + err);
+        } finally {
+            setTimeout(() => {
+                document.getElementById('loading-overlay')?.classList.add('hidden');
+            }, 1000);
         }
     }
 }

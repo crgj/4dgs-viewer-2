@@ -126,6 +126,10 @@ export class PLY4Encoder {
             throw new Error('PLY4 Encoder: Keyframe stride values must be >= 1.');
         }
 
+        // Resolve model_transform and cameras from overrides or data
+        const modelTransform = overrides.model_transform || data.model_transform || null;
+        const cameras = overrides.cameras || data.cameras || null;
+
         // 3. Define Property Structure & Header
         let header = `ply\nformat binary_little_endian 1.0\n`;
         header += `comment total_frames ${totalFrames}\n`;
@@ -135,6 +139,31 @@ export class PLY4Encoder {
             header += `comment rot_bank_component_order wxyz\n`; // #WDD 2026-04-03 Added explicit component order
         }
         if (K_dc > 0) header += `comment features_dc_bank_keyframe_stride ${dcStride}\n`;
+
+        // Write model_transform into header comments
+        if (modelTransform) {
+            const mt = modelTransform;
+            if (mt.pos && Array.isArray(mt.pos) && mt.pos.length >= 3) {
+                header += `comment model_pos ${mt.pos[0]} ${mt.pos[1]} ${mt.pos[2]}\n`;
+            }
+            if (mt.rot && Array.isArray(mt.rot) && mt.rot.length >= 4) {
+                header += `comment model_rot ${mt.rot[0]} ${mt.rot[1]} ${mt.rot[2]} ${mt.rot[3]}\n`;
+            }
+            if (mt.scale && Array.isArray(mt.scale) && mt.scale.length >= 3) {
+                header += `comment model_scale ${mt.scale[0]} ${mt.scale[1]} ${mt.scale[2]}\n`;
+            }
+        }
+
+        // Write camera presets into header comments
+        if (cameras && Array.isArray(cameras) && cameras.length > 0) {
+            for (const cam of cameras) {
+                if (!cam || !cam.pos || !Array.isArray(cam.pos)) continue;
+                // #WDD-gpt 2026-04-20 - 相机预设名写入 header 时做编码，避免空格破坏 PLY4 comment 解析
+                const encodedName = encodeURIComponent(cam.name || 'unnamed');
+                header += `comment camera ${encodedName} ${cam.pos[0]} ${cam.pos[1]} ${cam.pos[2]} ${cam.pitch ?? 0} ${cam.yaw ?? 0}\n`;
+            }
+        }
+
         header += `element vertex ${finalCount}\n`;
         header += `property float x\nproperty float y\nproperty float z\n`;
         header += `property float nx\nproperty float ny\nproperty float nz\n`;

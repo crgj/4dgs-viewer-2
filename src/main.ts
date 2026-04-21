@@ -565,6 +565,11 @@ export class Viewer {
         btnExportPly4?.addEventListener('click', () => {
             this.saveAsPLY4();
         });
+        const btnExportPly4Sequence = document.getElementById('btn-export-ply4-sequence');
+        btnExportPly4Sequence?.addEventListener('click', () => {
+            this.saveAsPLY4Sequence();
+        });
+        this.refreshExportButtons();
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
@@ -982,12 +987,21 @@ export class Viewer {
         });
         window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
+        // #WDD 2026-04-20: Double-click on canvas to restore full UI when in hidden mode
+        let lastMouseDownTime = 0;
         this.app.mouse.on(pc.EVENT_MOUSEDOWN, (e: any) => {
             const isEditing = !!document.getElementById('text-edit-panel')?.classList.contains('show');
             if (isUIInteracting || isHoveringUI || isEditing) return; // #WDD 2026-01-15 Also check hover
             if (e.button === pc.MOUSEBUTTON_LEFT) isLMB = true;
             if (e.button === pc.MOUSEBUTTON_RIGHT) isRMB = true;
             lastMousePos.set(e.x, e.y);
+
+            // Detect double-click on canvas when UI is hidden -> restore full UI
+            const now = Date.now();
+            if (this.isUIHidden() && (now - lastMouseDownTime) < 300) {
+                this.toggleUIVisibility(false);
+            }
+            lastMouseDownTime = now;
         });
 
         this.app.mouse.on(pc.EVENT_MOUSEMOVE, (e: pc.MouseEvent) => {
@@ -1460,6 +1474,20 @@ export class Viewer {
         this.sog4SequenceRequestId++;
         // #WDD-gpt 2026-04-20 - 清理旧序列对象，避免新加载沿用过期元素
         this.splatSequence = null;
+        this.refreshExportButtons();
+    }
+
+    // #WDD-gpt 2026-04-20 - 多段落编辑状态下切换导出按钮：隐藏单文件导出，显示序列导出
+    public refreshExportButtons() {
+        const btnExportSog = document.getElementById('btn-export-sog');
+        const btnExportPly4 = document.getElementById('btn-export-ply4');
+        const btnExportPly4Sequence = document.getElementById('btn-export-ply4-sequence');
+        const isMultiSegment = this.isSog4SequenceMode && this.sog4SequenceSegments.length > 1;
+
+        btnExportSog?.classList.toggle('hidden', isMultiSegment);
+        btnExportPly4?.classList.toggle('hidden', isMultiSegment);
+        btnExportPly4Sequence?.classList.toggle('hidden', !isMultiSegment);
+        btnExportPly4Sequence?.classList.toggle('flex', isMultiSegment);
     }
 
     // #WDD-gpt 2026-04-20 - 新增统一序列模型：将当前 temporal segments 投影为 SplatSequence
@@ -2273,6 +2301,7 @@ export class Viewer {
             if (this.sog4SequenceRequestId === requestId) {
                 this.sog4SequenceLoading = false;
             }
+            this.refreshExportButtons();
 
             console.log("[Viewer] Auto-starting playback and switching to Play Mode");
             this.toggleUIVisibility(true);
@@ -2293,6 +2322,7 @@ export class Viewer {
                 this.sog4SequenceTotalFrames = 0;
                 this.sog4SequenceIndex = 0;
                 this.sog4SequenceLoading = false;
+                this.refreshExportButtons();
                 overlay?.classList.add('hidden');
             }
         }
@@ -2365,6 +2395,7 @@ export class Viewer {
             if (this.sog4SequenceRequestId === requestId) {
                 this.sog4SequenceLoading = false;
             }
+            this.refreshExportButtons();
 
             console.log("[Viewer] Auto-starting playback and switching to Play Mode");
             this.toggleUIVisibility(true);
@@ -2384,6 +2415,7 @@ export class Viewer {
                 this.sog4SequenceTotalFrames = 0;
                 this.sog4SequenceIndex = 0;
                 this.sog4SequenceLoading = false;
+                this.refreshExportButtons();
                 overlay?.classList.add('hidden');
             }
         }
@@ -2613,6 +2645,21 @@ export class Viewer {
             if (t.pos) entity.setLocalPosition(t.pos[0], t.pos[1], t.pos[2]);
             if (t.rot) entity.setLocalRotation(new pc.Quat(t.rot[0], t.rot[1], t.rot[2], t.rot[3]));
             if (t.scale) entity.setLocalScale(t.scale[0], t.scale[1], t.scale[2]);
+            return;
+        }
+
+        // #WDD-gpt 2026-04-20 - 多段 PLY4 读取时也要应用 parsed.meta 里的位姿，否则 UI 显示正确但实体不生效
+        if (parsed?.meta) {
+            const modelPos = parsed.meta.modelPos;
+            const modelRot = parsed.meta.modelRot;
+            const modelScale = parsed.meta.modelScale;
+            const pos = modelPos ? [modelPos.x || 0, modelPos.y || 0, modelPos.z || 0] : [0, 0, 0];
+            const rot = modelRot ? [modelRot.x || 0, modelRot.y || 0, modelRot.z || 0, modelRot.w ?? 1] : [0, 0, 0, 1];
+            const scale = modelScale ? [modelScale.x || 1, modelScale.y || 1, modelScale.z || 1] : [1, 1, 1];
+            this.sog4SequenceSharedTransform = { pos, rot, scale };
+            entity.setLocalPosition(pos[0], pos[1], pos[2]);
+            entity.setLocalRotation(new pc.Quat(rot[0], rot[1], rot[2], rot[3]));
+            entity.setLocalScale(scale[0], scale[1], scale[2]);
         }
     }
 
@@ -3893,6 +3940,7 @@ export class Viewer {
     async saveAsTrueSplats() { return this.exportManager.saveAsTrueSplats(); }
     async saveAsPLY4() { return this.exportManager.saveAsPLY4(); }
     async saveAsSOG4() { return this.exportManager.saveAsSOG4(); }
+    async saveAsPLY4Sequence() { return this.exportManager.saveAsPLY4Sequence(); }
 
 }
 
