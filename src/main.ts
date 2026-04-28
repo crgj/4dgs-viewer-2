@@ -2236,6 +2236,23 @@ export class Viewer {
 
     
     private async loadSog4Sequence(files: File[]): Promise<void> {
+        let totalSize = 0;
+        for (const f of files) totalSize += f.size;
+        
+        // #WDD 2026-04-28 更改预检机制: 检测系统可能的最大容量，放宽限度，遇警报直接停止加载不再确认
+        let memLimitAppx = 4; // 默认给4GB文件体积上限
+        if ((navigator as any).deviceMemory) {
+            memLimitAppx = Math.max(4, (navigator as any).deviceMemory * 0.5); 
+        }
+        const maxLimitBytes = memLimitAppx * 1024 * 1024 * 1024;
+        
+        if (totalSize > maxLimitBytes) {
+           const sizeMB = (totalSize / (1024 * 1024)).toFixed(0);
+           const limitMB = (maxLimitBytes / (1024 * 1024)).toFixed(0);
+           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 SOG4 序列分段总体积达到了 ${sizeMB} MB，已超出系统计算的当前最大安全运行阈值 (约 ${limitMB} MB)。\n\n批量解析海量该级别点云段会产生不可逆的内存暴涨，导致当前浏览器引擎抛出 "RangeError: Array buffer allocation failed" 直接崩溃。\n\n为保证可用性，已拦截此操作。\n建议做法: 请减少选中的序列分段分批次处理。`);
+           return;
+        }
+
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         progress(0, 'PREPARING', `Loading ${files.length} SOG4 segments`);
@@ -2330,6 +2347,23 @@ export class Viewer {
 
     // #WDD-gpt 2026-04-20 - 新增 PLY4 多段序列读取，和 SOG4 一样按段累计总帧
     private async loadPly4Sequence(files: File[]): Promise<void> {
+        let totalSize = 0;
+        for (const f of files) totalSize += f.size;
+        
+        // #WDD 2026-04-28 更改预检机制: 检测系统可能的最大容量，放宽限度，遇警报直接停止加载不再确认
+        let memLimitAppx = 4; // 默认给4GB文件体积上限
+        if ((navigator as any).deviceMemory) {
+            memLimitAppx = Math.max(4, (navigator as any).deviceMemory * 0.5); 
+        }
+        const maxLimitBytes = memLimitAppx * 1024 * 1024 * 1024;
+        
+        if (totalSize > maxLimitBytes) {
+           const sizeMB = (totalSize / (1024 * 1024)).toFixed(0);
+           const limitMB = (maxLimitBytes / (1024 * 1024)).toFixed(0);
+           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 PLY4 序列分段总体积达到了 ${sizeMB} MB，已超出系统计算的当前最大安全运行阈值 (约 ${limitMB} MB)。\n\n引擎对超大体积文件群进行初始化（如建立 GSplatSorter 的中心点索引数组）时，总体积过大时必然触发 "RangeError: Array buffer allocation failed" 造成应用死机。\n\n为保证可用性，已拦截此操作。\n建议做法: 请减少选中的序列分段分批次处理。`);
+           return;
+        }
+
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         progress(0, 'PREPARING', `Loading ${files.length} PLY4 segments`);
@@ -3206,7 +3240,15 @@ export class Viewer {
             const texWidth = 4096;
             const totalPixels = numSplats * K;
             const texHeight = Math.ceil(totalPixels / texWidth);
-            const texData = new Float32Array(texWidth * texHeight * 4);
+            
+            // #WDD 2026-04-28 修复多段文件拖入导致的OOM内存溢出: 直接写入材质lock缓冲，避免分配重复的Float32Array
+            trajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'trajectoryTexture'
+            });
+            const dst = trajectoryTexture.lock();
+            const texData = new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4);
 
             // #WDD 2026-01-16: Fix - Data is ALREADY SORTED in data.bin
             // #WDD 2026-01-17: Restore Reordering Logic if original_index exists
@@ -3226,13 +3268,6 @@ export class Viewer {
                 }
             }
 
-            trajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
-                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
-                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
-                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'trajectoryTexture'
-            });
-            const dst = trajectoryTexture.lock();
-            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
             trajectoryTexture.unlock();
         }
 
@@ -3250,7 +3285,15 @@ export class Viewer {
             const texWidth = 4096;
             const totalPixels = numSplats * Kvar;
             const texHeight = Math.ceil(totalPixels / texWidth);
-            const texData = new Float32Array(texWidth * texHeight * 4);
+            
+            // #WDD 2026-04-28 修复多段文件拖入导致的OOM内存溢出: 直接写入材质lock缓冲，避免分配重复的Float32Array
+            rotationTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'rotationTexture'
+            });
+            const dst = rotationTexture.lock();
+            const texData = new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4);
 
             // The shader samples quaternions as [x, y, z, w]. Older payloads store
             // banks as [w, x, y, z], while newer saved PLY4 files annotate XYZW.
@@ -3301,13 +3344,6 @@ export class Viewer {
                 console.log(`  Texture (XYZW): [${texRot.map(v => v.toFixed(3))}]`);
             }
 
-            rotationTexture = new pc.Texture(this.app.graphicsDevice, {
-                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
-                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
-                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'rotationTexture'
-            });
-            const dst = rotationTexture.lock();
-            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
             rotationTexture.unlock();
         }
 
@@ -3324,7 +3360,15 @@ export class Viewer {
             const texWidth = 4096;
             const totalPixels = numSplats * Kdc;
             const texHeight = Math.ceil(totalPixels / texWidth);
-            const texData = new Float32Array(texWidth * texHeight * 4);
+            
+            // #WDD 2026-04-28 修复多段文件拖入导致的OOM内存溢出: 直接写入材质lock缓冲，避免分配重复的Float32Array
+            dcTrajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
+                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
+                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
+                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dcTrajectoryTexture'
+            });
+            const dst = dcTrajectoryTexture.lock();
+            const texData = new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4);
 
             const origIndices = splatData.getProp('original_index');
 
@@ -3343,13 +3387,6 @@ export class Viewer {
                 }
             }
 
-            dcTrajectoryTexture = new pc.Texture(this.app.graphicsDevice, {
-                width: texWidth, height: texHeight, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
-                minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
-                addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'dcTrajectoryTexture'
-            });
-            const dst = dcTrajectoryTexture.lock();
-            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
             dcTrajectoryTexture.unlock();
         }
 
@@ -3360,21 +3397,26 @@ export class Viewer {
         const s1 = splatData.getProp('scale_1');
         const s2 = splatData.getProp('scale_2');
         if (s0 && s1 && s2) {
-            const texData = new Float32Array(width * height * 4);
-            for (let i = 0; i < splatData.numSplats; i++) {
-                texData[i * 4 + 0] = s0[i];
-                texData[i * 4 + 1] = s1[i];
-                texData[i * 4 + 2] = s2[i];
-                texData[i * 4 + 3] = 0.0;
-            }
-            this.scalesTexData = texData;
             scalesTexture = new pc.Texture(this.app.graphicsDevice, {
                 width, height, format: pc.PIXELFORMAT_RGBA32F, mipmaps: false,
                 minFilter: pc.FILTER_NEAREST, magFilter: pc.FILTER_NEAREST,
                 addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE, name: 'scalesTexture'
             });
             const dst = scalesTexture.lock();
-            new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4).set(texData);
+            const texData = new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4);
+            
+            for (let i = 0; i < splatData.numSplats; i++) {
+                texData[i * 4 + 0] = s0[i];
+                texData[i * 4 + 1] = s1[i];
+                texData[i * 4 + 2] = s2[i];
+                texData[i * 4 + 3] = 0.0;
+            }
+            
+            // #WDD 2026-04-28 We don't save a duplicate scalesTexData if not needed, 
+            // but for UI selection we might. Keep creating a cheap copy if absolutely requested,
+            // or just use texData slice if they need it. Actually scalesTexData is kept in memory.
+            this.scalesTexData = new Float32Array(texData);
+            
             scalesTexture.unlock();
         }
 
