@@ -2,7 +2,7 @@ import * as pc from 'playcanvas';
 import JSZip from 'jszip';
 import { PlyExporter } from '../utils/ply-exporter';
 import { TrueSplatsLoader } from '../utils/truesplats-loader';
-import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../utils/sog4-encoder-wrapper';
+import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../utils/sog4-encoder';
 import { PLY4Encoder } from '../utils/ply4-encoder';
 import {
     chooseExportModelTransform,
@@ -220,6 +220,10 @@ export class ViewerExportManager {
             URL.revokeObjectURL(url);
             console.log(`[Export] Saved .truesplats: ${filename}`);
         } catch (e: any) {
+            if (e.message === "Export cancelled") {
+                console.log("[Export] SOG4 Export cancelled by user.");
+                return;
+            }
             console.error("[Export] Save failed:", e);
             alert("Save failed: " + e.message);
         }
@@ -237,6 +241,7 @@ export class ViewerExportManager {
             const overlay = document.getElementById('loading-overlay');
             const statusEl = document.getElementById('loading-status');
             const detailEl = document.getElementById('loading-detail');
+            const etaEl = document.getElementById('loading-eta');
             const bar = document.getElementById('loading-step-progress');
             const squares = Array.from(document.querySelectorAll('.step-square'));
 
@@ -307,10 +312,23 @@ export class ViewerExportManager {
         }
 
         console.log(`[Export] Saving .sog4...`);
+        const abortController = new AbortController();
+        const cancelBtn = document.getElementById('loading-cancel');
+        let stopProgressHeartbeat = () => {};
+
         try {
+            if (cancelBtn) {
+                cancelBtn.classList.remove('hidden');
+                cancelBtn.onclick = () => {
+                    abortController.abort();
+                    cancelBtn.classList.add('hidden');
+                };
+            }
+
             const overlay = document.getElementById('loading-overlay');
             const statusEl = document.getElementById('loading-status');
             const detailEl = document.getElementById('loading-detail');
+            const etaEl = document.getElementById('loading-eta');
             const bar = document.getElementById('loading-step-progress');
             const substepsEl = document.getElementById('loading-substeps');
             const squares = Array.from(document.querySelectorAll('.step-square'));
@@ -347,6 +365,45 @@ export class ViewerExportManager {
                 pct: HTMLDivElement;
                 fill: HTMLDivElement;
             }>();
+            const exportStartedAt = performance.now();
+            let lastProgressPct = 0;
+            let lastProgressDetail = 'Preparing export';
+            let heartbeatTimer: number | null = null;
+            // #WDD-gpt 2026-04-30 - 在导出监控 UI 中显示基于整体进度估算的剩余时间
+            const formatEta = (pctValue: number) => {
+                const clamped = Math.min(Math.max(pctValue, 0), 100);
+                if (clamped < 1 || clamped >= 100) return clamped >= 100 ? '0s remaining' : 'Estimating time';
+                const elapsedMs = performance.now() - exportStartedAt;
+                const totalMs = elapsedMs / (clamped / 100);
+                const remainingSeconds = Math.max(0, Math.round((totalMs - elapsedMs) / 1000));
+                const hours = Math.floor(remainingSeconds / 3600);
+                const minutes = Math.floor((remainingSeconds % 3600) / 60);
+                const seconds = remainingSeconds % 60;
+                if (hours > 0) return `${hours}h ${minutes}m remaining`;
+                if (minutes > 0) return `${minutes}m ${seconds}s remaining`;
+                return `${seconds}s remaining`;
+            };
+            const formatElapsed = () => {
+                const elapsedSeconds = Math.max(0, Math.floor((performance.now() - exportStartedAt) / 1000));
+                const minutes = Math.floor(elapsedSeconds / 60);
+                const seconds = elapsedSeconds % 60;
+                return minutes > 0 ? `${minutes}m ${seconds}s elapsed` : `${seconds}s elapsed`;
+            };
+            // #WDD-gpt 2026-05-01 - 导出计算阶段即使没有新进度，也每秒刷新 UI 心跳，避免用户误以为卡死
+            const startProgressHeartbeat = () => {
+                if (heartbeatTimer !== null) return;
+                heartbeatTimer = window.setInterval(() => {
+                    if (etaEl) etaEl.innerText = `${formatEta(lastProgressPct)} - ${formatElapsed()}`;
+                    if (detailEl && lastProgressDetail) {
+                        detailEl.innerText = `${lastProgressDetail} .${'.'.repeat(Math.floor(performance.now() / 1000) % 3)}`;
+                    }
+                }, 1000);
+            };
+            stopProgressHeartbeat = () => {
+                if (heartbeatTimer === null) return;
+                window.clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            };
             const resetSubsteps = () => {
                 if (!substepsEl) return;
                 substepsEl.innerHTML = '';
@@ -397,6 +454,7 @@ export class ViewerExportManager {
                     stepNodes.set(step.id, { row, detail, pct, fill });
                 });
             };
+            // #WDD-gpt 2026-04-30 - 只显示当前导出阶段，已完成步骤隐藏，当前步骤显示内部明细
             const updateSubstep = (stepId: string, pctValue: number, detail: string, state: 'pending' | 'active' | 'done' = 'active') => {
                 const node = stepNodes.get(stepId);
                 if (!node) return;
@@ -430,7 +488,14 @@ export class ViewerExportManager {
             const setExportProgress = (pct: number, detail: string, meta?: SOG4EncodeProgressMeta) => {
                 overlay?.classList.remove('hidden');
                 if (statusEl) statusEl.innerText = 'EXPORTING SOG4';
-                if (detailEl) detailEl.innerText = detail || '';
+                const etaText = formatEta(pct);
+                const currentStageText = meta?.stageId
+                    ? `${meta.stageLabel || meta.stageId} ${Math.round(meta.stagePct ?? 0)}%${meta.detail ? ` - ${meta.detail}` : ''}`
+                    : detail;
+                lastProgressPct = Math.min(Math.max(pct, 0), 100);
+                lastProgressDetail = currentStageText || detail || '';
+                if (detailEl) detailEl.innerText = currentStageText || '';
+                if (etaEl) etaEl.innerText = `${etaText} - ${formatElapsed()}`;
                 if (bar) bar.style.width = `${Math.min(Math.max(pct, 0), 100)}%`;
                 const stepMax = Math.max(squares.length - 1, 1);
                 const step = Math.round((Math.min(Math.max(pct, 0), 100) / 100) * stepMax);
@@ -442,14 +507,15 @@ export class ViewerExportManager {
                     completeMissingIntermediateSteps(meta.stageId);
                     updateSubstep(
                         meta.stageId,
-                        meta.stagePct,
-                        meta.detail || detail,
-                        meta.stagePct >= 100 ? 'done' : 'active'
+                        meta.stagePct ?? 0,
+                        `${etaText}${meta.detail ? ` - ${meta.detail}` : ''}`,
+                        (meta.stagePct ?? 0) >= 100 ? 'done' : 'active'
                     );
                 }
             };
 
             initializeSubsteps();
+            startProgressHeartbeat();
             setExportProgress(0, 'Preparing export', {
                 stageId: 'prepare',
                 stageLabel: 'Prepare Export',
@@ -512,6 +578,7 @@ export class ViewerExportManager {
 
             buffer = await SOG4Encoder.encode(v.lastParsedData, encodeOverrides, {
                 mode: 'standard',
+                signal: abortController.signal,
                 progress: (pct: number, msg: string, meta?: SOG4EncodeProgressMeta) => {
                     setExportProgress(8 + (pct * 0.84), `Encoding: ${msg}`, meta ? {
                         ...meta,
@@ -549,11 +616,18 @@ export class ViewerExportManager {
             });
             setTimeout(() => {
                 overlay?.classList.add('hidden');
+                if (cancelBtn) cancelBtn.classList.add('hidden');
+                stopProgressHeartbeat();
                 resetSubsteps();
             }, 600);
         } catch (e: any) {
-            console.error("[Export] Save SOG4 failed:", e);
-            alert("Save failed: " + e.message);
+            if (e.message === "Export cancelled" || abortController.signal.aborted) {
+                console.log("[Export] SOG4 Export cancelled.");
+            } else {
+                console.error("[Export] Save SOG4 failed:", e);
+                alert("Save failed: " + e.message);
+            }
+            stopProgressHeartbeat();
             document.getElementById('loading-overlay')?.classList.add('hidden');
             const substepsEl = document.getElementById('loading-substeps');
             if (substepsEl) {

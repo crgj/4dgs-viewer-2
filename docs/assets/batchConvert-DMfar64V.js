@@ -1,4 +1,4 @@
-var ce=Object.defineProperty;var ae=(t,e,o)=>e in t?ce(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var B=(t,e,o)=>ae(t,typeof e!="symbol"?e+"":e,o);import{P as de,J as ue,a as he}from"./sog4-encoder-wrapper-Bcv0dl0r.js";class se{static async encode(e,o){var p,S,z,T,w,E;const n=e.count||0;if(n===0)return new ArrayBuffer(0);const r=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let f=0;f<45;f++){const L=`f_rest_${f}`;e[L]&&i.push(L)}let s=`ply
+var ce=Object.defineProperty;var ae=(t,e,o)=>e in t?ce(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var B=(t,e,o)=>ae(t,typeof e!="symbol"?e+"":e,o);import{P as de,J as ue,S as he}from"./ply4-loader-Dp5uVbdh.js";class se{static async encode(e,o){var p,S,z,T,w,E;const n=e.count||0;if(n===0)return new ArrayBuffer(0);const r=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let f=0;f<45;f++){const L=`f_rest_${f}`;e[L]&&i.push(L)}let s=`ply
 format binary_little_endian 1.0
 `;s+=`element vertex ${n}
 `,s+=`property float x

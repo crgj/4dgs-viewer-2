@@ -1,8 +1,8 @@
-import { PLY4Loader, type PLY4LoadProgressMeta } from './utils/ply4-loader';
-import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
-import { PLYEncoder } from './utils/ply-encoder';
+import { PLY4Loader, type PLY4LoadProgressMeta } from '../src/utils/ply4-loader';
+import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../src/utils/sog4-encoder';
+import { PLYEncoder } from '../src/utils/ply-encoder';
 // #WDD 2026-04-19 弃用4DGS格式序列导出，改为导出为独立的标准PLY单帧文件，以便于外部的3DGS查看器兼容。
-import { exportPLYSequence } from './utils/ply-sequence-exporter';
+import { exportPLYSequence } from '../src/utils/ply-sequence-exporter';
 import JSZip from 'jszip';
 
 type TaskStatus = 'queued' | 'preparing' | 'loading' | 'encoding' | 'downloading' | 'done' | 'error';

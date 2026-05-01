@@ -7,9 +7,9 @@
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
 
-  <script type="module" crossorigin src="./assets/main-dNzABXKe.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/sog4-encoder-wrapper-Bcv0dl0r.js">
-  <link rel="stylesheet" crossorigin href="./assets/sog4-encoder-wrapper-Bju3Niin.css">
+  <script type="module" crossorigin src="./assets/main-B99D6HT9.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/ply4-loader-Dp5uVbdh.js">
+  <link rel="stylesheet" crossorigin href="./assets/ply4-loader-BcN_vrl0.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -510,7 +510,8 @@
     <!-- Minimalist Loading Overlay -->
     <div id="loading-overlay"
         class="hidden fixed inset-0 flex items-center justify-center bg-black/90 z-[100] backdrop-blur-sm">
-        <div class="flex flex-col items-center gap-8 w-64">
+        <!-- #WDD-gpt 2026-04-30 - 加宽导出弹窗以容纳详细阶段进度和长文件名 -->
+        <div class="flex flex-col items-center gap-8 w-[360px] max-w-[calc(100vw-2rem)]">
             <!-- Step Indicator -->
             <div id="loading-steps" class="w-full h-8 flex justify-between items-center relative">
                 <!-- Lines Container (centered with squares) -->
@@ -541,9 +542,18 @@
                 <div id="loading-detail"
                     class="text-[10px] font-mono uppercase ui-text-secondary tracking-tight opacity-100">System
                     Ready</div>
+                <!-- #WDD-gpt 2026-04-30 - 独立显示导出剩余时间，避免被长阶段明细挤掉 -->
+                <div id="loading-eta"
+                    class="text-[9px] font-mono uppercase tracking-[0.18em] text-emerald-400/80">Estimating
+                    Time</div>
             </div>
 
             <div id="loading-substeps" class="hidden w-full flex-col gap-2"></div>
+
+            <!-- #WDD 2026-04-28 Add Cancel button -->
+            <button id="loading-cancel" class="hidden ui-btn px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest text-red-500 border border-red-500/30 hover:bg-red-500/10 mt-4 transition-all">
+                Cancel Export
+            </button>
 
         </div>
     </div>

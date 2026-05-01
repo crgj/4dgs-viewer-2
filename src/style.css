@@ -682,8 +682,11 @@ body.theme-light .fps-item:not(.active):hover {
 
 #loading-substeps {
     max-height: 240px;
+    overflow-y: auto;
+    padding-right: 2px;
 }
 
+/* #WDD-gpt 2026-04-30 - 详细导出进度保留已完成阶段，并让长明细自然换行 */
 .loading-substep {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -696,6 +699,11 @@ body.theme-light .fps-item:not(.active):hover {
 
 .loading-substep.is-done {
     border-color: rgba(16, 185, 129, 0.28);
+    opacity: 0.64;
+}
+
+.loading-substep [class*="tracking-tight"] {
+    overflow-wrap: anywhere;
 }
 
 .loading-substep-bar {
@@ -811,4 +819,3 @@ select.ui-input option {
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
 }
-

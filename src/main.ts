@@ -15,7 +15,7 @@ import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { ViewerPresetManager } from './viewer/viewer-preset-manager';
 import { ViewerFaceTrackingManager } from './viewer/viewer-face-tracking-manager';
 import { ViewerFileLoader } from './viewer/viewer-file-loader';
-import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder-wrapper';
+import { SOG4Encoder, type SOG4EncodeProgressMeta } from './utils/sog4-encoder';
 import { PLY4Encoder } from './utils/ply4-encoder'; // #WDD 2026-03-31
 import { PerformanceMonitor } from './managers/performance-monitor'; // #WDD 2026-04-11 Performance
 import { PerformancePanel } from './ui/performance-panel'; // #WDD 2026-04-11 Performance
