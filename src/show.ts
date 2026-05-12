@@ -98,7 +98,7 @@ class ShowViewer {
                 graphicsDeviceOptions: {
                     antialias: true,
                     alpha: false,
-                    preserveDrawingBuffer: false,
+                    preserveDrawingBuffer: true, // #WDD 2026-05-12 Required for gl.readPixels HUD luminance detection
                     powerPreference: 'high-performance'
                 }
             });
@@ -111,11 +111,16 @@ class ShowViewer {
         this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
         this.app.graphicsDevice.maxPixelRatio = window.devicePixelRatio;
 
-        window.addEventListener('resize', () => this.app.resizeCanvas());
+        window.addEventListener('resize', () => {
+            this.app.resizeCanvas();
+            this.orbitCameraUpdates(); // #WDD 2026-05-12 Refresh centering on resize
+        });
 
         this.skyboxManager = new SkyboxManager(this.app);
         this.setupScene();
         this.setupCameraControls();
+        this.setupSkyboxSelector();
+        this.setupGaussianRenderModeSelector();
         this.setupPlaybar();
         this.setupGallery();
         this.setupUIIsolation();
@@ -128,7 +133,7 @@ class ShowViewer {
     }
 
     private setupUIIsolation() {
-        const uiSelectors = ['header', '.info-panel', '.data-panel', 'footer', '.selection-zone', '#loading-progress-circle'];
+        const uiSelectors = ['header', 'nav', '.info-panel', '.data-panel', 'footer', '.selection-zone', '#about-modal', '#show-loading-overlay'];
         uiSelectors.forEach(selector => {
             const el = document.querySelector(selector);
             if (el) {
@@ -323,13 +328,13 @@ class ShowViewer {
         this.camera.lookAt(0, 0, 0);
 
         // #WDD 2026-05-12 Shift visual center to 3/5 of screen width using Projection Matrix Offset
-        // Offset 0.1 of width (0.5 -> 0.6) = 0.2 in projection space (-1 to 1)
+        // On Mobile (<1024px), center it (0.0 offset)
         const camera = this.camera.camera;
         if (camera) {
-            // Force a recompute if needed, then override
             (camera as any)._projectionMatrixDataDirty = true; 
             const proj = (camera as any).projectionMatrix;
-            proj.data[8] = -0.2; // Shift view left -> subject moves right
+            const isMobile = window.innerWidth < 1024;
+            proj.data[8] = isMobile ? 0 : -0.2; // 0 = Centered, -0.2 = Shifted for HUD
         }
     }
 
@@ -342,6 +347,41 @@ class ShowViewer {
     }
 
     // ===================== Playbar =====================
+    private setupSkyboxSelector() {
+        const list = document.getElementById('env-dropdown-list');
+        if (list) {
+            list.addEventListener('click', (e) => {
+                const item = (e.target as HTMLElement).closest('.env-item') as HTMLElement;
+                if (item && item.dataset.sky) {
+                    this.skyboxManager.setSkybox(item.dataset.sky);
+                    const nameEl = document.getElementById('data-skybox');
+                    if (nameEl) nameEl.textContent = item.textContent || '---';
+                }
+            });
+        }
+        const slider = document.getElementById('bg-blur-slider') as HTMLInputElement;
+        const valText = document.getElementById('blur-val-text');
+        if (slider) {
+            slider.addEventListener('input', () => {
+                const val = parseFloat(slider.value);
+                if (valText) valText.textContent = val.toFixed(1);
+                this.skyboxManager.setBlur(val);
+            });
+        }
+    }
+
+    private setupGaussianRenderModeSelector() {
+        const list = document.getElementById('render-mode-list');
+        if (list) {
+            list.addEventListener('click', (e) => {
+                const item = (e.target as HTMLElement).closest('.env-item') as HTMLElement;
+                if (item && item.dataset.mode) {
+                    this.setGaussianRenderMode(parseInt(item.dataset.mode));
+                }
+            });
+        }
+    }
+
     private setupPlaybar() {
         const playBtn = document.getElementById('show-play-pause') as HTMLButtonElement;
         const slider = document.getElementById('show-time-slider') as HTMLInputElement;
@@ -1222,7 +1262,6 @@ class ShowViewer {
         const yArr = this.posArrays.y;
         const zArr = this.posArrays.z;
         const origIndices = this.originalIndices;
-
         const instance = (this.splatEntity.gsplat as any).instance;
         const centers = instance?.sorter?.centers;
 
@@ -1253,51 +1292,6 @@ class ShowViewer {
                 instance.sorter.worker.postMessage({ centers: centersCopy.buffer }, [centersCopy.buffer]);
             }
         }
-
-        // #WDD 2026-05-12 Adaptive HUD color based on canvas luminance
-        this.luminanceTimer += dt;
-        if (this.luminanceTimer >= 0.2) {
-            this.luminanceTimer = 0;
-            this.updateHUDLuminance();
-        }
-    }
-
-    private updateHUDLuminance() {
-        const device = this.app.graphicsDevice;
-        const canvas = device.canvas;
-        const w = canvas.width;
-        const h = canvas.height;
-
-        // Sample areas: Top-right (Header), Bottom (Gallery/Footer)
-        // We use small 4x4 blocks to get an average
-        const sampleHUD = (x: number, y: number, elId: string) => {
-            const pixels = new Uint8Array(4 * 4 * 4);
-            // PlayCanvas coordinates are bottom-to-top for readPixels usually, 
-            // but let's just use a simple approach if possible. 
-            // Actually, we can just use the GL context.
-            const gl = (device as any).gl;
-            if (!gl) return;
-            
-            gl.readPixels(x, h - y, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-            
-            let r = 0, g = 0, b = 0;
-            for (let i = 0; i < pixels.length; i += 4) {
-                r += pixels[i]; g += pixels[i+1]; b += pixels[i+2];
-            }
-            const avgL = (r/16 * 0.299 + g/16 * 0.587 + b/16 * 0.114) / 255;
-            
-            const el = document.getElementById(elId) || document.querySelector(elId);
-            if (el) {
-                if (avgL > 0.5) el.classList.add('light-bg');
-                else el.classList.remove('light-bg');
-            }
-        };
-
-        sampleHUD(w - 100, 50, 'header');
-        sampleHUD(w - 100, 250, '.data-panel');
-        sampleHUD(w / 2, h - 50, 'footer');
-        // #WDD 2026-05-12 Sample bottom for gallery controls
-        sampleHUD(w / 2, h - 150, '.selection-zone');
     }
 
     public setGaussianRenderMode(mode: number) {

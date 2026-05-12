@@ -35,28 +35,58 @@
         #canvas-container { position: fixed; inset: 0; z-index: 0; }
         canvas { width: 100%; height: 100%; display: block; }
 
-        .svg-bg { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+        /* Full Height Sidebar Background - Original Angle & Sync #WDD 2026-05-12 */
+        .sidebar-bg { 
+            position: fixed; inset: 0; z-index: 1; pointer-events: none; 
+            width: 100vw; height: 100vh;
+            background: rgba(255,255,255,0.4);
+            /* Precisely match M0 0 H 600 L 300 1080 angle (31.25% top, 15.6% bottom) */
+            clip-path: polygon(0 0, 31.25vw 0, 15.625vw 100%, 0 100%);
+            transition: all 0.4s ease;
+        }
+        .sidebar-inner {
+            position: absolute; inset: 0;
+            background: rgba(255,255,255,0.2);
+            /* Offset inner for depth (approx 26% top, 10% bottom) */
+            clip-path: polygon(0 0, 26vw 0, 10.4vw 100%, 0 100%);
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar-bg { display: none; }
+        }
 
         /* Header */
         header {
             position: fixed; top: 0; left: 0; right: 0; height: 90px;
             display: flex; align-items: center; justify-content: space-between;
-            padding: 0 40px; z-index: 50; mix-blend-mode: difference; color: #fff;
+            padding: 0 40px; z-index: 9999; color: #fff; transition: color 0.4s ease;
+            pointer-events: auto !important;
         }
+        body.light-bg header { color: var(--accent-blue) !important; } /* #WDD 2026-05-12 Unified Blue */
 
         .brand-wrap { display: flex; align-items: center; gap: 15px; }
-        .brand-logo { width: 12px; height: 12px; background: var(--accent-blue); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); }
-        .brand { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: 0.5em; text-transform: uppercase; }
+        .brand-logo { width: 12px; height: 12px; background: var(--accent-blue); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); transition: background 0.4s ease; }
+        body.light-bg .brand-logo { background: var(--accent-blue) !important; }
+        .brand { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: 0.5em; text-transform: uppercase; transition: color 0.4s ease; }
+        body.light-bg .brand { color: var(--accent-blue) !important; } /* #WDD 2026-05-12 Unified Blue */
 
-        .header-right { display: flex; align-items: center; gap: 40px; }
-        nav { display: flex; gap: 40px; }
-        .nav-item { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2em; color: inherit; cursor: pointer; position: relative; padding: 10px 0; }
-        .nav-item:hover, .nav-item.active { color: var(--accent-blue); }
+        .header-right { display: flex; align-items: center; gap: 40px; pointer-events: auto !important; }
+        .nav-item { 
+            font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2em; color: inherit; 
+            cursor: pointer; position: relative; padding: 10px 0; 
+            transition: all 0.3s cubic-bezier(0.2, 1, 0.3, 1);
+            pointer-events: auto !important;
+        }
+        .nav-item:hover, .nav-item.active { 
+            color: var(--accent-blue); 
+            text-shadow: 0 0 8px rgba(0, 122, 255, 0.4);
+            letter-spacing: 0.25em;
+        }
 
         .env-selector { position: relative; }
         .env-dropdown {
             position: absolute; top: 35px; right: 0; background: var(--glass-white); border: 1px solid var(--border-light); backdrop-filter: blur(20px);
-            padding: 10px; display: none; flex-direction: column; gap: 2px; width: 220px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); z-index: 2000; pointer-events: auto;
+            padding: 10px; display: none; flex-direction: column; gap: 2px; width: 220px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); z-index: 10000; pointer-events: auto !important;
             max-height: 450px; border-radius: 4px;
         }
         
@@ -81,10 +111,24 @@
         #bg-blur-slider { width: 100%; height: 2px; -webkit-appearance: none; background: var(--border-light); outline: none; border-radius: 2px; }
         #bg-blur-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--accent-blue); border-radius: 50%; cursor: pointer; border: 2px solid white; }
 
-        /* Left Information */
-        .info-panel { position: fixed; top: 180px; left: 40px; z-index: 40; display: flex; flex-direction: column; gap: 40px; width: 320px; pointer-events: auto; }
+        /* Left Information - Refined Proportions #WDD 2026-05-12 */
+        .info-panel { 
+            position: fixed; 
+            top: clamp(100px, 9.375vw, 180px); 
+            left: clamp(20px, 2.083vw, 40px); 
+            z-index: 40; 
+            display: flex; 
+            flex-direction: column; 
+            gap: clamp(12px, 1.5vw, 25px);
+            width: clamp(200px, 14vw, 320px); 
+            pointer-events: auto; 
+        }
+        
+
         .info-title { 
-            font-family: 'Outfit', sans-serif; font-size: 56px; font-weight: 300; letter-spacing: 0.1em; line-height: 1.1; margin-bottom: 10px; text-transform: uppercase; color: var(--text-primary);
+            font-family: 'Outfit', sans-serif; 
+            font-size: clamp(20px, 2.6vw, 56px);
+            font-weight: 300; letter-spacing: 0.1em; line-height: 1.1; margin-bottom: clamp(4px, 0.35vw, 8px); text-transform: uppercase; color: #fff;
             transition: all 0.4s cubic-bezier(0.2, 1, 0.3, 1); cursor: default; position: relative;
         }
         .info-title:hover { 
@@ -93,16 +137,34 @@
             text-shadow: 0 0 15px rgba(0,122,255,0.3);
         }
         
-        .info-subtitle { font-size: 10px; font-weight: 700; letter-spacing: 0.25em; color: var(--text-secondary); text-transform: uppercase; }
+        .info-subtitle { 
+            font-size: clamp(6px, 0.45vw, 9px);
+            font-weight: 700; letter-spacing: 0.25em; color: var(--text-secondary); text-transform: uppercase; 
+        }
+
+        body.light-bg .nav-item,
+        body.light-bg .scene-counter,
+        body.light-bg .frame-display { color: var(--accent-blue) !important; opacity: 0.8; }
+        
+        body.light-bg .nav-item:hover, 
+        body.light-bg .nav-item.active { color: #0056b3 !important; } /* Darker blue for active state on light bg */
 
         .metadata-grid {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-light);
+            display: grid; grid-template-columns: 1fr 1fr; 
+            gap: clamp(6px, 0.7vw, 12px); /* Tighter gap for columns */
+            margin-top: clamp(8px, 0.8vw, 15px); padding-top: clamp(8px, 0.8vw, 15px); border-top: 1px solid var(--border-light);
         }
-        .meta-item { display: flex; flex-direction: column; gap: 5px; transition: transform 0.2s ease; }
+        body.light-bg .metadata-grid { border-top-color: rgba(0, 122, 255, 0.2) !important; }
+
+        .meta-item { display: flex; flex-direction: column; gap: clamp(1px, 0.15vw, 3px); transition: transform 0.2s ease; }
         .meta-item:hover { transform: translateX(5px); }
-        .meta-label { font-size: 8px; font-weight: 900; color: var(--text-secondary); letter-spacing: 0.2em; text-transform: uppercase; }
+        .meta-label { 
+            font-size: clamp(5px, 0.35vw, 7px);
+            font-weight: 900; color: var(--text-secondary); letter-spacing: 0.2em; text-transform: uppercase; 
+        }
         .meta-value { 
-            font-size: 11px; font-weight: 700; color: var(--text-primary); letter-spacing: 0.05em; text-transform: uppercase;
+            font-size: clamp(7px, 0.5vw, 10px);
+            font-weight: 700; color: #fff; letter-spacing: 0.05em; text-transform: uppercase;
             transition: color 0.2s ease; cursor: default;
         }
         .meta-item:hover .meta-value { color: var(--accent-blue); }
@@ -116,49 +178,86 @@
             100% { transform: translate(0); }
         }
 
-        /* Playback Progress In Parameters */
-        .playback-zone { margin-top: 30px; }
-        .scene-counter { font-size: 14px; font-family: 'Outfit'; font-weight: 900; color: var(--accent-blue); letter-spacing: 0.2em; margin-bottom: 15px; }
+        /* Mobile Minimalist Style < 1024px #WDD 2026-05-12 */
+        @media (max-width: 1024px) {
+            body { background: #000; }
+            .info-panel, .data-panel, .sidebar-bg, footer { display: none; }
+            
+            header { 
+                height: 50px; padding: 0 15px; background: transparent; 
+                border-bottom: none; backdrop-filter: none;
+            }
+            .header-right { display: none; }
+            .brand { font-size: 14px; letter-spacing: 0.3em; opacity: 0.8; }
+            .brand-logo { width: 10px; height: 10px; }
+            
+            .selection-zone { 
+                bottom: 20px; left: 50% !important; transform: translateX(-50%); width: 100vw;
+            }
+            .gallery-wrapper { width: 95vw; padding: 0 5px; }
+            .nav-arrow { display: flex; opacity: 0.8; width: 30px; height: 30px; }
+            #gallery-scroll { gap: 10px; padding: 0 10px 5px 10px; }
+            .gallery-item { flex: 0 0 110px; }
+            .gallery-item.active { flex: 0 0 132px; border-color: var(--accent-blue); }
+            .gallery-scrollbar { width: 100px; height: 2px; }
+        }
+
+        /* Playback Progress - Adaptive Scaling #WDD 2026-05-12 */
+        .playback-zone { margin-top: clamp(10px, 1.2vw, 20px); width: 100%; max-width: clamp(160px, 12vw, 260px); }
+        .scene-counter { font-size: clamp(8px, 0.6vw, 12px); font-family: 'Outfit'; font-weight: 900; color: var(--accent-blue); letter-spacing: 0.2em; margin-bottom: clamp(5px, 0.6vw, 10px); }
         
-        .control-row { display: flex; align-items: center; gap: 15px; }
-        .play-btn { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-blue); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 12px rgba(0,122,255,0.3); }
+        .control-row { display: flex; align-items: center; gap: clamp(5px, 0.6vw, 12px); }
+        .play-btn { width: clamp(16px, 1.2vw, 24px); height: clamp(16px, 1.2vw, 24px); border-radius: 50%; background: var(--accent-blue); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 0.2vw 0.6vw rgba(0,122,255,0.3); }
         .slider-wrap { flex: 1; position: relative; height: 2px; background: var(--border-light); }
         #show-time-slider { width: 100%; height: 100%; -webkit-appearance: none; background: transparent; outline: none; cursor: pointer; position: absolute; z-index: 2; }
-        #show-time-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; background: var(--accent-blue); border-radius: 50%; }
+        #show-time-slider::-webkit-slider-thumb { -webkit-appearance: none; width: clamp(4px, 0.4vw, 8px); height: clamp(4px, 0.4vw, 8px); background: var(--accent-blue); border-radius: 50%; }
         .progress-fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--accent-blue); z-index: 1; }
-        .frame-display { font-family: 'Outfit'; font-size: 11px; font-weight: 700; color: var(--text-secondary); min-width: 35px; text-align: right; }
+        .frame-display { font-family: 'Outfit'; font-size: clamp(7px, 0.45vw, 10px); font-weight: 700; color: var(--text-secondary); min-width: clamp(20px, 1.5vw, 30px); text-align: right; }
+
+        .render-mode-panel { margin-top: clamp(6px, 0.8vw, 15px); padding-top: clamp(6px, 0.8vw, 15px); border-top: 1px solid var(--border-light); }
+        .render-mode-btn { padding: 0.25vw 0.5vw; border: 1px solid var(--border-light); background: rgba(255,255,255,0.05); font-size: clamp(7px, 0.45vw, 9px); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer; transition: all 0.2s ease; color: var(--text-secondary); border-radius: 2px; }
 
         /* Right Data Gauge */
-        .data-panel { position: fixed; top: 220px; right: 80px; z-index: 40; display: flex; flex-direction: column; align-items: center; mix-blend-mode: difference; color: #fff; }
-        .dynamics-gauge { width: 140px; height: 140px; position: relative; display: flex; align-items: center; justify-content: center; }
+        .data-panel { position: fixed; top: 5.2vw; right: clamp(20px, 2.08vw, 40px); z-index: 140; display: flex; flex-direction: column; align-items: flex-end; }
+        .dynamics-gauge { width: 7.29vw; height: 7.29vw; position: relative; display: flex; align-items: center; justify-content: center; }
         .gauge-svg { transform: rotate(-90deg); width: 100%; height: 100%; }
         .gauge-bg { fill: none; stroke: var(--border-light); stroke-width: 2; }
         .gauge-fill { fill: none; stroke: var(--accent-blue); stroke-width: 3; stroke-dasharray: 440; stroke-dashoffset: 440; transition: stroke-dashoffset 1s ease-out; stroke-linecap: round; }
         .gauge-text { position: absolute; text-align: center; }
         .gauge-label { font-size: 8px; font-weight: 900; color: var(--text-secondary); letter-spacing: 0.1em; }
         .gauge-value { font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 700; }
+        body.light-bg .gauge-value, body.light-bg .gauge-label { color: var(--accent-blue); }
 
         /* Selection Zone - Anchor at 60% (3/5) */
         .selection-zone { position: fixed; bottom: 80px; left: 60%; width: 0; overflow: visible; z-index: 160; display: flex; flex-direction: column; align-items: center; transition: var(--transition-main); color: #fff; pointer-events: none; }
         .selection-zone * { pointer-events: auto; }
         .gallery-anchor { display: flex; flex-direction: column; align-items: center; gap: 15px; width: auto; }
         
-        .gallery-wrapper { width: 1200px; display: flex; align-items: center; justify-content: center; gap: 20px; position: relative; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        .gallery-wrapper { width: 80vw; display: flex; align-items: center; justify-content: center; gap: 20px; position: relative; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
         .selection-zone.collapsed .gallery-wrapper, .selection-zone.collapsed .gallery-scrollbar { opacity: 0; transform: translateY(50px) scale(0.9); pointer-events: none; }
         .selection-zone.collapsed { bottom: 60px; }
         
-        #gallery-scroll { display: flex; gap: 25px; overflow-x: auto; overflow-y: hidden; align-items: flex-end; padding: 0 20px 10px 20px; width: 100%; scrollbar-width: none; cursor: grab; }
+        #gallery-scroll { display: flex; gap: clamp(15px, 1.3vw, 30px); overflow-x: auto; overflow-y: hidden; align-items: flex-end; padding: 0 20px 10px 20px; width: 100%; scrollbar-width: none; cursor: grab; }
         /* Safe centering for overflow */
         #gallery-scroll::before, #gallery-scroll::after { content: ''; margin: auto; }
         #gallery-scroll.grabbing { cursor: grabbing; scroll-behavior: auto; }
         #gallery-scroll::-webkit-scrollbar { display: none; }
 
         .gallery-item { 
-            flex: 0 0 200px; aspect-ratio: 16 / 10; background: rgba(255,255,255,0.03); 
+            flex: 0 0 clamp(120px, 10.416vw, 240px); /* 200px at 1920px */
+            aspect-ratio: 16 / 10; background: rgba(255,255,255,0.03); 
             border: 1px solid rgba(255,255,255,0.1); cursor: pointer; transition: all 0.5s cubic-bezier(0.2, 1, 0.3, 1); 
             opacity: 0.6; position: relative; overflow: hidden;
             backdrop-filter: blur(5px);
         }
+        .gallery-item.active {
+            flex: 0 0 clamp(144px, 12.5vw, 288px); /* 1.2x of standard size */
+            opacity: 1;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 30px rgba(0, 122, 255, 0.4);
+            z-index: 10;
+        }
+        
         .gallery-item::before {
             content: ''; position: absolute; inset: 0; 
             background: linear-gradient(rgba(0,122,255,0.1), transparent); 
@@ -185,10 +284,7 @@
         .analysis-fill { height: 100%; width: 30%; background: var(--accent-blue); animation: analysis-pulse 2s ease-in-out infinite alternate; box-shadow: 0 0 8px var(--accent-blue); }
         @keyframes analysis-pulse { from { transform: translateX(0); width: 10%; } to { transform: translateX(900%); width: 30%; } }
 
-        .gallery-item.active { 
-            flex: 0 0 240px; opacity: 1; border: 1px solid var(--accent-blue); 
-            box-shadow: 0 0 30px rgba(0, 122, 255, 0.3); transform: scale(1.05); 
-        }
+        /* Unified Active State Transition Handled Above #WDD 2026-05-12 */
         .gallery-item img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(50%) contrast(1.1); transition: 0.6s; }
         .gallery-item:hover img, .gallery-item.active img { filter: grayscale(0%) contrast(1.2); transform: scale(1.08); }
         
@@ -242,10 +338,29 @@
         .light-bg .mini-dot { background: rgba(0,0,0,0.2); }
         .light-bg .mini-dot.active { background: #000; }
 
-        header { position: fixed; top: 0; left: 0; right: 0; height: 90px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; z-index: 150; }
+        header { position: fixed; top: 0; left: 0; right: 0; height: clamp(60px, 6.25vw, 120px); display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(20px, 2.08vw, 40px); z-index: 100; transition: color 0.4s ease; color: #fff; pointer-events: none; }
+        header.light-bg { color: #000; } /* Right menu to Black #WDD 2026-05-12 */
+        
+        .brand { display: flex; align-items: center; gap: clamp(8px, 0.8vw, 15px); font-size: clamp(14px, 1.25vw, 24px); font-weight: 700; letter-spacing: 0.4em; color: #fff; transition: color 0.4s ease; pointer-events: auto; }
+        .brand.light-bg { color: var(--accent-blue); } /* Logo to Blue #WDD 2026-05-12 */
+        
+        .sidebar-bg {
+            position: fixed; top: 0; left: 0; width: 35vw; height: 100vh;
+            background: rgba(255, 255, 255, 0.1);
+            clip-path: polygon(0 0, 31.25vw 0, 15.625vw 100%, 0 100%);
+            z-index: 5; pointer-events: none; transition: all 0.4s ease;
+        }
+        .sidebar-bg.light-bg { background: rgba(0, 122, 255, 0.15); } /* Sidebar highlight to Blue tint #WDD 2026-05-12 */
+
+        .sidebar-inner {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            clip-path: polygon(0 0, 26vw 0, 10.4vw 100%, 0 100%);
+        }
         .data-panel { position: fixed; top: 100px; right: 40px; z-index: 140; display: flex; flex-direction: column; align-items: flex-end; }
 
-        footer { position: fixed; bottom: 0; left: 0; right: 0; height: 40px; padding: 0 40px; display: flex; align-items: center; justify-content: space-between; font-size: 9px; font-weight: 700; background: rgba(255,255,255,0.1); border-top: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px); z-index: 100; }
+        footer { position: fixed; bottom: 0; left: 0; right: 0; height: 40px; padding: 0 40px; display: flex; align-items: center; justify-content: space-between; font-size: 9px; font-weight: 700; background: rgba(255,255,255,0.1); border-top: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px); z-index: 100; transition: color 0.4s ease; }
+        body.light-bg footer { color: var(--accent-blue); background: rgba(0, 122, 255, 0.05); border-top-color: rgba(0, 122, 255, 0.1); }
         footer.light-bg { background: rgba(0,0,0,0.05); border-top: 1px solid rgba(0,0,0,0.1); }
         .nav-arrow, .collapse-toggle-wrap { color: inherit; transition: color 0.3s ease; }
 
@@ -283,10 +398,9 @@
 </head>
 
 <body class="antialiased">
-    <svg class="svg-bg" viewBox="0 0 1920 1080" preserveAspectRatio="none">
-        <path d="M0 0 H 600 L 300 1080 H 0 Z" fill="rgba(255,255,255,0.4)" />
-        <path d="M0 0 H 500 L 200 1080 H 0 Z" fill="rgba(255,255,255,0.2)" />
-    </svg>
+    <div class="sidebar-bg">
+        <div class="sidebar-inner"></div>
+    </div>
 
     <header>
         <div class="brand-wrap"><div class="brand-logo"></div><div class="brand">TRUESPLAT</div></div>
@@ -324,7 +438,6 @@
                     </div>
                 </div>
                 <div class="nav-item" id="nav-about">About</div>
-            </nav>
         </div>
     </header>
 
@@ -363,8 +476,8 @@
         <div class="render-mode-panel" style="margin-top:20px; padding-top:20px; border-top:1px solid var(--border-light);">
             <div class="meta-label" style="margin-bottom:10px;">Render Visuals</div>
             <div style="display:flex; gap:10px;">
-                <div class="render-mode-btn active" data-mode="0" onclick="setRenderMode(0)">Normal</div>
-                <div class="render-mode-btn" data-mode="1" onclick="setRenderMode(1)">Points</div>
+                <div class="render-mode-btn active" data-mode="0" onclick="setRenderMode(0)">Gaussian</div>
+                <div class="render-mode-btn" data-mode="1" onclick="setRenderMode(1)">Points Only</div>
             </div>
         </div>
     </div>
@@ -372,7 +485,7 @@
     <div class="data-panel" style="top: 100px; right: 40px; align-items: flex-end;">
         <div class="meta-item" style="align-items: flex-end; margin-bottom: 20px;">
             <div class="meta-label">Rendering Efficiency</div>
-            <div class="meta-value accent" style="font-size: 24px; font-family: 'Outfit';" id="show-fps">00 FPS</div>
+            <div class="meta-value" style="font-size: 24px; font-family: 'Outfit';" id="show-fps">00 FPS</div>
         </div>
         <div class="meta-item" style="align-items: flex-end;">
             <div class="meta-label">Gaussian Splats</div>
@@ -383,13 +496,13 @@
     <div id="canvas-container"><canvas id="application-canvas" class="touch-none"></canvas></div>
 
     <!-- Circular Progress Indicator -->
-    <div id="loading-progress-circle" style="position:fixed; top:50%; left:60%; transform:translate(-50%, -50%); z-index:950; display:none; flex-direction:column; align-items:center; justify-content:center; background: radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 60%, rgba(255,255,255,0) 100%); width: 130px; height: 130px; border-radius: 50%; pointer-events: none;">
-        <div class="spinner-wrap" style="position:relative; width:80px; height:80px; filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));">
+    <div id="loading-progress-circle" style="position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); z-index:950; display:none; flex-direction:column; align-items:center; justify-content:center; width: 130px; height: 130px; border-radius: 50%; pointer-events: none;">
+        <div class="spinner-wrap" style="position:relative; width:80px; height:80px; filter: drop-shadow(0 0 12px rgba(0,0,0,0.4));">
             <svg width="80" height="80" viewBox="0 0 100 100" style="animation: spin 3s linear infinite;">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(0,122,255,0.05)" stroke-width="2" />
-                <circle id="progress-ring-fill" cx="50" cy="50" r="45" fill="none" stroke="var(--accent-blue)" stroke-width="4" stroke-dasharray="283" stroke-dashoffset="283" stroke-linecap="round" style="transition: stroke-dashoffset 0.3s ease-out;" />
+                <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="2" />
+                <circle id="progress-ring-fill" cx="50" cy="50" r="45" fill="none" stroke="#fff" stroke-width="4" stroke-dasharray="283" stroke-dashoffset="283" stroke-linecap="round" style="transition: stroke-dashoffset 0.3s ease-out;" />
             </svg>
-            <div id="progress-percent" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-family:'Outfit'; font-size:16px; font-weight:700; color:var(--text-primary);">0%</div>
+            <div id="progress-percent" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-family:'Outfit'; font-size:16px; font-weight:700; color:#fff; text-shadow: 0 0 8px rgba(0,0,0,0.5);">0%</div>
         </div>
     </div>
 
@@ -489,22 +602,33 @@
             };
             syncUI();
 
-            // Delegate environment switching
-            document.getElementById('env-dropdown-list').addEventListener('click', (e) => {
-                const item = e.target.closest('.env-item');
-                if (item && window.showViewer) {
-                    window.showViewer.setSkybox(item.dataset.sky);
-                }
-            });
+            // Navigation Menus
+            const envList = document.getElementById('env-dropdown-list');
+            if (envList) {
+                envList.addEventListener('click', (e) => {
+                    const item = e.target.closest('.env-item');
+                    if (item && window.showViewer) window.showViewer.setSkybox(item.dataset.sky);
+                });
+            }
+
+            const renderList = document.getElementById('render-mode-list');
+            if (renderList) {
+                renderList.addEventListener('click', (e) => {
+                    const item = e.target.closest('.env-item');
+                    if (item && window.showViewer) window.showViewer.setGaussianRenderMode(parseInt(item.dataset.mode));
+                });
+            }
 
             // Blur Control
             const blurSlider = document.getElementById('bg-blur-slider');
             const blurText = document.getElementById('blur-val-text');
-            blurSlider.addEventListener('input', () => {
-                const val = parseFloat(blurSlider.value);
-                blurText.textContent = val.toFixed(1);
-                if (window.showViewer) window.showViewer.setSkyboxBlur(val);
-            });
+            if (blurSlider) {
+                blurSlider.addEventListener('input', () => {
+                    const val = parseFloat(blurSlider.value);
+                    if (blurText) blurText.textContent = val.toFixed(1);
+                    if (window.showViewer) window.showViewer.setSkyboxBlur(val);
+                });
+            }
 
             window.addEventListener('sampleChanged', (e) => {
                 const d = e.detail;
