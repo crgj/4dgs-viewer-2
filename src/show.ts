@@ -353,7 +353,7 @@ class ShowViewer {
             list.addEventListener('click', (e) => {
                 const item = (e.target as HTMLElement).closest('.env-item') as HTMLElement;
                 if (item && item.dataset.sky) {
-                    this.skyboxManager.setSkybox(item.dataset.sky);
+                    this.setSkybox(item.dataset.sky);
                     const nameEl = document.getElementById('data-skybox');
                     if (nameEl) nameEl.textContent = item.textContent || '---';
                 }

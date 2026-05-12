@@ -1,32 +1,62 @@
 [
   {
-    "name": "少女",
+    "name": "Charming Girl",
     "url": "./sog4/少女.sog4",
-    "img": "./images/少女.png"
+    "img": "./images/少女.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
   },
   {
-    "name": "小鼠",
-    "url": "./sog4/小鼠.sog4",
-    "img": "./images/小鼠.png"
-  },
-  {
-    "name": "小鼠流血",
-    "url": "./sog4/小鼠流血.sog4",
-    "img": "./images/小鼠流血.png"
-  },
-  {
-    "name": "老旦",
+    "name": "Laodan",
     "url": "./sog4/老旦.sog4",
-    "img": "./images/老旦.png"
+    "img": "./images/老旦.png",
+    "model_id": "DLH-770",
+    "status": "ACTIVE",
+    "type": "PERFORMER",
+    "dynamics": "95.2%",
+    "skybox": "colorful_studio",
+    "duration": "18.5s",
+    "size": "81 MB"
   },
   {
-    "name": "老旦练习",
-    "url": "./sog4/老旦练习.sog4",
-    "img": "./images/老旦练习.png"
-  },
-  {
-    "name": "二胡起手",
+    "name": "Erhu Performer",
     "url": "./sog4/二胡.sog4",
-    "img": "./images/二胡起手.png"
+    "img": "./images/二胡起手.png",
+    "model_id": "EXP-09",
+    "status": "ACTIVE",
+    "type": "MUSICIAN",
+    "dynamics": "92.8%",
+    "skybox": "adams_place_bridge_2k",
+    "duration": "10.0s",
+    "size": "21 MB"
+  },
+  {
+    "name": "Laodan Practitioner",
+    "url": "./sog4/老旦练习.sog4",
+    "img": "./images/老旦练习.png",
+    "model_id": "GUI-102",
+    "status": "ACTIVE",
+    "type": "GUIDE",
+    "dynamics": "98.1%",
+    "skybox": "rural_asphalt_road_2k",
+    "duration": "15.0s",
+    "size": "57 MB"
+  },
+  {
+    "name": "Mouse Surgery",
+    "url": "./sog4/小鼠流血.sog4",
+    "img": "./images/小鼠流血.png",
+    "model_id": "ED-U10",
+    "status": "ACTIVE",
+    "type": "EDUCATOR",
+    "dynamics": "98.1%",
+    "skybox": "wooden_motel_2k",
+    "duration": "14.5s",
+    "size": "37 MB"
   }
 ]
