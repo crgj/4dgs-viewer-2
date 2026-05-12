@@ -1,26 +1,146 @@
 [
   {
-    "name": "少女",
-    "url": "./sog4/少女.sog4"
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
   },
   {
-    "name": "小鼠",
-    "url": "./sog4/小鼠.sog4"
+    "name": "Opera Performer",
+    "url": "./sog4/老旦.sog4",
+    "img": "./images/char_opera_performer.png",
+    "model_id": "DLH-770",
+    "status": "ACTIVE",
+    "type": "PERFORMER",
+    "dynamics": "95.2%",
+    "skybox": "lebombo_2k",
+    "duration": "18.5s",
+    "size": "81 MB"
   },
   {
-    "name": "小鼠流血",
-    "url": "./sog4/小鼠流血.sog4"
+    "name": "Explorer",
+    "url": "./sog4/二胡.sog4",
+    "img": "./images/char_explorer.png",
+    "model_id": "EXP-09",
+    "status": "ACTIVE",
+    "type": "MUSICIAN",
+    "dynamics": "92.8%",
+    "skybox": "lebombo_2k",
+    "duration": "10.0s",
+    "size": "21 MB"
   },
   {
-    "name": "老旦",
-    "url": "./sog4/老旦.sog4"
+    "name": "Exhibition Guide",
+    "url": "./sog4/老旦练习.sog4",
+    "img": "./images/char_guide_educator.png",
+    "model_id": "GUI-102",
+    "status": "ACTIVE",
+    "type": "GUIDE",
+    "dynamics": "98.1%",
+    "skybox": "lebombo_2k",
+    "duration": "15.0s",
+    "size": "57 MB"
   },
   {
-    "name": "老旦练习",
-    "url": "./sog4/老旦练习.sog4"
+    "name": "Educator",
+    "url": "./sog4/小鼠流血.sog4",
+    "img": "./images/char_guide_educator.png",
+    "model_id": "ED-U10",
+    "status": "ACTIVE",
+    "type": "EDUCATOR",
+    "dynamics": "98.1%",
+    "skybox": "lebombo_2k",
+    "duration": "14.5s",
+    "size": "37 MB"
   },
   {
-    "name": "二胡起手",
-    "url": "./sog4/二胡.sog4"
-  } 
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  },
+  {
+    "name": "Android Female",
+    "url": "./sog4/少女.sog4",
+    "img": "./images/char_android_female.png",
+    "model_id": "RK600",
+    "status": "ACTIVE",
+    "type": "CHLOE",
+    "dynamics": "97.6%",
+    "skybox": "kloppenheim_02_2k",
+    "duration": "12.0s",
+    "size": "22 MB"
+  }
 ]

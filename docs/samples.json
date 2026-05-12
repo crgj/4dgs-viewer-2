@@ -1,26 +1,32 @@
 [
   {
     "name": "少女",
-    "url": "./sog4/少女.sog4"
+    "url": "./sog4/少女.sog4",
+    "img": "./images/少女.png"
   },
   {
     "name": "小鼠",
-    "url": "./sog4/小鼠.sog4"
+    "url": "./sog4/小鼠.sog4",
+    "img": "./images/小鼠.png"
   },
   {
     "name": "小鼠流血",
-    "url": "./sog4/小鼠流血.sog4"
+    "url": "./sog4/小鼠流血.sog4",
+    "img": "./images/小鼠流血.png"
   },
   {
     "name": "老旦",
-    "url": "./sog4/老旦.sog4"
+    "url": "./sog4/老旦.sog4",
+    "img": "./images/老旦.png"
   },
   {
     "name": "老旦练习",
-    "url": "./sog4/老旦练习.sog4"
+    "url": "./sog4/老旦练习.sog4",
+    "img": "./images/老旦练习.png"
   },
   {
     "name": "二胡起手",
-    "url": "./sog4/二胡.sog4"
-  } 
+    "url": "./sog4/二胡.sog4",
+    "img": "./images/二胡起手.png"
+  }
 ]

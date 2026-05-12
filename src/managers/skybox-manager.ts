@@ -126,7 +126,7 @@ export class SkyboxManager {
         // Default settings
         this.setType(pc.SKYTYPE_INFINITE);
         this.setExposure(0);
-        this.setBlur(0); // Default sharp
+        this.setBlur(1); // #WDD 2026-05-12 Set default blur to 1.0
     }
 
     // --- Control API ---

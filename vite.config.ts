@@ -16,6 +16,7 @@ export default defineConfig({
             input: {
                 main: resolve(__dirname, 'index.html'),
                 batchConvert: resolve(__dirname, 'batch-convert.html'),
+                show: resolve(__dirname, 'show.html'),
             },
         },
     },

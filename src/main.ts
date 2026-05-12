@@ -2210,17 +2210,20 @@ export class Viewer {
         progress(0, 'PREPARING', `Parsing ${files.length} PLY frames`);
         let succeeded = false;
         try {
+            // #WDD 2026-05-12 Sort files numerically to fix playback order
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
             const assets: pc.Asset[] = [];
-            for (let i = 0; i < files.length; i++) {
-                const frame = await this.parsePlyFrame(files[i]);
+            for (let i = 0; i < sorted.length; i++) {
+                const file = sorted[i];
+                const frame = await this.parsePlyFrame(file);
                 const vertexElement = {
                     name: 'vertex',
                     count: frame.count,
                     properties: frame.propertyNames.map((name) => ({ name, type: 'float', storage: frame.propertyValues[name] }))
                 };
-                assets.push(this.createGsplatAssetFromVertexElement(files[i].name, vertexElement));
-                const step = Math.min(8, Math.floor((i / Math.max(1, files.length - 1)) * 8));
-                progress(step, 'LOADING', `Loaded ${files[i].name}`);
+                assets.push(this.createGsplatAssetFromVertexElement(file.name, vertexElement));
+                const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
+                progress(step, 'LOADING', `Loaded ${file.name}`);
             }
             await this.startSequencePlayback(assets, 'PLY Sequence', 0, progress);
             succeeded = true;
@@ -2260,7 +2263,8 @@ export class Viewer {
         try {
             this.activeLoadingSequenceCleanup();
 
-            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+            // #WDD 2026-05-12 Update: Use numeric sort to ensure segment sequence like 1, 2, 10 instead of 1, 10, 2
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
             this.isSog4SequenceMode = true;
             this.sog4SequenceFiles = sorted;
             const base = sorted[0]?.name ? sorted[0].name.replace(/\.sog4$/i, '') : 'sog4_sequence';
@@ -2371,7 +2375,8 @@ export class Viewer {
         try {
             this.activeLoadingSequenceCleanup();
 
-            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+            // #WDD 2026-05-12 Update: Use numeric sort to ensure segment sequence like 1, 2, 10 instead of 1, 10, 2
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
             this.isSog4SequenceMode = true;
             this.sog4SequenceFiles = sorted;
             const base = sorted[0]?.name ? sorted[0].name.replace(/\.ply4$/i, '') : 'ply4_sequence';
@@ -2896,11 +2901,13 @@ export class Viewer {
         const loader = new TrueSplatsLoader(this.app);
         const parseSOG = (loader as any).parseSOG.bind(loader);
         try {
+            // #WDD 2026-05-12 Sort files numerically to fix playback order
+            const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
             const assets: pc.Asset[] = [];
             let bands = 0;
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const step = Math.min(8, Math.floor((i / Math.max(1, files.length - 1)) * 8));
+            for (let i = 0; i < sorted.length; i++) {
+                const file = sorted[i];
+                const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
                 progress(step, 'LOADING', `Parsing ${file.name}`);
                 const buffer = await file.arrayBuffer();
                 const parsed = await parseSOG(buffer, () => { });

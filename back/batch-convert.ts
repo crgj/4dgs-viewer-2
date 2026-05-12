@@ -1,4 +1,5 @@
 import { PLY4Loader, type PLY4LoadProgressMeta } from '../src/utils/ply4-loader';
+import { SOG4Loader } from '../src/utils/sog4-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../src/utils/sog4-encoder';
 import { PLYEncoder } from '../src/utils/ply-encoder';
 // #WDD 2026-04-19 弃用4DGS格式序列导出，改为导出为独立的标准PLY单帧文件，以便于外部的3DGS查看器兼容。
@@ -37,6 +38,9 @@ type BatchTask = {
     encodeHeartbeat?: number;
     encodeStartedAt?: number;
 };
+
+type BatchInputKind = 'ply4' | 'sog';
+type ExportFormat = 'sog4' | 'plyseq' | 'sog4seq';
 
 const STEP_ORDER: StepKey[] = ['prepare', 'load', 'encode', 'download'];
 const STEP_WEIGHTS: Record<StepKey, number> = {
@@ -79,6 +83,13 @@ const formatBytes = (bytes: number) => {
 
 const clampPct = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
+const getInputKind = (file: File): BatchInputKind | null => {
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.ply4')) return 'ply4';
+    if (name.endsWith('.sog') || name.endsWith('.sog4')) return 'sog';
+    return null;
+};
+
 const buildTransformOverride = (parsed: any) => {
     const modelPos = parsed?.meta?.modelPos;
     const modelRot = parsed?.meta?.modelRot;
@@ -99,6 +110,7 @@ class BatchConvertApp {
     private readonly autoDownloadToggle = document.getElementById('auto-download-toggle') as HTMLInputElement;
     private readonly formatSog4 = document.getElementById('format-sog4') as HTMLInputElement;
     private readonly formatPlySeq = document.getElementById('format-plyseq') as HTMLInputElement;
+    private readonly formatSog4Seq = document.getElementById('format-sog4seq') as HTMLInputElement;
     private readonly summaryQueued = document.getElementById('summary-queued') as HTMLDivElement;
     private readonly summaryDone = document.getElementById('summary-done') as HTMLDivElement;
     private readonly summaryError = document.getElementById('summary-error') as HTMLDivElement;
@@ -194,8 +206,8 @@ class BatchConvertApp {
         document.getElementById('batch-clear')?.addEventListener('click', () => this.clearTasks());
         document.getElementById('batch-download-ready')?.addEventListener('click', () => this.downloadReadyTasks());
 
-        this.fileInput.addEventListener('change', () => this.addFiles(this.fileInput.files));
-        this.folderInput.addEventListener('change', () => this.addFiles(this.folderInput.files));
+        this.fileInput.addEventListener('change', () => this.addFilesFromList(Array.from(this.fileInput.files || [])));
+        this.folderInput.addEventListener('change', () => this.addFilesFromList(Array.from(this.folderInput.files || [])));
 
         ['dragenter', 'dragover'].forEach((type) => {
             window.addEventListener(type, (event) => {
@@ -211,9 +223,15 @@ class BatchConvertApp {
             });
         });
 
-        window.addEventListener('drop', (event) => {
+        window.addEventListener('drop', async (event) => {
             event.preventDefault();
-            this.addFiles(event.dataTransfer?.files || null);
+            document.body.classList.remove('is-global-dragover');
+
+            // #WDD 2026-05-12 Fix: Use recursive collection for dropped folders
+            const files = await this.collectDroppedFiles(event);
+            if (files.length > 0) {
+                this.addFilesFromList(files);
+            }
         });
 
         this.taskList.addEventListener('click', (event) => {
@@ -242,24 +260,31 @@ class BatchConvertApp {
         });
     }
 
-    private getExportFormat(): 'sog4' | 'plyseq' {
+    private getExportFormat(): ExportFormat {
+        if (this.formatSog4Seq?.checked) return 'sog4seq';
         if (this.formatPlySeq?.checked) return 'plyseq';
         return 'sog4';
     }
 
     private createSteps(): Record<StepKey, BatchStep> {
         const format = this.getExportFormat();
+        const encodeLabel = format === 'plyseq'
+            ? 'Export PLY Sequence'
+            : (format === 'sog4seq' ? 'Export SOG4 Sequence' : 'Encode SOG4');
         return {
             prepare: createStep('Prepare Queue Item'),
-            load: createStep('Load PLY4'),
-            encode: createStep(format === 'plyseq' ? 'Export PLY Sequence' : 'Encode SOG4'),
+            load: createStep('Load Source'),
+            encode: createStep(encodeLabel),
             download: createStep('Download Output')
         };
     }
 
-    private addFiles(fileList: FileList | null) {
-        if (!fileList || fileList.length === 0) return;
-        const incoming = Array.from(fileList).filter((file) => file.name.toLowerCase().endsWith('.ply4'));
+    private addFilesFromList(files: File[]) {
+        if (!files || files.length === 0) return;
+        // #WDD 2026-05-12 Sort incoming files numerically by name to fix abnormal order in folder/batch import
+        const incoming = files
+            .filter((file) => getInputKind(file) !== null)
+            .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
         const existingKeys = new Set(this.tasks.map((task) => `${task.file.name}:${task.file.size}:${task.file.lastModified}`));
 
         for (const file of incoming) {
@@ -282,6 +307,58 @@ class BatchConvertApp {
         this.render();
     }
 
+    // #WDD 2026-05-12 Support recursive folder drop
+    private async collectDroppedFiles(e: DragEvent): Promise<File[]> {
+        const collected: File[] = [];
+        const items = e.dataTransfer?.items;
+        if (items && items.length > 0) {
+            const tasks: Promise<void>[] = [];
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.kind !== 'file') continue;
+                const entry = item.webkitGetAsEntry?.();
+                if (entry) {
+                    tasks.push(this.walkDroppedEntry(entry, collected));
+                } else {
+                    const file = item.getAsFile();
+                    if (file) collected.push(file);
+                }
+            }
+            await Promise.all(tasks);
+        } else if (e.dataTransfer?.files) {
+            collected.push(...Array.from(e.dataTransfer.files));
+        }
+        return collected;
+    }
+
+    private async walkDroppedEntry(entry: any, collector: File[]): Promise<void> {
+        if (entry.isFile) {
+            return new Promise((resolve, reject) => {
+                entry.file((file: File) => {
+                    collector.push(file);
+                    resolve();
+                }, reject);
+            });
+        }
+        if (entry.isDirectory) {
+            const reader = entry.createReader();
+            return new Promise((resolve, reject) => {
+                const readNext = () => {
+                    reader.readEntries(async (entries: any[]) => {
+                        if (!entries || !entries.length) {
+                            resolve();
+                            return;
+                        }
+                        await Promise.all(entries.map((child) => this.walkDroppedEntry(child, collector)));
+                        readNext();
+                    }, reject);
+                };
+                readNext();
+            });
+        }
+        return Promise.resolve();
+    }
+
     private clearTasks() {
         if (this.isConverting) return;
         for (const task of this.tasks) {
@@ -301,11 +378,15 @@ class BatchConvertApp {
 
         const format = this.getExportFormat();
         let frameOffset = 0;
+        let segmentOffset = 0;
         for (const task of queue) {
-            await this.convertTask(task, frameOffset);
+            await this.convertTask(task, frameOffset, segmentOffset);
             await this.yieldToBrowser();
             if (format === 'plyseq') {
                 frameOffset += task.frameCount || 0;
+            }
+            if (format === 'sog4seq') {
+                segmentOffset++;
             }
         }
 
@@ -313,7 +394,7 @@ class BatchConvertApp {
         this.render();
     }
 
-    private async convertTask(task: BatchTask, baseFrameOffset: number = 0) {
+    private async convertTask(task: BatchTask, baseFrameOffset: number = 0, sequenceIndex: number = 0) {
         let parsed: any = null;
         try {
             task.status = 'preparing';
@@ -329,32 +410,55 @@ class BatchConvertApp {
             this.pushLog(task, 'Preparing conversion runtime');
             this.requestRender();
 
-            const loader = new PLY4Loader();
+            const inputKind = getInputKind(task.file);
+            if (!inputKind) throw new Error(`Unsupported input file: ${task.file.name}`);
+            const loaderLabel = inputKind === 'ply4' ? 'PLY4' : 'SOG';
             this.setStep(task, 'prepare', {
                 state: 'done',
                 pct: 100,
                 detail: 'Queue item ready',
                 childLabel: 'Queue Preparation',
                 childPct: 100,
-                grandchildLabel: 'Waiting for PLY4 decode',
+                grandchildLabel: `Waiting for ${loaderLabel} decode`,
                 grandchildPct: 100
             });
 
             task.status = 'loading';
-            const loadOnce = async () => loader.load(task.file, (pct: number, message: string, meta?: PLY4LoadProgressMeta) => {
-                this.setStep(task, 'load', {
-                    state: pct >= 100 ? 'done' : 'active',
-                    pct,
-                    detail: meta?.detail || message,
-                    childLabel: meta?.stageLabel || 'Load PLY4',
-                    childPct: meta?.stagePct ?? pct,
-                    grandchildLabel: meta?.substepLabel || meta?.detail || message,
-                    grandchildPct: meta?.substepPct ?? meta?.stagePct ?? pct
+            const loadOnce = async () => {
+                if (inputKind === 'ply4') {
+                    const loader = new PLY4Loader();
+                    return await loader.load(task.file, (pct: number, message: string, meta?: PLY4LoadProgressMeta) => {
+                        this.setStep(task, 'load', {
+                            state: pct >= 100 ? 'done' : 'active',
+                            pct,
+                            detail: meta?.detail || message,
+                            childLabel: meta?.stageLabel || 'Load PLY4',
+                            childPct: meta?.stagePct ?? pct,
+                            grandchildLabel: meta?.substepLabel || meta?.detail || message,
+                            grandchildPct: meta?.substepPct ?? meta?.stagePct ?? pct
+                        });
+                        task.summary = message;
+                        if (meta?.detail) this.pushProgressLog(task, 'load', pct, `Load • ${meta.detail}`);
+                        this.requestRender();
+                    });
+                }
+
+                const loader = new SOG4Loader();
+                return await loader.load(task.file, (pct: number, message: string) => {
+                    this.setStep(task, 'load', {
+                        state: pct >= 100 ? 'done' : 'active',
+                        pct,
+                        detail: message,
+                        childLabel: 'Load SOG',
+                        childPct: pct,
+                        grandchildLabel: message,
+                        grandchildPct: pct
+                    });
+                    task.summary = message;
+                    this.pushProgressLog(task, 'load', pct, `Load • ${message}`);
+                    this.requestRender();
                 });
-                task.summary = message;
-                if (meta?.detail) this.pushProgressLog(task, 'load', pct, `Load • ${meta.detail}`);
-                this.requestRender();
-            });
+            };
             try {
                 parsed = await loadOnce();
             } catch (loadError: any) {
@@ -373,8 +477,8 @@ class BatchConvertApp {
             this.setStep(task, 'load', {
                 state: 'done',
                 pct: 100,
-                detail: 'PLY4 decode completed',
-                childLabel: 'Load PLY4',
+                detail: `${loaderLabel} decode completed`,
+                childLabel: `Load ${loaderLabel}`,
                 childPct: 100,
                 grandchildLabel: `${pointCount.toLocaleString()} splats ready`,
                 grandchildPct: 100
@@ -387,94 +491,191 @@ class BatchConvertApp {
 
             if (format === 'plyseq') {
                 const baseName = task.file.name.replace(/\.[^/.]+$/, '');
-                
-                // #WDD 2026-04-19 使用专门的新工具类导出为标准PLY序列，并自带结合了生命周期的透明度过滤。
-                const { frameCount: totalFrames, buffers } = await exportPLYSequence(parsed, baseName, (pct, msg) => {
-                    this.setStep(task, 'encode', {
-                        state: pct >= 100 ? 'done' : 'active',
-                        pct,
-                        detail: msg,
-                        childLabel: 'Export PLY Sequence',
-                        childPct: pct,
-                        grandchildLabel: msg,
-                        grandchildPct: pct
-                    });
-                    task.summary = msg;
-                    this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
-                    this.requestRender();
-                });
 
-                task.summary = 'Packing into ZIP limit...';
-                this.render();
-
-                const zip = new JSZip();
-                
-                for (let i = 0; i < totalFrames; i++) {
-                    const globalFrameIndex = baseFrameOffset + i;
-                    const paddedIdx = String(globalFrameIndex).padStart(6, '0');
-                    const fileName = `${paddedIdx}.ply`;
-                    zip.file(fileName, buffers[i]);
-                }
-
-                const zipBlob = await zip.generateAsync({
-                    type: 'blob',
-                    compression: 'STORE'
-                }, (meta) => {
-                    this.setStep(task, 'encode', {
-                        state: 'active',
-                        pct: meta.percent,
-                        detail: `Zipping... ${meta.percent.toFixed(0)}%`,
-                        childLabel: 'Compress ZIP',
-                        childPct: meta.percent,
-                        grandchildLabel: 'Archive',
-                        grandchildPct: meta.percent
-                    });
-                    this.pushProgressLog(task, 'encode', meta.percent, `Encode • ZIP ${meta.percent.toFixed(0)}%`);
-                    this.requestRender();
-                });
-
-                const url = URL.createObjectURL(zipBlob);
-                const zipFileName = `${String(this.sequenceZipCounter++).padStart(3, '0')}.zip`;
-                this.triggerDownload(url, zipFileName);
-                // Delay revoke to ensure download starts
-                setTimeout(() => URL.revokeObjectURL(url), 2000);
-
-                task.status = 'done';
-                this.setStep(task, 'encode', { state: 'done', pct: 100 });
-                this.setStep(task, 'download', { state: 'done', pct: 100 });
-                task.summary = `Completed • ${totalFrames} frames saved`;
-                this.requestRender();
-                return;
-            } else {
-                // #WDD-gpt 2026-04-20 - 按需求禁用 fast/raw 路径，批量导出固定走标准 WebP 压缩
-                const encodeOverrides = {
-                    rawFloatPayload: false,
-                    model_transform: buildTransformOverride(parsed)
-                };
-                this.startEncodeHeartbeat(task);
-                buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
-                    mode: 'standard',
-                    progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
-                        const cleanDetail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
-                        const detail = meta?.stageLabel
-                            ? `${meta.stageLabel} ${Math.round(meta?.stagePct ?? pct)}% • ${cleanDetail}`
-                            : cleanDetail;
+                if (inputKind === 'sog') {
+                    // #WDD-gpt 2026-05-01 - SOG 是静态高斯，批量 PLY 导出时写成单个标准 PLY 文件
+                    buffer = await PLYEncoder.encode(parsed, (pct, msg) => {
                         this.setStep(task, 'encode', {
                             state: pct >= 100 ? 'done' : 'active',
                             pct,
-                            detail,
-                            childLabel: meta?.stageLabel || message,
-                            childPct: meta?.stagePct ?? pct,
-                            grandchildLabel: detail,
-                            grandchildPct: meta?.stagePct ?? pct
+                            detail: msg,
+                            childLabel: 'Export Static PLY',
+                            childPct: pct,
+                            grandchildLabel: msg,
+                            grandchildPct: pct
                         });
-                        task.summary = detail;
-                        this.pushProgressLog(task, 'encode', pct, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                        task.summary = msg;
+                        this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
                         this.requestRender();
+                    });
+                    outputName = `${baseName}.ply`;
+                } else {
+                
+                    // #WDD 2026-04-19 使用专门的新工具类导出为标准PLY序列，并自带结合了生命周期的透明度过滤。
+                    const { frameCount: totalFrames, buffers } = await exportPLYSequence(parsed, baseName, (pct, msg) => {
+                        this.setStep(task, 'encode', {
+                            state: pct >= 100 ? 'done' : 'active',
+                            pct,
+                            detail: msg,
+                            childLabel: 'Export PLY Sequence',
+                            childPct: pct,
+                            grandchildLabel: msg,
+                            grandchildPct: pct
+                        });
+                        task.summary = msg;
+                        this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
+                        this.requestRender();
+                    });
+
+                    task.summary = 'Packing into ZIP limit...';
+                    this.render();
+
+                    const zip = new JSZip();
+                
+                    for (let i = 0; i < totalFrames; i++) {
+                        const globalFrameIndex = baseFrameOffset + i;
+                        const paddedIdx = String(globalFrameIndex).padStart(6, '0');
+                        const fileName = `${paddedIdx}.ply`;
+                        zip.file(fileName, buffers[i]);
                     }
-                });
-                outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
-                this.stopEncodeHeartbeat(task);
+
+                    const zipBlob = await zip.generateAsync({
+                        type: 'blob',
+                        compression: 'STORE'
+                    }, (meta) => {
+                        this.setStep(task, 'encode', {
+                            state: 'active',
+                            pct: meta.percent,
+                            detail: `Zipping... ${meta.percent.toFixed(0)}%`,
+                            childLabel: 'Compress ZIP',
+                            childPct: meta.percent,
+                            grandchildLabel: 'Archive',
+                            grandchildPct: meta.percent
+                        });
+                        this.pushProgressLog(task, 'encode', meta.percent, `Encode • ZIP ${meta.percent.toFixed(0)}%`);
+                        this.requestRender();
+                    });
+
+                    const url = URL.createObjectURL(zipBlob);
+                    const zipFileName = `${String(this.sequenceZipCounter++).padStart(3, '0')}.zip`;
+                    this.triggerDownload(url, zipFileName);
+                    // #WDD-gpt 2026-05-01 - 延迟释放序列 ZIP URL，确保浏览器有时间开始下载
+                    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+                    task.status = 'done';
+                    this.setStep(task, 'encode', { state: 'done', pct: 100 });
+                    this.setStep(task, 'download', { state: 'done', pct: 100 });
+                    task.summary = `Completed • ${totalFrames} frames saved`;
+                    this.requestRender();
+                    return;
+                }
+            } else if (format === 'sog4seq') {
+                const sequenceName = `${String(sequenceIndex).padStart(6, '0')}.sog4`;
+                if (inputKind === 'sog') {
+                    // #WDD-gpt 2026-05-01 - SOG4 序列模式按队列顺序输出编号段，静态 SOG 段直接复用原始 zip payload
+                    this.setStep(task, 'encode', {
+                        state: 'active',
+                        pct: 20,
+                        detail: 'Copying static SOG segment',
+                        childLabel: 'Export SOG4 Sequence',
+                        childPct: 20,
+                        grandchildLabel: sequenceName,
+                        grandchildPct: 20
+                    });
+                    buffer = await task.file.arrayBuffer();
+                    this.setStep(task, 'encode', {
+                        state: 'done',
+                        pct: 100,
+                        detail: 'Static SOG segment ready',
+                        childLabel: 'Export SOG4 Sequence',
+                        childPct: 100,
+                        grandchildLabel: sequenceName,
+                        grandchildPct: 100
+                    });
+                } else {
+                    const encodeOverrides = {
+                        rawFloatPayload: false,
+                        model_transform: buildTransformOverride(parsed)
+                    };
+                    this.startEncodeHeartbeat(task);
+                    buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
+                        mode: 'standard',
+                        progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
+                            const cleanDetail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+                            const detail = meta?.stageLabel
+                                ? `${meta.stageLabel} ${Math.round(meta?.stagePct ?? pct)}% • ${cleanDetail}`
+                                : cleanDetail;
+                            this.setStep(task, 'encode', {
+                                state: pct >= 100 ? 'done' : 'active',
+                                pct,
+                                detail,
+                                childLabel: 'Export SOG4 Sequence',
+                                childPct: meta?.stagePct ?? pct,
+                                grandchildLabel: `${sequenceName} • ${detail}`,
+                                grandchildPct: meta?.stagePct ?? pct
+                            });
+                            task.summary = detail;
+                            this.pushProgressLog(task, 'encode', pct, `Encode • ${sequenceName} • ${detail}`);
+                            this.requestRender();
+                        }
+                    });
+                    this.stopEncodeHeartbeat(task);
+                }
+                outputName = sequenceName;
+            } else {
+                if (inputKind === 'sog') {
+                    // #WDD-gpt 2026-05-01 - 静态 SOG 与 SOG4 同为 zip+meta 结构，批量转 SOG4 直接封装原始字节避免重编码和精度变化
+                    this.setStep(task, 'encode', {
+                        state: 'active',
+                        pct: 20,
+                        detail: 'Copying static SOG payload',
+                        childLabel: 'Copy Static SOG',
+                        childPct: 20,
+                        grandchildLabel: 'No re-encode required',
+                        grandchildPct: 20
+                    });
+                    buffer = await task.file.arrayBuffer();
+                    this.setStep(task, 'encode', {
+                        state: 'done',
+                        pct: 100,
+                        detail: 'Static SOG copied',
+                        childLabel: 'Copy Static SOG',
+                        childPct: 100,
+                        grandchildLabel: 'Ready as SOG4',
+                        grandchildPct: 100
+                    });
+                    outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
+                } else {
+                // #WDD-gpt 2026-04-20 - 按需求禁用 fast/raw 路径，批量导出固定走标准 WebP 压缩
+                    const encodeOverrides = {
+                        rawFloatPayload: false,
+                        model_transform: buildTransformOverride(parsed)
+                    };
+                    this.startEncodeHeartbeat(task);
+                    buffer = await SOG4Encoder.encode(parsed, encodeOverrides, {
+                        mode: 'standard',
+                        progress: (pct: number, message: string, meta?: SOG4EncodeProgressMeta) => {
+                            const cleanDetail = (meta?.detail || message).replace(/^\[(?:STD|FAST|RAW)\]\s*/, '');
+                            const detail = meta?.stageLabel
+                                ? `${meta.stageLabel} ${Math.round(meta?.stagePct ?? pct)}% • ${cleanDetail}`
+                                : cleanDetail;
+                            this.setStep(task, 'encode', {
+                                state: pct >= 100 ? 'done' : 'active',
+                                pct,
+                                detail,
+                                childLabel: meta?.stageLabel || message,
+                                childPct: meta?.stagePct ?? pct,
+                                grandchildLabel: detail,
+                                grandchildPct: meta?.stagePct ?? pct
+                            });
+                            task.summary = detail;
+                            this.pushProgressLog(task, 'encode', pct, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                            this.requestRender();
+                        }
+                    });
+                    outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
+                    this.stopEncodeHeartbeat(task);
+                }
             }
 
             const blob = new Blob([buffer as BlobPart], { type: 'application/octet-stream' });
@@ -612,7 +813,7 @@ class BatchConvertApp {
                         </svg>
                     </div>
                     <div class="text-sm font-semibold">No files queued yet.</div>
-                    <div class="text-[11px] ui-text-secondary mt-2">Drop some <code>.ply4</code> files to begin.</div>
+                    <div class="text-[11px] ui-text-secondary mt-2">Drop some <code>.ply4</code>, <code>.sog</code>, or <code>.sog4</code> files to begin.</div>
                 </div>
             `;
             return;

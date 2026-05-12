@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrueSplats Show - 4D Gaussian Splatting Viewer</title>
+    <link rel="icon" href="./assets/logo-BpK5kcM_.ico" />
+    <style>
+        /* Show page specific styles */
+        #show-gallery {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 30;
+            background: rgba(10, 15, 30, 0.85);
+            backdrop-filter: blur(12px);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #show-gallery.collapsed {
+            transform: translateY(calc(100% - 24px));
+        }
+
+        #show-gallery.collapsed .gallery-toggle-btn {
+            transform: rotate(180deg);
+        }
+
+        .gallery-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .gallery-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .gallery-toggle-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            cursor: pointer;
+            color: rgba(255, 255, 255, 0.5);
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.05);
+            border: none;
+        }
+
+        .gallery-toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .gallery-scroll {
+            display: flex;
+            gap: 10px;
+            padding: 12px 16px;
+            overflow-x: auto;
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+        }
+
+        .gallery-scroll::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        .gallery-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .gallery-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 2px;
+        }
+
+        .gallery-item {
+            flex-shrink: 0;
+            width: 100px;
+            cursor: pointer;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+            position: relative;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .gallery-item:hover {
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .gallery-item.active {
+            border-color: #10b981;
+            box-shadow: 0 0 0 1px #10b981, 0 4px 20px rgba(16, 185, 129, 0.25);
+        }
+
+        .gallery-item img {
+            width: 100%;
+            height: 75px;
+            -o-object-fit: cover;
+               object-fit: cover;
+            display: block;
+            pointer-events: none;
+        }
+
+        .gallery-item-name {
+            padding: 5px 6px;
+            font-size: 10px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .gallery-item.active .gallery-item-name {
+            color: #10b981;
+        }
+
+        /* Show playbar - simplified version at bottom above gallery */
+        #show-playbar {
+            position: fixed;
+            bottom: 56px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            pointer-events: none;
+            transition: bottom 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #show-playbar.gallery-open {
+            bottom: 148px;
+        }
+
+        .show-playbar-inner {
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 16px;
+            background: rgba(10, 15, 30, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+        }
+
+        .show-play-btn {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #10b981;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .show-play-btn:hover {
+            background: rgba(16, 185, 129, 0.25);
+            transform: scale(1.05);
+        }
+
+        .show-time-display {
+            font-family: monospace;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.7);
+            min-width: 70px;
+            text-align: center;
+        }
+
+        .show-slider-wrap {
+            width: 280px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .show-slider {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+                 appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .show-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #10b981;
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+        }
+
+        .show-slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #10b981;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+        }
+
+        .show-fps-row {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .show-fps-btn {
+            padding: 2px 6px;
+            font-size: 9px;
+            font-weight: 700;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .show-fps-btn:hover,
+        .show-fps-btn.active {
+            background: rgba(16, 185, 129, 0.15);
+            border-color: rgba(16, 185, 129, 0.3);
+            color: #10b981;
+        }
+
+        /* Show top bar */
+        #show-topbar {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .show-brand {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: rgba(10, 15, 30, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+        }
+
+        .show-brand h1 {
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .show-brand span {
+            font-size: 10px;
+            color: #10b981;
+            font-weight: 600;
+        }
+
+        .show-model-name {
+            padding: 6px 12px;
+            background: rgba(10, 15, 30, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Loading overlay reuse from main */
+        #show-loading-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 100;
+            backdrop-filter: blur(8px);
+        }
+
+        #show-loading-overlay.hidden {
+            display: none;
+        }
+
+        .show-loading-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .show-loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #10b981;
+            border-radius: 50%;
+            animation: show-spin 0.8s linear infinite;
+        }
+
+        @keyframes show-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .show-loading-text {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .show-loading-detail {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.4);
+            font-family: monospace;
+        }
+    </style>
+  <script type="module" crossorigin src="./assets/show-DU1x3-el.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/ply4-loader-DslVGxrr.js">
+  <link rel="modulepreload" crossorigin href="./assets/skybox-manager-D79B-oqp.js">
+  <link rel="stylesheet" crossorigin href="./assets/ply4-loader-BcN_vrl0.css">
+</head>
+
+<body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
+    <!-- Main Fullscreen Canvas -->
+    <div id="canvas-container" class="fixed inset-0 z-0 overflow-hidden">
+        <canvas id="application-canvas" class="w-full h-full block touch-none"></canvas>
+    </div>
+
+    <!-- Top Bar -->
+    <div id="show-topbar">
+        <div class="show-brand">
+            <h1>TrueSplats <span>Show</span></h1>
+        </div>
+        <div id="show-model-name" class="show-model-name">Loading...</div>
+    </div>
+
+    <!-- Playbar -->
+    <div id="show-playbar">
+        <div class="show-playbar-inner">
+            <button id="show-play-pause" class="show-play-btn" aria-label="Play/Pause">
+                <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
+                    <path d="M8 5v14l11-7z" />
+                </svg>
+            </button>
+            <div class="show-time-display">
+                <span id="show-current-frame">0</span> / <span id="show-total-frames">0</span>
+            </div>
+            <div class="show-slider-wrap">
+                <input type="range" id="show-time-slider" min="0" max="1" step="1" value="0" class="show-slider" />
+                <div class="show-fps-row">
+                    <button class="show-fps-btn" data-fps="1">1</button>
+                    <button class="show-fps-btn" data-fps="6">6</button>
+                    <button class="show-fps-btn" data-fps="12">12</button>
+                    <button class="show-fps-btn active" data-fps="30">30</button>
+                    <button class="show-fps-btn" data-fps="60">60</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Thumbnail Gallery -->
+    <div id="show-gallery" class="collapsed">
+        <div class="gallery-header" id="gallery-header">
+            <span class="gallery-title">Model Gallery</span>
+            <button id="gallery-toggle" class="gallery-toggle-btn" aria-label="Toggle Gallery">
+                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
+                    <path d="M7 10l5 5 5-5z" />
+                </svg>
+            </button>
+        </div>
+        <div id="gallery-scroll" class="gallery-scroll">
+            <!-- Gallery items populated by JS -->
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="show-loading-overlay" class="hidden">
+        <div class="show-loading-content">
+            <div class="show-loading-spinner"></div>
+            <div id="show-loading-text" class="show-loading-text">Loading</div>
+            <div id="show-loading-detail" class="show-loading-detail"></div>
+        </div>
+    </div>
+
+</body>
+
+</html>

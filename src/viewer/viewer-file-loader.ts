@@ -533,7 +533,8 @@ const duration = parsed.frames || parsed.maxMu || 100;
     }
     public async handleDroppedFiles(files: File[]): Promise<void> {
         const v = this.viewer as any;
-        const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+        // #WDD 2026-05-12 Update: Use numeric sort to ensure frame sequence like 1, 2, 10 instead of 1, 10, 2
+        const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
         const ply4Seq = sorted.filter((f) => this.isPly4SequenceCandidate(f));
         if (ply4Seq.length > 1) {
             await v.loadPly4Sequence(ply4Seq);

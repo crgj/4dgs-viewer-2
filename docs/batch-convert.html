@@ -601,8 +601,8 @@
             }
         }
     </style>
-  <script type="module" crossorigin src="./assets/batchConvert-DMfar64V.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/ply4-loader-Dp5uVbdh.js">
+  <script type="module" crossorigin src="./assets/batchConvert-DbD-LLfj.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/ply4-loader-DslVGxrr.js">
   <link rel="stylesheet" crossorigin href="./assets/ply4-loader-BcN_vrl0.css">
 </head>
 
@@ -642,13 +642,19 @@
                                 class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
                                 <input id="format-sog4" name="export-format" type="radio" value="sog4" checked
                                     class="accent-emerald-500" />
-                                <label for="format-sog4" class="cursor-pointer">SOG4</label>
+                                <label for="format-sog4" class="cursor-pointer">SOG4 4DSG</label>
                             </div>
                             <div
                                 class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
                                 <input id="format-plyseq" name="export-format" type="radio" value="plyseq"
                                     class="accent-blue-500" />
                                 <label for="format-plyseq" class="cursor-pointer">PLY Sequence</label>
+                            </div>
+                            <div
+                                class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
+                                <input id="format-sog4seq" name="export-format" type="radio" value="sog4seq"
+                                    class="accent-cyan-500" />
+                                <label for="format-sog4seq" class="cursor-pointer">SOG4 Sequence</label>
                             </div>
                             <label
                                 class=" hidden flex items-center gap-2 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5 ml-1">
@@ -672,7 +678,7 @@
                             </div>
                             <div>
                                 <div class="text-[11px] font-bold tracking-[0.16rem] uppercase ui-text-primary">Drop
-                                    PLY4 Files Here</div>
+                                    PLY4 / SOG Files Here</div>
                             </div>
                         </div>
                         <div class="batch-button-row">
@@ -680,8 +686,8 @@
                             <button id="batch-pick-folder" class="batch-button is-secondary">Choose Folder</button>
                         </div>
 
-                        <input id="batch-file-input" type="file" class="hidden" accept=".ply4" multiple />
-                        <input id="batch-folder-input" type="file" class="hidden" accept=".ply4" multiple
+                        <input id="batch-file-input" type="file" class="hidden" accept=".ply4,.sog,.sog4" multiple />
+                        <input id="batch-folder-input" type="file" class="hidden" accept=".ply4,.sog,.sog4" multiple
                             webkitdirectory />
                     </div>
 
