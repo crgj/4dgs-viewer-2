@@ -19,7 +19,7 @@ export type PLY4LoadProgressMeta = {
 export class PLY4Loader {
     private static readonly HEADER_PROBE_BYTES = 1024 * 1024;
     private static readonly BODY_CHUNK_BYTES = 64 * 1024 * 1024;
-    private static readonly MAX_ESTIMATED_CPU_BYTES = 5000 * 1024 * 1024;
+    private static readonly MAX_ESTIMATED_CPU_BYTES = 10 * 1024 * 1024 * 1024;
 
     constructor() { }
 
@@ -488,13 +488,19 @@ export class PLY4Loader {
 
     private ensureWithinBrowserMemoryBudget(parsedHeader: { vertexCount: number; K_xyz: number; K_rot: number; K_dc: number; fdcNames: string[]; frestNames: string[] }) {
         const estimatedBytes = this.estimateCpuAllocationBytes(parsedHeader.vertexCount, parsedHeader.K_xyz, parsedHeader.K_rot, parsedHeader.K_dc, parsedHeader.fdcNames.length, parsedHeader.frestNames.length);
-        if (estimatedBytes > PLY4Loader.MAX_ESTIMATED_CPU_BYTES) {
+        const budgetBytes = this.getAdaptiveCpuBudgetBytes();
+        if (estimatedBytes > budgetBytes) {
             throw new Error(
                 `PLY4 is too large for browser memory in this viewer. ` +
                 `Estimated decode memory: ${this.formatBytes(estimatedBytes)} ` +
-                `(limit ${this.formatBytes(PLY4Loader.MAX_ESTIMATED_CPU_BYTES)}).`
+                `(10GB limit ${this.formatBytes(budgetBytes)}).`
             );
         }
+    }
+
+    // #WDD-gpt 2026-05-16 - PLY4 解码内存上限按用户要求固定为 10GB
+    private getAdaptiveCpuBudgetBytes() {
+        return PLY4Loader.MAX_ESTIMATED_CPU_BYTES;
     }
 
     private estimateCpuAllocationBytes(count: number, K_xyz: number, K_rot: number, K_dc: number, fdcCount: number, frestCount: number) {

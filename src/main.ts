@@ -7,6 +7,7 @@ import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
 import { PLY4Loader } from './utils/ply4-loader'; // #WDD 2026-01-21 PLY4 Support
 import { SelectionTool } from './ui/selection-tool';
+import { SmartSelectionTool } from './ui/smart-selection-tool';
 import { GaussianEffects } from './particle-effects';
 import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
@@ -52,6 +53,7 @@ export class Viewer {
     // Cache for Selection Tool
     cachedPositions: Float32Array | null = null;
     selectionTool: SelectionTool;
+    smartSelectionTool: SmartSelectionTool;
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private effects: GaussianEffects;
@@ -255,6 +257,7 @@ export class Viewer {
 
         // Init Selection Tool
         this.selectionTool = new SelectionTool(this.app, this);
+        this.smartSelectionTool = new SmartSelectionTool(this);
         this.effects = new GaussianEffects(this.app);
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
@@ -845,6 +848,7 @@ export class Viewer {
             'time-controls',
             'header-brand',
             'selection-toolbar',
+            'smart-selection-panel',
             'text-edit-panel',
             'simplified-panel',
             'samples-dropdown',
@@ -880,11 +884,9 @@ export class Viewer {
         let scrubStartX = 0;
         let scrubStartVal = 0;
 
-        ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z', 'scale-uniform'].forEach(id => {
-            const input = document.getElementById(id) as HTMLInputElement;
-            if (!input) return;
-
-            input.addEventListener('input', updateObjectTransform);
+        // #WDD-gpt 2026-05-16 - 通用 scrub 输入绑定：支持鼠标拖拽改变数值
+        const bindScrubInput = (input: HTMLInputElement, onChange: () => void, stepScale = 0.05) => {
+            input.addEventListener('input', onChange);
 
             input.addEventListener('mousedown', (e) => {
                 activeScrubInput = input;
@@ -904,24 +906,51 @@ export class Viewer {
                 input.select();
                 e.stopPropagation();
             }, { passive: true });
+
+            // Store step scale on element for handleMove to read
+            (input as any)._scrubStep = stepScale;
+            (input as any)._scrubOnChange = onChange;
+        };
+
+        ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z', 'scale-uniform'].forEach(id => {
+            const input = document.getElementById(id) as HTMLInputElement;
+            if (!input) return;
+            const step = input.id.startsWith('rot') ? 1 : (input.id === 'scale-uniform' ? 0.02 : 0.05);
+            bindScrubInput(input, updateObjectTransform, step);
+        });
+
+        // #WDD-gpt 2026-05-16 - 圆柱选择区输入框也支持 scrub 拖拽
+        const smartSelectionTool = (this as any).smartSelectionTool;
+        ['smart-cylinder-radius', 'smart-cylinder-height', 'smart-cylinder-x', 'smart-cylinder-z', 'smart-cylinder-ground'].forEach(id => {
+            const input = document.getElementById(id) as HTMLInputElement;
+            if (!input) return;
+            bindScrubInput(input, () => {
+                if (smartSelectionTool && typeof smartSelectionTool.updateCylinderFromInputs === 'function') {
+                    smartSelectionTool.updateCylinderFromInputs();
+                }
+            }, 0.01);
         });
 
         const handleMove = (clientX: number) => {
             if (!activeScrubInput) return;
             isUIInteracting = true;
             const delta = clientX - scrubStartX;
-            const step = activeScrubInput.id.startsWith('rot') ? 1 : (activeScrubInput.id === 'scale-uniform' ? 0.02 : 0.05);
+            const step = (activeScrubInput as any)._scrubStep ?? 0.05;
             const newVal = scrubStartVal + delta * step;
 
             if (activeScrubInput.id.startsWith('rot')) {
                 activeScrubInput.value = Math.round(newVal).toString();
             } else if (activeScrubInput.id === 'scale-uniform') {
                 activeScrubInput.value = Math.max(0.0001, newVal).toFixed(3);
+            } else if (activeScrubInput.id.startsWith('smart-cylinder-')) {
+                activeScrubInput.value = newVal.toFixed(3);
             } else {
                 activeScrubInput.value = newVal.toFixed(2);
             }
 
-            updateObjectTransform();
+            const onChange = (activeScrubInput as any)._scrubOnChange;
+            if (onChange) onChange();
+            else updateObjectTransform();
         };
 
         window.addEventListener('mousemove', (e) => handleMove(e.clientX));
@@ -1364,6 +1393,7 @@ export class Viewer {
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
+        const smartSelectionPanel = document.getElementById('smart-selection-panel');
         const controlPanel = document.getElementById('control-panel');
         const simplifiedPanel = document.getElementById('simplified-panel');
 
@@ -1374,12 +1404,14 @@ export class Viewer {
             sidebar?.classList.add('sidebar-hidden');
             playbar?.classList.add('bottom-bar-hidden');
             selectionToolbar?.classList.add('tools-hidden');
+            smartSelectionPanel?.classList.add('tools-hidden');
             controlPanel?.classList.add('panel-hidden');
             simplifiedPanel?.classList.remove('hidden-panel');
         } else {
             sidebar?.classList.remove('sidebar-hidden');
             playbar?.classList.remove('bottom-bar-hidden');
             selectionToolbar?.classList.remove('tools-hidden');
+            smartSelectionPanel?.classList.remove('tools-hidden');
             controlPanel?.classList.remove('panel-hidden');
             simplifiedPanel?.classList.add('hidden-panel');
         }
@@ -2237,22 +2269,25 @@ export class Viewer {
         }
     }
 
+    // #WDD-gpt 2026-05-16 - 按用户要求将 PLY4/SOG4 序列导入预检预算固定为 10GB
+    private getAdaptiveSequenceImportBudgetBytes() {
+        const gib = 1024 * 1024 * 1024;
+        return 10 * gib;
+    }
+
+    private formatImportBudget(bytes: number) {
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    }
+
     
     private async loadSog4Sequence(files: File[]): Promise<void> {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
         
-        // #WDD 2026-04-28 更改预检机制: 检测系统可能的最大容量，放宽限度，遇警报直接停止加载不再确认
-        let memLimitAppx = 4; // 默认给4GB文件体积上限
-        if ((navigator as any).deviceMemory) {
-            memLimitAppx = Math.max(4, (navigator as any).deviceMemory * 0.5); 
-        }
-        const maxLimitBytes = memLimitAppx * 1024 * 1024 * 1024;
+        const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
         
         if (totalSize > maxLimitBytes) {
-           const sizeMB = (totalSize / (1024 * 1024)).toFixed(0);
-           const limitMB = (maxLimitBytes / (1024 * 1024)).toFixed(0);
-           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 SOG4 序列分段总体积达到了 ${sizeMB} MB，已超出系统计算的当前最大安全运行阈值 (约 ${limitMB} MB)。\n\n批量解析海量该级别点云段会产生不可逆的内存暴涨，导致当前浏览器引擎抛出 "RangeError: Array buffer allocation failed" 直接崩溃。\n\n为保证可用性，已拦截此操作。\n建议做法: 请减少选中的序列分段分批次处理。`);
+           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 SOG4 序列分段总体积达到了 ${this.formatImportBudget(totalSize)}，已超出当前设置的 10GB 处理预算 (${this.formatImportBudget(maxLimitBytes)})。\n\n建议做法: 请减少选中的序列分段分批次处理，或使用更大显存/内存并开启 64-bit 浏览器。`);
            return;
         }
 
@@ -2354,17 +2389,10 @@ export class Viewer {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
         
-        // #WDD 2026-04-28 更改预检机制: 检测系统可能的最大容量，放宽限度，遇警报直接停止加载不再确认
-        let memLimitAppx = 4; // 默认给4GB文件体积上限
-        if ((navigator as any).deviceMemory) {
-            memLimitAppx = Math.max(4, (navigator as any).deviceMemory * 0.5); 
-        }
-        const maxLimitBytes = memLimitAppx * 1024 * 1024 * 1024;
+        const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
         
         if (totalSize > maxLimitBytes) {
-           const sizeMB = (totalSize / (1024 * 1024)).toFixed(0);
-           const limitMB = (maxLimitBytes / (1024 * 1024)).toFixed(0);
-           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 PLY4 序列分段总体积达到了 ${sizeMB} MB，已超出系统计算的当前最大安全运行阈值 (约 ${limitMB} MB)。\n\n引擎对超大体积文件群进行初始化（如建立 GSplatSorter 的中心点索引数组）时，总体积过大时必然触发 "RangeError: Array buffer allocation failed" 造成应用死机。\n\n为保证可用性，已拦截此操作。\n建议做法: 请减少选中的序列分段分批次处理。`);
+           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 PLY4 序列分段总体积达到了 ${this.formatImportBudget(totalSize)}，已超出当前设置的 10GB 处理预算 (${this.formatImportBudget(maxLimitBytes)})。\n\n即使通过预检，超大 PLY4 仍可能被浏览器单次 ArrayBuffer 或 GPU driver 限制拦截。\n\n建议做法: 请减少选中的序列分段分批次处理，或使用更大显存/内存并开启 64-bit 浏览器。`);
            return;
         }
 
@@ -3923,6 +3951,198 @@ export class Viewer {
         }
         // Fallback or Non-4DGS
         return this.cachedPositions;
+    }
+
+    // #WDD-gpt 2026-05-15 - 给智能选择工具提供当前模型的静态/动态分析数据
+    public getSmartSelectionAnalysisSource() {
+        const splatData = (this.splatEntity?.gsplat as any)?.asset?.resource?.splatData || (this.splatEntity?.gsplat as any)?.splatData || null;
+        const readProp = (name: string) => {
+            if (this.lastParsedData?.[name] instanceof Float32Array) return this.lastParsedData[name] as Float32Array;
+            if (typeof splatData?.getProp === 'function') return (splatData.getProp(name) as Float32Array | null) || null;
+            return null;
+        };
+        const entity = this.splatEntity;
+        const basePosition = entity?.getLocalPosition().clone() || new pc.Vec3();
+        const baseRotation = entity?.getLocalRotation().clone() || new pc.Quat();
+        const baseScale = entity?.getLocalScale().clone() || new pc.Vec3(1, 1, 1);
+
+        return {
+            positions: this.getCurrentPositions(),
+            trajectoryData: this.trajectoryData,
+            keyframes: this.keyframes,
+            originalIndices: this.originalIndices,
+            lifetimeMu: readProp('lifetime_mu'),
+            lifetimeW: readProp('lifetime_w'),
+            totalFrames: Math.max(1, Math.floor(this.getTimelineTotalFrames?.() || this.totalFrames || this.duration || 1)),
+            transformPoint: (point: [number, number, number]) => {
+                const local = new pc.Vec3(point[0] * baseScale.x, point[1] * baseScale.y, point[2] * baseScale.z);
+                const rotated = baseRotation.transformVector(local);
+                return [
+                    rotated.x + basePosition.x,
+                    rotated.y + basePosition.y,
+                    rotated.z + basePosition.z
+                ] as [number, number, number];
+            }
+        };
+    }
+
+    // #WDD-gpt 2026-05-16 - 给智能选择批处理提供每个 PLY4 段的分析数据，首段用于求对齐矩阵
+    public getSmartSelectionBatchAnalysisSources() {
+        const elements = (this.splatSequence?.elements || []).filter((element: any) => element?.type === 'ply4');
+        if (!(this.isSog4SequenceMode && elements.length > 1)) {
+            return [this.getSmartSelectionAnalysisSource()];
+        }
+
+        const readParsedProp = (parsed: any, name: string): Float32Array | null => {
+            if (parsed?.[name] instanceof Float32Array) return parsed[name] as Float32Array;
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+        const buildPositions = (parsed: any, runtime: any): Float32Array | null => {
+            if (runtime?.cachedPositions instanceof Float32Array) return runtime.cachedPositions as Float32Array;
+            const x = readParsedProp(parsed, 'x');
+            const y = readParsedProp(parsed, 'y');
+            const z = readParsedProp(parsed, 'z');
+            if (!x || !y || !z) return null;
+            const count = Math.min(x.length, y.length, z.length);
+            const positions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                positions[i * 3 + 0] = x[i];
+                positions[i * 3 + 1] = y[i];
+                positions[i * 3 + 2] = z[i];
+            }
+            return positions;
+        };
+        const readLifeFromRuntime = (runtime: any, channel: 0 | 1): Float32Array | null => {
+            const life = runtime?.lifeTexData as Float32Array | null | undefined;
+            const positions = runtime?.cachedPositions as Float32Array | null | undefined;
+            if (!life || !positions) return null;
+            const count = Math.min(Math.floor(positions.length / 3), Math.floor(life.length / 4));
+            const out = new Float32Array(count);
+            for (let i = 0; i < count; i++) out[i] = life[i * 4 + channel];
+            return out;
+        };
+        const transformForEntity = (entity: pc.Entity | null) => {
+            const basePosition = entity?.getLocalPosition().clone() || new pc.Vec3();
+            const baseRotation = entity?.getLocalRotation().clone() || new pc.Quat();
+            const baseScale = entity?.getLocalScale().clone() || new pc.Vec3(1, 1, 1);
+            return (point: [number, number, number]) => {
+                const local = new pc.Vec3(point[0] * baseScale.x, point[1] * baseScale.y, point[2] * baseScale.z);
+                const rotated = baseRotation.transformVector(local);
+                return [
+                    rotated.x + basePosition.x,
+                    rotated.y + basePosition.y,
+                    rotated.z + basePosition.z
+                ] as [number, number, number];
+            };
+        };
+
+        return elements.map((element: any) => {
+            const runtime = element.runtime || {};
+            const parsed = element.parsed || {};
+            const positions = buildPositions(parsed, runtime);
+            return {
+                name: element.name,
+                selectionElement: element,
+                positions,
+                trajectoryData: runtime.trajectoryData || parsed.trajectory || null,
+                keyframes: runtime.keyframes || parsed.keyframes || 0,
+                originalIndices: runtime.originalIndices || readParsedProp(parsed, 'original_index'),
+                lifetimeMu: readParsedProp(parsed, 'lifetime_mu') || readLifeFromRuntime(runtime, 0),
+                lifetimeW: readParsedProp(parsed, 'lifetime_w') || readLifeFromRuntime(runtime, 1),
+                totalFrames: Math.max(1, Math.floor(runtime.totalFrames || parsed.frames || parsed.maxMu || element.duration || 1)),
+                transformPoint: transformForEntity(element.entity || this.splatEntity)
+            };
+        }).filter((source: any) => source.positions);
+    }
+
+    // #WDD-gpt 2026-05-15 - 智能选择工具应用地面对齐结果，并同步多段序列与导出状态
+    public applySmartSelectionTransform(position: pc.Vec3, rotation: pc.Quat) {
+        if (!this.splatEntity) return;
+
+        const currentScale = this.splatEntity.getLocalScale().clone();
+        this.splatEntity.setLocalPosition(position);
+        this.splatEntity.setLocalRotation(rotation);
+        this.splatEntity.setLocalScale(currentScale);
+        this.modelTransformEdited = true;
+
+        if (this.isSog4SequenceMode && this.sog4SequenceSegments.length) {
+            this.sog4SequenceSharedTransform = {
+                pos: [position.x, position.y, position.z],
+                rot: [rotation.x, rotation.y, rotation.z, rotation.w],
+                scale: [currentScale.x, currentScale.y, currentScale.z]
+            };
+            for (const seg of this.sog4SequenceSegments) {
+                if (!seg.entity) continue;
+                seg.entity.setLocalPosition(position);
+                seg.entity.setLocalRotation(rotation);
+                seg.entity.setLocalScale(currentScale);
+            }
+        }
+
+        if (this.isSequenceMode && this.sequenceEntityPool.length) {
+            for (const ent of this.sequenceEntityPool) {
+                ent.setLocalPosition(position);
+                ent.setLocalRotation(rotation);
+                ent.setLocalScale(currentScale);
+            }
+        }
+
+        this.updateTransformUIFromEntity();
+    }
+
+    // #WDD-gpt 2026-05-16 - 应用 AutoGroundAlignment 输出的世界空间标准化矩阵到当前模型实体
+    public applyAutoGroundAlignmentTransform(rotationMatrix: number[][], translation: [number, number, number]) {
+        if (!this.splatEntity) return;
+        const deltaRotation = this.quatFromRotationMatrix(rotationMatrix);
+        const currentPosition = this.splatEntity.getLocalPosition().clone();
+        const currentRotation = this.splatEntity.getLocalRotation().clone();
+        const currentScale = this.splatEntity.getLocalScale().clone();
+        const rotatedPosition = deltaRotation.transformVector(currentPosition);
+        const nextPosition = new pc.Vec3(
+            rotatedPosition.x + translation[0],
+            rotatedPosition.y + translation[1],
+            rotatedPosition.z + translation[2]
+        );
+        const nextRotation = new pc.Quat();
+        nextRotation.mul2(deltaRotation, currentRotation);
+        nextRotation.normalize();
+        this.applySmartSelectionTransform(nextPosition, nextRotation);
+        this.splatEntity.setLocalScale(currentScale);
+        this.updateTransformUIFromEntity();
+    }
+
+    private quatFromRotationMatrix(m: number[][]) {
+        const trace = m[0][0] + m[1][1] + m[2][2];
+        const q = new pc.Quat();
+        if (trace > 0) {
+            const s = Math.sqrt(trace + 1) * 2;
+            q.w = 0.25 * s;
+            q.x = (m[2][1] - m[1][2]) / s;
+            q.y = (m[0][2] - m[2][0]) / s;
+            q.z = (m[1][0] - m[0][1]) / s;
+        } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+            const s = Math.sqrt(1 + m[0][0] - m[1][1] - m[2][2]) * 2;
+            q.w = (m[2][1] - m[1][2]) / s;
+            q.x = 0.25 * s;
+            q.y = (m[0][1] + m[1][0]) / s;
+            q.z = (m[0][2] + m[2][0]) / s;
+        } else if (m[1][1] > m[2][2]) {
+            const s = Math.sqrt(1 + m[1][1] - m[0][0] - m[2][2]) * 2;
+            q.w = (m[0][2] - m[2][0]) / s;
+            q.x = (m[0][1] + m[1][0]) / s;
+            q.y = 0.25 * s;
+            q.z = (m[1][2] + m[2][1]) / s;
+        } else {
+            const s = Math.sqrt(1 + m[2][2] - m[0][0] - m[1][1]) * 2;
+            q.w = (m[1][0] - m[0][1]) / s;
+            q.x = (m[0][2] + m[2][0]) / s;
+            q.y = (m[1][2] + m[2][1]) / s;
+            q.z = 0.25 * s;
+        }
+        q.normalize();
+        return q;
     }
 
     // #WDD-gpt 2026-04-20 - 提供给 SelectionTool：遍历序列全部段的运行时数据

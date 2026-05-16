@@ -596,6 +596,13 @@ const duration = parsed.frames || parsed.maxMu || 100;
         const v = this.viewer as any;
         return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
     }
+
+    // #WDD-gpt 2026-05-16 - 4D 纹理预算按用户要求固定为 10GB
+    private getAdaptiveGpuTextureBudgetBytes(): number {
+        const gib = 1024 * 1024 * 1024;
+        return 10 * gib;
+    }
+
     public ensure4DTextureBudget(numSplats: number, width: number, parsed: any) {
         const v = this.viewer as any;
         const maxTextureSize = v.app.graphicsDevice.maxTextureSize || 4096;
@@ -627,16 +634,12 @@ const duration = parsed.frames || parsed.maxMu || 100;
             );
         }
 
-        // Browser-side RGBA32F allocations are heavy, but a fixed 1 GB cap turned out
-        // to be too conservative for valid 4D PLY workloads on this viewer.
-        // Keep the texture-size guard above, and allow larger datasets to attempt loading
-        // up to a more practical soft budget.
-        const gpuBudgetBytes = 5000 * 1024 * 1024;
+        const gpuBudgetBytes = this.getAdaptiveGpuTextureBudgetBytes();
         if (estimatedBytes > gpuBudgetBytes) {
             throw new Error(
                 `4D textures are too large for browser/GPU memory. ` +
                 `Estimated RGBA32F texture allocation: ${this.formatMemoryMB(estimatedBytes)} ` +
-                `(limit ${this.formatMemoryMB(gpuBudgetBytes)}).`
+                `(10GB limit ${this.formatMemoryMB(gpuBudgetBytes)}).`
             );
         }
     }

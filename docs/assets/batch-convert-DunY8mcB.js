@@ -1,4 +1,4 @@
-var ue=Object.defineProperty;var he=(t,e,o)=>e in t?ue(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var $=(t,e,o)=>he(t,typeof e!="symbol"?e+"":e,o);import{P as pe,S as fe,J as ge,a as ie}from"./ply4-loader-DbWhp5v9.js";/* empty css              */class j{static async encode(e,o){var g,p,y,c,E,z;const r=e.count||0;if(r===0)return new ArrayBuffer(0);const n=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let a=0;a<45;a++){const w=`f_rest_${a}`;e[w]&&i.push(w)}let s=`ply
+var ue=Object.defineProperty;var he=(t,e,o)=>e in t?ue(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var $=(t,e,o)=>he(t,typeof e!="symbol"?e+"":e,o);import{P as pe,S as fe,J as ge,a as ie}from"./sog4-loader-DS8wtwHp.js";/* empty css              */class j{static async encode(e,o){var g,p,y,c,E,z;const r=e.count||0;if(r===0)return new ArrayBuffer(0);const n=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let a=0;a<45;a++){const w=`f_rest_${a}`;e[w]&&i.push(w)}let s=`ply
 format binary_little_endian 1.0
 `;s+=`element vertex ${r}
 `,s+=`property float x

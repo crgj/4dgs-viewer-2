@@ -143,6 +143,10 @@ export class SelectionTool {
                     deletedIndices.push(i);
                     target.selectionData[idx + 1] = 255;
                     target.selectionData[idx] = 0;
+                    if (target.allTimeSelectionData && idx + 1 < target.allTimeSelectionData.length) {
+                        target.allTimeSelectionData[idx + 1] = 255;
+                        target.allTimeSelectionData[idx] = 0;
+                    }
                 }
             }
             if (deletedIndices.length > 0) {
@@ -218,6 +222,106 @@ export class SelectionTool {
             }
         }
         this.updateTexture();
+    }
+
+    // #WDD-gpt 2026-05-16 - 允许智能选择算法按点索引批量写入当前选择通道
+    selectIndices(indices: number[], replace = true, allTime = true) {
+        if (!this.selectionData) return 0;
+
+        const before = this.captureGlobalSelectionState();
+        let changed = false;
+        if (replace) {
+            for (let i = 0; i < this.selectionData.length; i += 4) {
+                if (this.selectionData[i] !== 0) changed = true;
+                this.selectionData[i] = 0;
+            }
+            if (this.allTimeSelectionData) {
+                for (let i = 0; i < this.allTimeSelectionData.length; i += 4) {
+                    if (this.allTimeSelectionData[i] !== 0) changed = true;
+                    this.allTimeSelectionData[i] = 0;
+                }
+            }
+        }
+
+        let selected = 0;
+        const total = Math.floor(this.selectionData.length / 4);
+        for (const splatIdx of indices) {
+            if (!Number.isFinite(splatIdx)) continue;
+            const i = Math.floor(splatIdx);
+            if (i < 0 || i >= total) continue;
+            const offset = i * 4;
+            if (this.selectionData[offset + 1] > 0) continue;
+            if (this.selectionData[offset] !== 255) changed = true;
+            this.selectionData[offset] = 255;
+            if (allTime && this.allTimeSelectionData && offset < this.allTimeSelectionData.length) {
+                this.allTimeSelectionData[offset] = 255;
+            }
+            selected++;
+        }
+
+        if (changed) {
+            this.pushUndoSnapshot(before);
+            this.updateTexture();
+        }
+        return selected;
+    }
+
+    // #WDD-gpt 2026-05-16 - 支持智能选择在不切换可见段的情况下写入指定 PLY4 序列段
+    selectIndicesForElement(element: any, indices: number[], replace = true, allTime = true) {
+        const rt = this.buildSelectionRuntimeFromElement(element);
+        const positions = rt?.cachedPositions as Float32Array | null | undefined;
+        if (!rt || !positions) return 0;
+
+        const count = Math.floor(positions.length / 3);
+        const bytes = Math.max(count * 4, rt.selectionData?.length || 0);
+        if (!rt.selectionData || rt.selectionData.length < count * 4) rt.selectionData = new Uint8Array(bytes);
+        if (!rt.allTimeSelectionData || rt.allTimeSelectionData.length < count * 4) rt.allTimeSelectionData = new Uint8Array(bytes);
+
+        const selectionData = rt.selectionData as Uint8Array;
+        const allTimeSelectionData = rt.allTimeSelectionData as Uint8Array;
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+            ? this.viewer.splatSequence.activeElementIndex
+            : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
+        const isActiveElement = Array.isArray(sequenceElements) && sequenceElements[activeIndex] === element;
+        if (!rt.selectionTexture && isActiveElement && this.selectionTexture && selectionData.length === this.selectionData?.length) {
+            rt.selectionTexture = this.selectionTexture;
+        }
+
+        if (replace) {
+            for (let i = 0; i < selectionData.length; i += 4) selectionData[i] = 0;
+            for (let i = 0; i < allTimeSelectionData.length; i += 4) allTimeSelectionData[i] = 0;
+        }
+
+        let selected = 0;
+        for (const splatIdx of indices) {
+            if (!Number.isFinite(splatIdx)) continue;
+            const i = Math.floor(splatIdx);
+            if (i < 0 || i >= count) continue;
+            const offset = i * 4;
+            if (selectionData[offset + 1] > 0) continue;
+            selectionData[offset] = 255;
+            if (allTime) allTimeSelectionData[offset] = 255;
+            selected++;
+        }
+
+        element.runtime = element.runtime || {};
+        element.runtime.selectionData = selectionData;
+        element.runtime.allTimeSelectionData = allTimeSelectionData;
+        element.runtime.selectionTexture = rt.selectionTexture || element.runtime.selectionTexture || null;
+        if (rt.selectionTexture) this.updateTextureForRuntime(rt.selectionTexture, selectionData);
+
+        if (isActiveElement) {
+            this.selectionData = selectionData;
+            this.allTimeSelectionData = allTimeSelectionData;
+            if (rt.selectionTexture) {
+                this.selectionTexture = rt.selectionTexture;
+                this.viewer.updateSelectionUniform(rt.selectionTexture);
+            }
+        }
+        return selected;
     }
 
     // #WDD 2026-04-10: Undo last deletion
@@ -494,11 +598,11 @@ export class SelectionTool {
         // Create Left Toolbar
         const div = document.createElement('div');
         div.id = 'selection-toolbar';
-        div.className = 'fixed left-6 top-1/2 -translate-y-1/2 z-20 flex flex-row items-start gap-2 pointer-events-none transition-all duration-500';
+        div.className = 'fixed left-6 z-20 flex flex-col items-start gap-2 pointer-events-none transition-all duration-500';
         div.innerHTML = `
-            <div class="flex flex-col gap-2">
-                <!-- Selection Tools (6 tools together) -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto">
+            <div id="selection-toolbar-inner" class="flex flex-col gap-2 w-[160px]">
+                <!-- Current-Time Selection Tools (3 in a row) -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush Selection">
                         ${ICON_BRUSH}
                     </button>
@@ -508,7 +612,10 @@ export class SelectionTool {
                     <button id="tool-poly" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Polygon Selection">
                         ${ICON_POLY}
                     </button>
-                    <div class="h-px ui-border w-full my-1"></div>
+                </div>
+
+                <!-- All-Time Selection Tools (3 in a row) -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush Selection">
                         ${ICON_BRUSH_ALLTIME}
                     </button>
@@ -521,14 +628,13 @@ export class SelectionTool {
                 </div>
 
                 <!-- Operations: Invert / Clear / Undo / Redo -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
+                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
                     <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert Selection">
                         ${ICON_INVERT}
                     </button>
                     <button id="tool-clear" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear Selection">
                         ${ICON_CLEAR}
                     </button>
-                    <div class="h-px ui-border w-full my-1"></div>
                     <button id="action-undo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Undo (Ctrl+Z)">
                         ${ICON_UNDO}
                     </button>
@@ -538,7 +644,7 @@ export class SelectionTool {
                 </div>
 
                 <!-- Selection Mode -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto">
+                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode">
                         ${ICON_CENTER}
                     </button>
@@ -547,15 +653,11 @@ export class SelectionTool {
                     </button>
                 </div>
 
-                <!-- Delete Panel -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
+                <!-- Delete & Help Panel -->
+                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
                      <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
-                </div>
-
-                <!-- Help Panel -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-col gap-1.5 pointer-events-auto items-center">
                     <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help (Shortcuts)">
                         ${ICON_HELP}
                     </button>
@@ -1093,8 +1195,7 @@ export class SelectionTool {
 
     // #WDD-kimi 2026-04-20 - 当 runtime 尚未构建时，用 parsed 数据构造可用于 all-time 比对的运行时视图
     private buildSelectionRuntimeFromElement(element: any): any {
-        const runtime = element?.runtime;
-        if (runtime) return runtime;
+        const runtime = element?.runtime || {};
 
         const parsed = element?.parsed || {};
         const readProp = (name: string): Float32Array | null => {
@@ -1103,11 +1204,11 @@ export class SelectionTool {
             return (hit?.storage as Float32Array) || null;
         };
 
-        let cachedPositions: Float32Array | null = null;
+        let cachedPositions: Float32Array | null = (runtime.cachedPositions as Float32Array | null) || null;
         const x = parsed?.x || readProp('x');
         const y = parsed?.y || readProp('y');
         const z = parsed?.z || readProp('z');
-        if (x && y && z) {
+        if (!cachedPositions && x && y && z) {
             const count = Math.min(x.length, y.length, z.length);
             cachedPositions = new Float32Array(count * 3);
             for (let i = 0; i < count; i++) {
@@ -1120,8 +1221,8 @@ export class SelectionTool {
         const mu = parsed?.lifetime_mu || readProp('lifetime_mu');
         const w = parsed?.lifetime_w || readProp('lifetime_w');
         const k = parsed?.lifetime_k || readProp('lifetime_k');
-        let lifeTexData: Float32Array | null = null;
-        if (cachedPositions && mu && w) {
+        let lifeTexData: Float32Array | null = (runtime.lifeTexData as Float32Array | null) || null;
+        if (!lifeTexData && cachedPositions && mu && w) {
             const count = Math.min(cachedPositions.length / 3, mu.length, w.length);
             lifeTexData = new Float32Array(count * 4);
             for (let i = 0; i < count; i++) {
@@ -1132,24 +1233,27 @@ export class SelectionTool {
             }
         }
 
-        return {
-            totalFrames: Math.max(1, Math.floor(parsed?.frames || parsed?.maxMu || element?.duration || 1)),
-            is4DGS: !!parsed?.trajectory,
-            keyframes: parsed?.keyframes || 0,
-            xyzStride: parsed?.xyzStride || 1,
+        const merged = {
+            ...runtime,
+            totalFrames: runtime.totalFrames || Math.max(1, Math.floor(parsed?.frames || parsed?.maxMu || element?.duration || 1)),
+            is4DGS: runtime.is4DGS ?? !!parsed?.trajectory,
+            keyframes: runtime.keyframes || parsed?.keyframes || 0,
+            xyzStride: runtime.xyzStride || parsed?.xyzStride || 1,
             lifeTexData,
-            trajectoryData: parsed?.trajectory || null,
-            originalIndices: parsed?.original_index || readProp('original_index'),
-            posArrays: cachedPositions ? {
+            trajectoryData: runtime.trajectoryData || parsed?.trajectory || null,
+            originalIndices: runtime.originalIndices || parsed?.original_index || readProp('original_index'),
+            posArrays: runtime.posArrays || (cachedPositions && x && y && z ? {
                 x: x as Float32Array,
                 y: y as Float32Array,
                 z: z as Float32Array
-            } : null,
+            } : null),
             cachedPositions,
             selectionData: runtime?.selectionData || null,
             allTimeSelectionData: runtime?.allTimeSelectionData || null,
             selectionTexture: runtime?.selectionTexture || null
         };
+        element.runtime = merged;
+        return merged;
     }
 
     // #WDD-kimi 2026-04-20 - 构建跨段操作目标集，确保每段都有可写 selection/all-time 缓冲

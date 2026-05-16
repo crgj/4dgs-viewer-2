@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import fs from 'fs';
 
 export default defineConfig({
     // TODO: 如果发布到 GitHub Pages 的子目录，请将 '/' 替换为 '/仓库名称/'
@@ -13,11 +14,11 @@ export default defineConfig({
         outDir: 'docs',
         emptyOutDir: true,
         rollupOptions: {
-            input: {
-                main: resolve(__dirname, 'index.html'),
-                batchConvert: resolve(__dirname, 'batch-convert.html'),
-                show: resolve(__dirname, 'show.html'),
-            },
+            input: Object.fromEntries(
+                fs.readdirSync(__dirname)
+                    .filter(file => file.endsWith('.html'))
+                    .map(file => [file.replace(/\.html$/, ''), resolve(__dirname, file)])
+            ),
         },
     },
     server: {
