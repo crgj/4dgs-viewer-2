@@ -761,62 +761,62 @@ export class SelectionTool {
             <div id="selection-toolbar-inner" class="flex flex-col gap-2 w-[160px]">
                 <!-- Current-Time Selection Tools (3 in a row) -->
                 <div id="selection-current-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush Selection">
+                    <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush" data-tip="Brush">
                         ${ICON_BRUSH}
                     </button>
-                    <button id="tool-rect" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Area Selection">
+                    <button id="tool-rect" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Rect" data-tip="Rect">
                         ${ICON_RECT}
                     </button>
-                    <button id="tool-poly" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Polygon Selection">
+                    <button id="tool-poly" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Polygon" data-tip="Poly">
                         ${ICON_POLY}
                     </button>
                 </div>
 
                 <!-- All-Time Selection Tools (3 in a row) -->
                 <div id="selection-alltime-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush Selection">
+                    <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush" data-tip="All Brush">
                         ${ICON_BRUSH_ALLTIME}
                     </button>
-                    <button id="tool-rect-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Area Selection">
+                    <button id="tool-rect-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Rect" data-tip="All Rect">
                         ${ICON_RECT_ALLTIME}
                     </button>
-                    <button id="tool-poly-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Polygon Selection">
+                    <button id="tool-poly-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Poly" data-tip="All Poly">
                         ${ICON_POLY_ALLTIME}
                     </button>
                 </div>
 
                 <!-- Operations: Invert / Clear / Undo / Redo -->
                 <div id="selection-operation-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
-                    <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert Selection">
+                    <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert" data-tip="Invert">
                         ${ICON_INVERT}
                     </button>
-                    <button id="tool-clear" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear Selection">
+                    <button id="tool-clear" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear" data-tip="Clear">
                         ${ICON_CLEAR}
                     </button>
-                    <button id="action-undo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Undo (Ctrl+Z)">
+                    <button id="action-undo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Undo" data-tip="Undo">
                         ${ICON_UNDO}
                     </button>
-                    <button id="action-redo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Redo (Ctrl+Y)">
+                    <button id="action-redo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Redo" data-tip="Redo">
                         ${ICON_REDO}
                     </button>
                 </div>
 
                 <!-- Selection Mode -->
                 <div id="selection-mode-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode">
+                    <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode" data-tip="Center">
                         ${ICON_CENTER}
                     </button>
-                    <button id="select-mode-ellipse" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Ellipse Mode">
+                    <button id="select-mode-ellipse" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Ellipse Mode" data-tip="Ellipse">
                         ${ICON_ELLIPSE}
                     </button>
                 </div>
 
                 <!-- Delete & Help Panel -->
                 <div id="selection-delete-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
-                     <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
+                     <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
-                    <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help (Shortcuts)">
+                    <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Help">
                         ${ICON_HELP}
                     </button>
                 </div>

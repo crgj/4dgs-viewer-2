@@ -35,7 +35,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.18</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.18.2</span>
                 <!-- #WDD-gpt 2026-05-16 - 显示 PLY4 序列当前读取模式，避免用户不清楚是否进入 lazy 分段缓冲 -->
                 <span id="sequence-load-mode-badge"
                     class="hidden text-[8px] font-extrabold tracking-tight uppercase px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-400/20"
@@ -98,8 +98,8 @@
 
             <!-- #WDD-gpt 2026-05-16 - 智能选择改为可调圆柱选择区域，避免自动分类漏选身体点 -->
             <button id="smart-cylinder-toggle"
-                class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-secondary has-tooltip"
-                aria-label="Toggle Cylinder Region" data-tip="Show or hide cylinder region">
+                class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-secondary"
+                aria-label="Toggle Cylinder Region">
                 <span class="text-[8px] font-bold tracking-tight uppercase">Show Cylinder</span>
             </button>
 
@@ -132,8 +132,8 @@
                     </div>
                 </div>
                 <button id="smart-cylinder-select"
-                    class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
-                    aria-label="Select In Cylinder" data-tip="Select points inside cylinder at any time">
+                    class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight"
+                    aria-label="Select In Cylinder">
                     <span class="text-[8px] font-bold tracking-tight uppercase">Select In Cylinder</span>
                 </button>
             </div>
@@ -156,19 +156,19 @@
             </a>
             <!-- Main Controls Row -->
             <div class="grid grid-cols-3 gap-0.5">
-                <button id="toggle-ui" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Toggle UI">
+                <button id="toggle-ui" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Toggle UI" data-tip="Toggle UI">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                     </svg>
                 </button>
-                <button id="reset-cam" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Reset Camera">
+                <button id="reset-cam" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Reset Camera" data-tip="Reset Cam">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
                     </svg>
                 </button>
-                <button id="open-file" class="ui-btn p-1 rounded-md flex justify-center" aria-label="Open File">
+                <button id="open-file" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Open File" data-tip="Open File">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
@@ -179,7 +179,7 @@
             <div id="export-button-row" class="grid grid-cols-2 gap-0.5">
                 <button id="btn-export-sog"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
-                    aria-label="Export SOG4">
+                    aria-label="Export SOG4" data-tip="Export SOG4">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
@@ -187,7 +187,7 @@
                 </button>
                 <button id="btn-export-ply4"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
-                    aria-label="Export PLY4">
+                    aria-label="Export PLY4" data-tip="Export PLY4">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
@@ -195,7 +195,7 @@
                 </button>
                 <button id="btn-export-ply4-sequence"
                     class="hidden ui-btn col-span-2 px-1 py-1 rounded-md flex items-center justify-center bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20"
-                    aria-label="Export PLY4 Sequence">
+                    aria-label="Export PLY4 Sequence" data-tip="Export PLY4 Seq">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM4 19h16v2H4z" />
                     </svg>
@@ -289,20 +289,20 @@
                         <span class="panel-label">VIEWS</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1">
-                        <button id="view-top" class="h-7 flex items-center justify-center ui-btn rounded-md"
-                            aria-label="Top">
+                        <button id="view-top" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
+                            aria-label="Top View" data-tip="Top">
                             <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <path d="M12 2L2 7l10 5 10-5-10-5z" />
                             </svg>
                         </button>
-                        <button id="view-front" class="h-7 flex items-center justify-center ui-btn rounded-md"
-                            aria-label="Front">
+                        <button id="view-front" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
+                            aria-label="Front View" data-tip="Front">
                             <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <path d="M2 7v10l10 5V12L2 7z" />
                             </svg>
                         </button>
-                        <button id="view-side" class="h-7 flex items-center justify-center ui-btn rounded-md"
-                            aria-label="Side">
+                        <button id="view-side" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
+                            aria-label="Side View" data-tip="Side">
                             <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <path d="M22 7v10l-10 5V12l10-5z" />
                             </svg>
@@ -315,23 +315,23 @@
                         <span class="panel-label">SCENE</span>
                     </div>
                     <div class="grid grid-cols-4 gap-1">
-                        <button id="toggle-grid" class="h-7 flex items-center justify-center rounded-md ui-btn"
-                            aria-label="Grid">
+                        <button id="toggle-grid" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
+                            aria-label="Toggle Grid" data-tip="Grid">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <rect x="3" y="3" width="18" height="18" rx="2" />
                                 <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
                             </svg>
                         </button>
-                        <button id="toggle-axes" class="h-7 flex items-center justify-center rounded-md ui-btn"
-                            aria-label="Axes">
+                        <button id="toggle-axes" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
+                            aria-label="Toggle Axes" data-tip="Axes">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <path d="M12 12L3 17M12 12L21 17M12 12V3" />
                             </svg>
                         </button>
-                        <button id="toggle-theme" class="h-7 flex items-center justify-center rounded-md ui-btn"
-                            aria-label="Theme">
+                        <button id="toggle-theme" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
+                            aria-label="Toggle Theme" data-tip="Theme">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <path
@@ -339,8 +339,8 @@
                             </svg>
                         </button>
                         <button id="toggle-transition-effect"
-                            class="h-7 flex items-center justify-center rounded-md ui-btn ui-text-highlight"
-                            aria-label="FX">
+                            class="h-7 flex items-center justify-center rounded-md ui-btn ui-text-highlight has-tooltip"
+                            aria-label="Toggle FX" data-tip="FX">
                             <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <circle cx="12" cy="12" r="3" />
                                 <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
@@ -463,7 +463,7 @@
                     <div class="flex items-center justify-between pl-1">
                         <button id="reset-pp"
                             class="ui-btn px-2 py-1 rounded-lg text-[9px] font-bold tracking-tight uppercase"
-                            aria-label="Reset Post">RESET</button>
+                            aria-label="Reset Post" data-tip="Reset PP">RESET</button>
                     </div>
                     <div class="flex flex-col gap-1.5 pl-1">
                         <div class="flex justify-between">
@@ -518,21 +518,21 @@
         <div id="time-controls"
             class="glass-blue px-4 py-0.5 rounded-lg flex items-center gap-3 pointer-events-auto shadow-2xl">
             <div class="flex items-center gap-1.5">
-                <button id="step-frame-back" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn"
-                    aria-label="Previous Frame">
+                <button id="step-frame-back" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
+                    aria-label="Previous Frame" data-tip="Prev Frame">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                         <path d="M15 6l-6 6 6 6V6zM7 6h2v12H7z" />
                     </svg>
                 </button>
                 <button id="play-pause"
-                    class="w-8 h-8 flex items-center justify-center rounded-md ui-btn ui-text-highlight"
-                    aria-label="Play/Pause">
+                    class="w-8 h-8 flex items-center justify-center rounded-md ui-btn ui-text-highlight has-tooltip"
+                    aria-label="Play/Pause" data-tip="Play">
                     <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                         <path d="M8 5v14l11-7z" />
                     </svg>
                 </button>
-                <button id="step-frame-forward" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn"
-                    aria-label="Next Frame">
+                <button id="step-frame-forward" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
+                    aria-label="Next Frame" data-tip="Next Frame">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                         <path d="M9 6l6 6-6 6V6zM15 6h2v12h-2z" />
                     </svg>
@@ -542,13 +542,13 @@
                 <div class="flex items-center justify-between gap-3">
                     <div class="flex items-center gap-1">
                         <button id="loop-set-start"
-                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
-                            aria-label="Set Start">A</button>
-                        <button id="loop-set-end" class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
-                            aria-label="Set End">B</button>
+                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
+                            aria-label="Set Start" data-tip="Loop Start">A</button>
+                        <button id="loop-set-end" class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
+                            aria-label="Set End" data-tip="Loop End">B</button>
                         <button id="timeline-loop-toggle"
-                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase"
-                            aria-label="Loop">LOOP</button>
+                            class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
+                            aria-label="Loop" data-tip="Loop">LOOP</button>
                     </div>
                     <div id="timeline-loop-label" class="text-[8px] font-mono uppercase ui-text-secondary opacity-50">
                         All</div>
@@ -662,20 +662,20 @@
     <!-- Simplified Control Panel (Floating Bottom Center) - Hidden by default -->
     <div id="simplified-panel" class="glass-blue hidden-panel transition-all duration-500">
         <button id="simple-prev" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Previous Camera">
+            aria-label="Previous Camera" data-tip="Prev Cam">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
             </svg>
         </button>
         <button id="simple-play-pause"
             class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg ui-text-highlight has-tooltip"
-            aria-label="Play/Pause">
+            aria-label="Play/Pause" data-tip="Play">
             <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current">
                 <path d="M8 5v14l11-7z" />
             </svg>
         </button>
         <button id="simple-next" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Next Camera">
+            aria-label="Next Camera" data-tip="Next Cam">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
             </svg>
@@ -691,7 +691,7 @@
         <!-- Tiny separator -->
         <div class="w-px h-6 ui-border mx-1"></div>
         <button id="simple-toggle-ui" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Restore UI">
+            aria-label="Restore UI" data-tip="Show UI">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path
                     d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />

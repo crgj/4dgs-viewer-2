@@ -858,6 +858,7 @@ export class Viewer {
         // Block camera when mouse is over UI panels
         // #WDD 2026-01-15 Added 'control-panel' to the list to cover the entire right area
         // #WDD 2026-01-19 Added all UI panels to strictly block camera control
+        // #WDD-gpt 2026-05-17 帮助弹窗也要阻断相机控制
         const uiPanels = [
             'sidebar',
             'control-panel',
@@ -868,7 +869,8 @@ export class Viewer {
             'text-edit-panel',
             'simplified-panel',
             'samples-dropdown',
-            'loading-overlay'
+            'loading-overlay',
+            'help-modal'
         ];
         uiPanels.forEach(id => {
             const el = document.getElementById(id);
