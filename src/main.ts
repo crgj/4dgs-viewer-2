@@ -130,7 +130,15 @@ export class Viewer {
     // --- SOG4 Segment Sequence (temporal-per-segment) ---
     private isSog4SequenceMode = false;
     private sog4SequenceFiles: File[] = [];
-    private sog4SequenceSegments: { name: string; parsed: any; asset: pc.Asset | null; entity: pc.Entity | null; duration: number }[] = [];
+    private sog4SequenceSegments: {
+        name: string;
+        parsed: any;
+        asset: pc.Asset | null;
+        entity: pc.Entity | null;
+        duration: number;
+        file?: File;
+        header?: any;
+    }[] = [];
     private sog4SequenceName: string | null = null;
     private sog4SequenceSharedTransform: { pos: number[]; rot: number[]; scale: number[] } | null = null;
     private sog4SequenceIndex = 0;
@@ -138,6 +146,14 @@ export class Viewer {
     private sog4SequenceOffsets: number[] = [];
     private sog4SequenceLoading = false;
     private sog4SequenceRequestId = 0;
+    private ply4SequenceLoadMode: 'full' | 'segmented' = 'full';
+    private readonly PLY4_SEGMENTED_THRESHOLD_BYTES = 4 * 1024 * 1024 * 1024;
+    private sequenceEditStates = new Map<number, { selectionData: Uint8Array | null; allTimeSelectionData: Uint8Array | null }>();
+    private lazySegmentProgressEl: HTMLElement | null = null;
+    private lazySegmentProgressBarEl: HTMLElement | null = null;
+    private lazySegmentProgressTitleEl: HTMLElement | null = null;
+    private lazySegmentProgressDetailEl: HTMLElement | null = null;
+    private lazyBlockerEl: HTMLElement | null = null;
     private splatSequence: SplatSequence | null = null;
 
     private getSequenceParentEntity(): pc.Entity {
@@ -1497,13 +1513,17 @@ export class Viewer {
         this.isSog4SequenceMode = false;
         this.sog4SequenceFiles = [];
         this.sog4SequenceSegments = [];
-            this.sog4SequenceTotalFrames = 0;
-            this.sog4SequenceOffsets = [];
-            this.sog4SequenceName = null;
-            this.sog4SequenceSharedTransform = null;
+        this.sog4SequenceTotalFrames = 0;
+        this.sog4SequenceOffsets = [];
+        this.sog4SequenceName = null;
+        this.sog4SequenceSharedTransform = null;
         this.sog4SequenceIndex = 0;
         this.sog4SequenceLoading = false;
         this.sog4SequenceRequestId++;
+        this.ply4SequenceLoadMode = 'full';
+        this.sequenceEditStates.clear();
+        this.updatePly4SequenceLoadModeBadge('hidden');
+        this.lazySegmentProgressEl?.classList.add('hidden');
         // #WDD-gpt 2026-04-20 - 清理旧序列对象，避免新加载沿用过期元素
         this.splatSequence = null;
         this.refreshExportButtons();
@@ -2275,8 +2295,151 @@ export class Viewer {
         return 10 * gib;
     }
 
+    private shouldUseSegmentedPly4Mode(totalSize: number) {
+        return totalSize > this.PLY4_SEGMENTED_THRESHOLD_BYTES;
+    }
+
     private formatImportBudget(bytes: number) {
         return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    }
+
+    // #WDD-gpt 2026-05-16 - 在 UI 上常驻标注 PLY4 序列当前读取模式
+    private updatePly4SequenceLoadModeBadge(mode: 'hidden' | 'full' | 'lazy', totalSize = 0, segmentCount = 0) {
+        const badge = document.getElementById('sequence-load-mode-badge');
+        if (!badge) return;
+        if (mode === 'hidden') {
+            badge.classList.add('hidden');
+            badge.textContent = 'PLY4 FULL';
+            badge.title = 'Current sequence loading mode';
+            this.selectionTool?.refreshLazyModeVisibility?.();
+            return;
+        }
+        const isLazy = mode === 'lazy';
+        badge.classList.remove('hidden');
+        badge.textContent = isLazy ? 'PLY4 LAZY' : 'PLY4 FULL';
+        badge.title = isLazy
+            ? `PLY4 Lazy segmented buffering: ${segmentCount} segments, ${this.formatImportBudget(totalSize)} total. Only the active segment is decoded/render-cached.`
+            : `PLY4 full loading: ${segmentCount} segments, ${this.formatImportBudget(totalSize)} total.`;
+        badge.classList.toggle('bg-cyan-500/15', isLazy);
+        badge.classList.toggle('text-cyan-300', isLazy);
+        badge.classList.toggle('border-cyan-400/20', isLazy);
+        badge.classList.toggle('bg-emerald-500/15', !isLazy);
+        badge.classList.toggle('text-emerald-300', !isLazy);
+        badge.classList.toggle('border-emerald-400/20', !isLazy);
+        this.selectionTool?.refreshLazyModeVisibility?.();
+    }
+
+    // #WDD-gpt 2026-05-16 - 提供给手工选择 UI 判断 Lazy 模式下是否隐藏区域/笔刷工具
+    public isPly4LazySequenceMode() {
+        return this.isSog4SequenceMode && this.ply4SequenceLoadMode === 'segmented' && this.sog4SequenceSegments.length > 1;
+    }
+
+
+
+    // #WDD-gpt 2026-05-16 - 大 PLY4 序列自动切换 lazy 模式时主动告知用户
+    private showPly4LazyModeDialog(totalSize: number, segmentCount: number) {
+        return new Promise<void>((resolve) => {
+            // #WDD-gpt 2026-05-16 - 用项目内玻璃风格弹窗替代浏览器 alert，避免破坏 UI 一致性
+            document.getElementById('ply4-lazy-mode-dialog')?.remove();
+            const overlay = document.createElement('div');
+            overlay.id = 'ply4-lazy-mode-dialog';
+            overlay.className = 'ply4-lazy-mode-dialog';
+            overlay.innerHTML = `
+                <div class="ply4-lazy-mode-card">
+                    <div class="ply4-lazy-mode-kicker">PLY4 Sequence Mode</div>
+                    <div class="ply4-lazy-mode-title">Lazy Segmented Buffering</div>
+                    <div class="ply4-lazy-mode-body">
+                        <div class="ply4-lazy-mode-row">
+                            <span>Total Size</span>
+                            <strong>${this.formatImportBudget(totalSize)}</strong>
+                        </div>
+                        <div class="ply4-lazy-mode-row">
+                            <span>Segments</span>
+                            <strong>${segmentCount}</strong>
+                        </div>
+                        <p>当前 PLY4 序列超过 4.0 GB，系统将自动使用 Lazy 分段缓冲模式。</p>
+                        <ul>
+                            <li>只读取 header 建立完整时间轴。</li>
+                            <li>当前显示段才会解码并上传 GPU。</li>
+                            <li>选择和删除状态会按段保存。</li>
+                            <li>切换到未缓存段时会暂停播放并显示读取进度。</li>
+                        </ul>
+                    </div>
+                    <div class="ply4-lazy-mode-actions">
+                        <button id="ply4-lazy-mode-continue" class="ui-btn ply4-lazy-mode-button">Continue</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            const close = () => {
+                overlay.remove();
+                resolve();
+            };
+            overlay.querySelector('#ply4-lazy-mode-continue')?.addEventListener('click', close, { once: true });
+        });
+    }
+
+    // #WDD-gpt 2026-05-16 - Lazy 模式按段解码时在右下角显示读取进度
+    private ensureLazySegmentProgressUI() {
+        if (this.lazySegmentProgressEl) return;
+        const el = document.createElement('div');
+        el.id = 'lazy-segment-progress';
+        el.className = 'lazy-segment-progress hidden';
+        el.innerHTML = `
+            <div class="lazy-segment-progress-title" id="lazy-segment-progress-title">PLY4 Lazy Segment</div>
+            <div class="lazy-segment-progress-track">
+                <div class="lazy-segment-progress-bar" id="lazy-segment-progress-bar"></div>
+            </div>
+            <div class="lazy-segment-progress-detail" id="lazy-segment-progress-detail">Waiting</div>
+        `;
+        document.body.appendChild(el);
+        this.lazySegmentProgressEl = el;
+        this.lazySegmentProgressBarEl = document.getElementById('lazy-segment-progress-bar');
+        this.lazySegmentProgressTitleEl = document.getElementById('lazy-segment-progress-title');
+        this.lazySegmentProgressDetailEl = document.getElementById('lazy-segment-progress-detail');
+    }
+
+    private ensureLazyBlockerUI() {
+        if (this.lazyBlockerEl) return;
+        const el = document.createElement('div');
+        el.id = 'lazy-blocker';
+        el.className = 'lazy-blocker hidden';
+        document.body.appendChild(el);
+        this.lazyBlockerEl = el;
+    }
+
+    private showLazyBlocker() {
+        this.ensureLazyBlockerUI();
+        this.lazyBlockerEl?.classList.remove('hidden');
+    }
+
+    private hideLazyBlocker() {
+        this.lazyBlockerEl?.classList.add('hidden');
+    }
+
+    private showLazySegmentProgress(percent: number, title: string, detail: string) {
+        this.ensureLazySegmentProgressUI();
+        const p = Math.max(0, Math.min(100, percent));
+        this.lazySegmentProgressEl?.classList.remove('hidden');
+        if (this.lazySegmentProgressBarEl) this.lazySegmentProgressBarEl.style.width = `${p}%`;
+        if (this.lazySegmentProgressTitleEl) this.lazySegmentProgressTitleEl.textContent = title;
+        if (this.lazySegmentProgressDetailEl) this.lazySegmentProgressDetailEl.textContent = detail;
+        this.showLazyBlocker();
+    }
+
+    private hideLazySegmentProgress(delayMs = 500) {
+        window.setTimeout(() => {
+            this.lazySegmentProgressEl?.classList.add('hidden');
+            this.hideLazyBlocker();
+        }, delayMs);
+    }
+
+    // #WDD-gpt 2026-05-16 - 播放推进到未缓存 PLY4 段时先暂停，避免时间轴继续越过正在加载的片段
+    private pausePlaybackForLazySegment(segmentName: string) {
+        if (!this.isPlaying) return;
+        this.togglePlay();
+        this.playbackTime = this.currentTime;
+        this.showLazySegmentProgress(0, 'PLY4 Lazy Loading', `Paused while loading ${segmentName}`);
     }
 
     
@@ -2358,10 +2521,9 @@ export class Viewer {
                 this.sog4SequenceLoading = false;
             }
             this.refreshExportButtons();
+            this.updateTransformUIFromEntity();
 
-            console.log("[Viewer] Auto-starting playback and switching to Play Mode");
-            this.toggleUIVisibility(true);
-            if (!this.isPlaying) this.togglePlay();
+            // #WDD 2026-05-16: Do not auto-play or hide UI on SOG4 sequence load
 
             setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 200);
 
@@ -2388,20 +2550,25 @@ export class Viewer {
     private async loadPly4Sequence(files: File[]): Promise<void> {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
-        
+
+        const useSegmentedMode = this.shouldUseSegmentedPly4Mode(totalSize);
         const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
-        
-        if (totalSize > maxLimitBytes) {
+
+        if (!useSegmentedMode && totalSize > maxLimitBytes) {
            alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 PLY4 序列分段总体积达到了 ${this.formatImportBudget(totalSize)}，已超出当前设置的 10GB 处理预算 (${this.formatImportBudget(maxLimitBytes)})。\n\n即使通过预检，超大 PLY4 仍可能被浏览器单次 ArrayBuffer 或 GPU driver 限制拦截。\n\n建议做法: 请减少选中的序列分段分批次处理，或使用更大显存/内存并开启 64-bit 浏览器。`);
            return;
+        }
+        if (useSegmentedMode) {
+            await this.showPly4LazyModeDialog(totalSize, files.length);
         }
 
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
-        progress(0, 'PREPARING', `Loading ${files.length} PLY4 segments`);
+        progress(0, 'PREPARING', `${useSegmentedMode ? 'Segmented buffering' : 'Loading'} ${files.length} PLY4 segments`);
         let succeeded = false;
         try {
             this.activeLoadingSequenceCleanup();
+            this.updatePly4SequenceLoadModeBadge(useSegmentedMode ? 'lazy' : 'full', totalSize, files.length);
 
             // #WDD 2026-05-12 Update: Use numeric sort to ensure segment sequence like 1, 2, 10 instead of 1, 10, 2
             const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
@@ -2415,31 +2582,39 @@ export class Viewer {
             this.sog4SequenceTotalFrames = 0;
             this.sog4SequenceIndex = 0;
             this.sog4SequenceLoading = true;
+            this.ply4SequenceLoadMode = useSegmentedMode ? 'segmented' : 'full';
+            this.sequenceEditStates.clear();
             const requestId = ++this.sog4SequenceRequestId;
 
             const loader = new PLY4Loader();
             for (let i = 0; i < sorted.length; i++) {
                 const file = sorted[i];
                 const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
-                progress(step, 'LOADING', `Parsing ${file.name}`);
-                const parsed = await loader.load(file, () => { });
-                const duration = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || 100));
+                progress(step, useSegmentedMode ? 'INSPECTING' : 'LOADING', `${useSegmentedMode ? 'Reading header' : 'Parsing'} ${file.name}`);
+                const parsed = useSegmentedMode ? null : await loader.load(file, () => { });
+                const header = useSegmentedMode ? await loader.inspectFile(file) : null;
+                const duration = Math.max(1, Math.floor((parsed?.frames || parsed?.maxMu || header?.duration || 100)));
                 this.sog4SequenceOffsets.push(this.sog4SequenceTotalFrames);
                 this.sog4SequenceTotalFrames += duration;
-                this.sog4SequenceSegments.push({ name: file.name, parsed, asset: null, entity: null, duration });
+                this.sog4SequenceSegments.push({ name: file.name, parsed, asset: null, entity: null, duration, file, header });
             }
 
             if (!this.sog4SequenceSegments.length) throw new Error('No PLY4 segments parsed');
-            for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
-                const step = Math.min(8, 4 + Math.floor((i / Math.max(1, this.sog4SequenceSegments.length - 1)) * 4));
-                progress(step, 'PREPARING', `Preparing ${this.sog4SequenceSegments[i].name}`);
-                await this.prepareSog4SequenceSegment(i);
+            if (!useSegmentedMode) {
+                for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
+                    const step = Math.min(8, 4 + Math.floor((i / Math.max(1, this.sog4SequenceSegments.length - 1)) * 4));
+                    progress(step, 'PREPARING', `Preparing ${this.sog4SequenceSegments[i].name}`);
+                    await this.prepareSog4SequenceSegment(i);
+                }
+            } else {
+                progress(8, 'BUFFERING', 'Preparing first visible segment only');
             }
             this.resetTimelineTools();
-            this.activateSog4SequenceSegment(0);
+            this.rebuildSplatSequenceFromTemporalSegments(this.sog4SequenceName || 'ply4_sequence');
+            this.selectionTool?.refreshLazyModeVisibility?.();
+            await this.activateSog4SequenceSegment(0);
             this.currentTime = 0;
             this.playbackTime = 0;
-            this.rebuildSplatSequenceFromTemporalSegments(this.sog4SequenceName || 'ply4_sequence');
 
             const first = this.sog4SequenceSegments[0];
             if (first?.parsed?.cameras && Array.isArray(first.parsed.cameras)) {
@@ -2463,10 +2638,10 @@ export class Viewer {
                 this.sog4SequenceLoading = false;
             }
             this.refreshExportButtons();
+            this.selectionTool?.refreshLazyModeVisibility?.();
+            this.updateTransformUIFromEntity();
 
-            console.log("[Viewer] Auto-starting playback and switching to Play Mode");
-            this.toggleUIVisibility(true);
-            if (!this.isPlaying) this.togglePlay();
+            // #WDD 2026-05-16: Do not auto-play or hide UI on PLY4 sequence load
 
             setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 200);
             succeeded = true;
@@ -2482,6 +2657,9 @@ export class Viewer {
                 this.sog4SequenceTotalFrames = 0;
                 this.sog4SequenceIndex = 0;
                 this.sog4SequenceLoading = false;
+                this.ply4SequenceLoadMode = 'full';
+                this.sequenceEditStates.clear();
+                this.updatePly4SequenceLoadModeBadge('hidden');
                 this.refreshExportButtons();
                 overlay?.classList.add('hidden');
             }
@@ -2752,7 +2930,38 @@ export class Viewer {
         const segment = this.sog4SequenceSegments[index];
         if (!segment) return;
         if (segment.asset && segment.entity) return;
+        const wasLoading = this.sog4SequenceLoading;
+        this.sog4SequenceLoading = true;
+        try {
+        if (!segment.parsed && segment.file) {
+            // #WDD-gpt 2026-05-16 - 分段缓冲模式在真正显示该段时才解码 PLY4，避免全序列同时占用内存
+            const loader = new PLY4Loader();
+            if (this.ply4SequenceLoadMode === 'segmented') {
+                this.showLazySegmentProgress(2, 'PLY4 Lazy Loading', `Opening ${segment.name}`);
+            }
+            segment.parsed = await loader.load(segment.file, (progress, message, meta) => {
+                if (this.ply4SequenceLoadMode !== 'segmented') return;
+                const pct = Math.min(88, Math.max(2, progress * 0.88));
+                const chunk = meta?.chunkIndex && meta?.chunkCount ? ` • chunk ${meta.chunkIndex}/${meta.chunkCount}` : '';
+                const rows = meta?.rowsRead && meta?.rowCount ? ` • ${meta.rowsRead.toLocaleString()}/${meta.rowCount.toLocaleString()}` : '';
+                this.showLazySegmentProgress(pct, `PLY4 Lazy ${index + 1}/${this.sog4SequenceSegments.length}`, `${segment.name} • ${message}${chunk}${rows}`);
+            });
+            segment.duration = Math.max(1, Math.floor(segment.parsed.frames || segment.parsed.maxMu || segment.duration || 100));
+            const element = this.splatSequence?.elements?.[index];
+            if (element) {
+                element.parsed = segment.parsed;
+                element.duration = segment.duration;
+                element.globalEndFrame = element.globalStartFrame + segment.duration;
+            }
+        }
+        if (!segment.parsed) {
+            this.sog4SequenceLoading = wasLoading;
+            return;
+        }
 
+        if (this.ply4SequenceLoadMode === 'segmented') {
+            this.showLazySegmentProgress(90, `PLY4 Lazy ${index + 1}/${this.sog4SequenceSegments.length}`, `Uploading ${segment.name} to GPU`);
+        }
         const asset = this.createSog4SegmentAsset(segment.parsed, segment.name);
         segment.asset = asset;
 
@@ -2761,13 +2970,101 @@ export class Viewer {
         this.attachSog4SequenceEntity(entity, segment.parsed);
         entity.enabled = true;
         segment.entity = entity;
+        const element = this.splatSequence?.elements?.[index];
+        if (element) {
+            element.parsed = segment.parsed;
+            element.asset = asset;
+            element.entity = entity;
+            element.duration = segment.duration;
+            element.globalEndFrame = element.globalStartFrame + segment.duration;
+        }
 
         const inst = await this.waitForGsplatMaterial(
             entity,
             () => this.isSog4SequenceMode && this.sog4SequenceSegments[index]?.entity === entity
         );
-        if (!inst) return;
+        if (!inst) {
+            this.sog4SequenceLoading = wasLoading;
+            return;
+        }
         entity.enabled = false;
+        if (this.ply4SequenceLoadMode === 'segmented') {
+            this.showLazySegmentProgress(96, `PLY4 Lazy ${index + 1}/${this.sog4SequenceSegments.length}`, `Prepared ${segment.name}`);
+        }
+        } finally {
+            this.sog4SequenceLoading = wasLoading;
+        }
+    }
+
+    // #WDD-gpt 2026-05-16 - 分段缓冲时把选择/删除状态从可销毁的渲染资源中复制出来
+    private saveSog4SegmentEditState(index: number) {
+        if (index < 0) return;
+        const element = this.splatSequence?.elements?.[index];
+        const runtime = element?.runtime as any;
+        const selectionData = runtime?.selectionData instanceof Uint8Array
+            ? runtime.selectionData
+            : (index === this.sog4SequenceIndex && this.selectionTool?.selectionData instanceof Uint8Array ? this.selectionTool.selectionData : null);
+        const allTimeSelectionData = runtime?.allTimeSelectionData instanceof Uint8Array
+            ? runtime.allTimeSelectionData
+            : (index === this.sog4SequenceIndex && this.selectionTool?.allTimeSelectionData instanceof Uint8Array ? this.selectionTool.allTimeSelectionData : null);
+        if (!selectionData && !allTimeSelectionData) return;
+        this.sequenceEditStates.set(index, {
+            selectionData: selectionData ? new Uint8Array(selectionData) : null,
+            allTimeSelectionData: allTimeSelectionData ? new Uint8Array(allTimeSelectionData) : null
+        });
+    }
+
+    // #WDD-gpt 2026-05-16 - 恢复分段缓存释放前保存的选择/删除通道
+    private applySog4SegmentEditState(index: number) {
+        const saved = this.sequenceEditStates.get(index);
+        const element = this.splatSequence?.elements?.[index];
+        const runtime = element?.runtime as any;
+        if (!saved || !runtime) return;
+        if (saved.selectionData && runtime.selectionData instanceof Uint8Array) {
+            runtime.selectionData.set(saved.selectionData.subarray(0, Math.min(saved.selectionData.length, runtime.selectionData.length)));
+        }
+        if (saved.allTimeSelectionData && runtime.allTimeSelectionData instanceof Uint8Array) {
+            runtime.allTimeSelectionData.set(saved.allTimeSelectionData.subarray(0, Math.min(saved.allTimeSelectionData.length, runtime.allTimeSelectionData.length)));
+        }
+        if (runtime.selectionTexture && runtime.selectionData instanceof Uint8Array) {
+            const lock = runtime.selectionTexture.lock();
+            lock.set(runtime.selectionData);
+            runtime.selectionTexture.unlock();
+            this.updateSelectionUniform(runtime.selectionTexture);
+        }
+    }
+
+    // #WDD-gpt 2026-05-16 - 释放非活动 PLY4 段的 GPU/CPU 渲染缓存，只保留独立编辑状态
+    private prunePly4SegmentCache(activeIndex: number) {
+        if (this.ply4SequenceLoadMode !== 'segmented') return;
+        for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
+            if (i === activeIndex) continue;
+            const segment = this.sog4SequenceSegments[i];
+            if (!segment) continue;
+            this.saveSog4SegmentEditState(i);
+            if (segment.entity) {
+                segment.entity.destroy();
+                segment.entity = null;
+            }
+            if (segment.asset) {
+                try {
+                    const resource = segment.asset.resource as any;
+                    if (resource && typeof resource.destroy === 'function') resource.destroy();
+                    this.app.assets.remove(segment.asset);
+                } catch (err) {
+                    console.warn('[PLY4 Sequence] Failed to release segment asset:', segment.name, err);
+                }
+                segment.asset = null;
+            }
+            segment.parsed = null;
+            const element = this.splatSequence?.elements?.[i] as any;
+            if (element) {
+                element.parsed = null;
+                element.asset = null;
+                element.entity = null;
+                element.runtime = null;
+            }
+        }
     }
 
     private clearActiveSog4SequenceRenderState() {
@@ -2795,7 +3092,18 @@ export class Viewer {
         const t = Math.max(0, Math.min(this.currentTime, maxTime));
         const segIndex = this.getSog4SegmentIndex(t);
         if (segIndex !== this.sog4SequenceIndex) {
-            this.activateSog4SequenceSegment(segIndex);
+            // #WDD-gpt 2026-05-16 - 分段缓冲切段需要异步解码，当前 tick 先返回，避免同步大内存分配
+            if (!this.sog4SequenceLoading) {
+                const targetSegment = this.sog4SequenceSegments[segIndex];
+                if (this.ply4SequenceLoadMode === 'segmented' && targetSegment && (!targetSegment.asset || !targetSegment.entity)) {
+                    this.pausePlaybackForLazySegment(targetSegment.name);
+                }
+                this.sog4SequenceLoading = true;
+                void this.activateSog4SequenceSegment(segIndex).finally(() => {
+                    this.sog4SequenceLoading = false;
+                });
+            }
+            return { displayFrame: Math.floor(t), total };
         }
         const offset = this.sog4SequenceOffsets[segIndex] || 0;
         const localTime = t - offset;
@@ -2804,14 +3112,21 @@ export class Viewer {
         return { displayFrame: Math.floor(t), total };
     }
 
-    private activateSog4SequenceSegment(index: number): void {
+    private async activateSog4SequenceSegment(index: number): Promise<void> {
         const segment = this.sog4SequenceSegments[index];
         if (!segment) return;
         if (this.sog4SequenceIndex === index && this.splatEntity && this.lastParsedData === segment.parsed) {
             this.setSog4SequenceVisibleSegment(index);
             return;
         }
+        this.saveSog4SegmentEditState(this.sog4SequenceIndex);
+        if (this.ply4SequenceLoadMode === 'segmented' && (!segment.asset || !segment.entity)) {
+            this.pausePlaybackForLazySegment(segment.name);
+        }
         if (!segment.asset || !segment.entity) {
+            await this.prepareSog4SequenceSegment(index);
+        }
+        if (!segment.asset || !segment.entity || !segment.parsed) {
             console.warn('[SOG4 Sequence] Segment was not prepared before activation:', index, segment.name);
             return;
         }
@@ -2829,9 +3144,12 @@ export class Viewer {
 
         // #WDD-kimi 2026-04-20 - 优先复用段内保存的选择状态，避免切段后删除状态丢失
         const preBoundElement = this.getSplatSequenceElementByAsset(segment.asset);
-        if (preBoundElement?.runtime?.selectionData) {
+        if (preBoundElement?.runtime?.selectionData || preBoundElement?.runtime?.allTimeSelectionData) {
             if (!preBoundElement.runtime.selectionTexture) {
-                const restored = this.createSequenceSelectionStateForAsset(segment.asset, preBoundElement.runtime.selectionData as Uint8Array);
+                const seed = (preBoundElement.runtime.selectionData as Uint8Array | null)
+                    || (preBoundElement.runtime.allTimeSelectionData as Uint8Array | null)
+                    || null;
+                const restored = this.createSequenceSelectionStateForAsset(segment.asset, seed);
                 if (restored) {
                     preBoundElement.runtime.selectionTexture = restored.selectionTexture;
                     preBoundElement.runtime.selectionData = restored.selectionData;
@@ -2850,9 +3168,10 @@ export class Viewer {
                 this.selectionTool.allTimeSelectionData = preBoundElement.runtime.allTimeSelectionData;
                 this.selectionTool.selectionTexture = preBoundElement.runtime.selectionTexture;
             }
-            if (preBoundElement.runtime.selectionTexture) {
+            const activeSelectionData = preBoundElement.runtime.selectionData as Uint8Array | null;
+            if (preBoundElement.runtime.selectionTexture && activeSelectionData) {
                 const lock = preBoundElement.runtime.selectionTexture.lock();
-                lock.set(preBoundElement.runtime.selectionData);
+                lock.set(activeSelectionData);
                 preBoundElement.runtime.selectionTexture.unlock();
                 this.updateSelectionUniform(preBoundElement.runtime.selectionTexture);
             }
@@ -2877,6 +3196,7 @@ export class Viewer {
             }
         }
         this.finalizeGSplatLoad(segment.asset, segment.parsed.count, null, segment.duration, segment.parsed, { suppressUI: true });
+        this.applySog4SegmentEditState(index);
         if (this.selectionTool?.selectionTexture) {
             this.updateSelectionUniform(this.selectionTool.selectionTexture);
             this.updateSelectionModeParams(false);
@@ -2919,6 +3239,12 @@ export class Viewer {
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
         this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(this.sog4SequenceTotalFrames || this.duration) - 1));
         this.fileLoader.updateStats(segment.asset);
+        this.updateTransformUIFromEntity();
+        if (this.ply4SequenceLoadMode === 'segmented') {
+            this.showLazySegmentProgress(100, `PLY4 Lazy ${index + 1}/${this.sog4SequenceSegments.length}`, `Ready ${segment.name}`);
+            this.hideLazySegmentProgress(700);
+        }
+        this.prunePly4SegmentCache(index);
     }
 
     private async loadSogSequence(files: File[]): Promise<void> {
@@ -3970,6 +4296,7 @@ export class Viewer {
             positions: this.getCurrentPositions(),
             trajectoryData: this.trajectoryData,
             keyframes: this.keyframes,
+            xyzStride: this.xyzStride,
             originalIndices: this.originalIndices,
             lifetimeMu: readProp('lifetime_mu'),
             lifetimeW: readProp('lifetime_w'),
@@ -4048,6 +4375,7 @@ export class Viewer {
                 positions,
                 trajectoryData: runtime.trajectoryData || parsed.trajectory || null,
                 keyframes: runtime.keyframes || parsed.keyframes || 0,
+                xyzStride: runtime.xyzStride || parsed.xyzStride || 1,
                 originalIndices: runtime.originalIndices || readParsedProp(parsed, 'original_index'),
                 lifetimeMu: readParsedProp(parsed, 'lifetime_mu') || readLifeFromRuntime(runtime, 0),
                 lifetimeW: readParsedProp(parsed, 'lifetime_w') || readLifeFromRuntime(runtime, 1),
@@ -4055,6 +4383,263 @@ export class Viewer {
                 transformPoint: transformForEntity(element.entity || this.splatEntity)
             };
         }).filter((source: any) => source.positions);
+    }
+
+    // #WDD-gpt 2026-05-16 - 智能对齐在 PLY4 序列中始终只使用第一个 PLY4 文件
+    public async getSmartSelectionFirstPly4AnalysisSource() {
+        const elements = (this.splatSequence?.elements || []).filter((element: any) => element?.type === 'ply4');
+        if (!(this.isSog4SequenceMode && elements.length > 1)) {
+            return this.getSmartSelectionAnalysisSource();
+        }
+        const firstElement = elements[0] as any;
+        const firstIndex = this.splatSequence?.elements.indexOf(firstElement) ?? 0;
+        const firstSegment = this.sog4SequenceSegments[firstIndex];
+        const wasLoaded = !!firstSegment?.parsed;
+        const parsed = firstSegment?.parsed || (firstSegment?.file ? await new PLY4Loader().load(firstSegment.file, () => { }) : firstElement?.parsed);
+        if (!parsed) return null;
+
+        const readProp = (name: string): Float32Array | null => {
+            if (parsed?.[name] instanceof Float32Array) return parsed[name] as Float32Array;
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+        const x = readProp('x');
+        const y = readProp('y');
+        const z = readProp('z');
+        if (!x || !y || !z) return null;
+        const count = Math.min(parsed.count || x.length, x.length, y.length, z.length);
+        const positions = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+            positions[i * 3 + 0] = x[i];
+            positions[i * 3 + 1] = y[i];
+            positions[i * 3 + 2] = z[i];
+        }
+        const source = {
+            name: firstElement?.name || firstSegment?.name || 'first.ply4',
+            selectionElement: firstElement,
+            positions,
+            trajectoryData: parsed.trajectory || null,
+            keyframes: parsed.keyframes || 0,
+            xyzStride: parsed.xyzStride || 1,
+            originalIndices: readProp('original_index'),
+            lifetimeMu: readProp('lifetime_mu'),
+            lifetimeW: readProp('lifetime_w'),
+            totalFrames: Math.max(1, Math.floor(parsed.frames || parsed.maxMu || firstElement?.duration || firstSegment?.duration || 1)),
+            transformPoint: this.createSharedPly4SequenceTransformPoint()
+        };
+        if (!wasLoaded && this.ply4SequenceLoadMode === 'segmented' && firstIndex !== this.sog4SequenceIndex && firstSegment) {
+            firstSegment.parsed = null;
+            if (firstElement) firstElement.parsed = null;
+        }
+        return source;
+    }
+
+    // #WDD-gpt 2026-05-16 - PLY4 序列的自动对齐和圆柱选择统一使用第一个文件/序列共享的位移旋转缩放
+    private createSharedPly4SequenceTransformPoint() {
+        const shared = this.sog4SequenceSharedTransform || { pos: [0, 0, 0], rot: [0, 0, 0, 1], scale: [1, 1, 1] };
+        const pos = shared.pos || [0, 0, 0];
+        const rot = shared.rot || [0, 0, 0, 1];
+        const scale = shared.scale || [1, 1, 1];
+        const rotation = new pc.Quat(rot[0], rot[1], rot[2], rot[3]);
+        return (point: [number, number, number]) => {
+            const local = new pc.Vec3(point[0] * scale[0], point[1] * scale[1], point[2] * scale[2]);
+            const rotated = rotation.transformVector(local);
+            return [
+                rotated.x + pos[0],
+                rotated.y + pos[1],
+                rotated.z + pos[2]
+            ] as [number, number, number];
+        };
+    }
+
+    // #WDD-gpt 2026-05-16 - 圆柱选择对所有 PLY4 段逐段检测，Full/Lazy 都共享首段 transform
+    public async selectCylinderForAllPly4Segments(
+        region: { centerX: number; centerZ: number; radius: number; height: number; groundPad: number },
+        onProgress?: (progress: { percent: number; stage: string; detail: string; segmentIndex?: number; segmentCount?: number }) => void
+    ) {
+        const hasPly4Sequence = this.isSog4SequenceMode
+            && this.sog4SequenceSegments.length > 1
+            && this.sog4SequenceSegments.some((segment) => segment?.name?.toLowerCase().endsWith('.ply4'));
+        if (!hasPly4Sequence) {
+            return null;
+        }
+        const readProp = (parsed: any, name: string): Float32Array | null => {
+            if (parsed?.[name] instanceof Float32Array) return parsed[name] as Float32Array;
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+        const transformPoint = this.createSharedPly4SequenceTransformPoint();
+        const inside = (point: [number, number, number]) => {
+            const r = Math.hypot(point[0] - region.centerX, point[2] - region.centerZ);
+            return r <= region.radius && point[1] >= -region.groundPad && point[1] <= region.height;
+        };
+        const loader = new PLY4Loader();
+        let totalSelected = 0;
+        let processedSegments = 0;
+        const ply4Segments = this.sog4SequenceSegments
+            .map((segment, index) => ({ segment, index }))
+            .filter((entry) => entry.segment?.name?.toLowerCase().endsWith('.ply4'));
+        const segmentCount = Math.max(1, ply4Segments.length);
+        const reportProgress = (percent: number, stage: string, detail: string, segmentIndex?: number) => {
+            const p = Math.max(0, Math.min(100, percent));
+            onProgress?.({ percent: p, stage, detail, segmentIndex, segmentCount });
+            if (this.ply4SequenceLoadMode === 'segmented') {
+                this.showLazySegmentProgress(p, stage, detail);
+            }
+        };
+        // #WDD-gpt 2026-05-16 - 大 PLY4 圆柱扫描期间定期让出主线程，避免浏览器被同步循环卡死
+        const yieldToBrowser = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        reportProgress(1, 'Cylinder Selection', `Preparing ${segmentCount} PLY4 segments`);
+        for (let segmentIndex = 0; segmentIndex < this.sog4SequenceSegments.length; segmentIndex++) {
+            const segment = this.sog4SequenceSegments[segmentIndex];
+            if (!segment) continue;
+            if (!segment.name.toLowerCase().endsWith('.ply4')) continue;
+            processedSegments++;
+            const wasLoaded = !!segment.parsed;
+            const segmentBase = ((processedSegments - 1) / segmentCount) * 100;
+            const segmentSpan = 100 / segmentCount;
+            reportProgress(segmentBase, `Cylinder ${processedSegments}/${segmentCount}`, `Opening ${segment.name}`, segmentIndex);
+            const parsed = segment.parsed || (segment.file ? await loader.load(segment.file, (progress, message, meta) => {
+                const local = Math.max(0, Math.min(65, progress * 0.65));
+                const chunk = meta?.chunkIndex && meta?.chunkCount ? ` • chunk ${meta.chunkIndex}/${meta.chunkCount}` : '';
+                const rows = meta?.rowsRead && meta?.rowCount ? ` • ${meta.rowsRead.toLocaleString()}/${meta.rowCount.toLocaleString()}` : '';
+                reportProgress(segmentBase + segmentSpan * (local / 100), `Cylinder ${processedSegments}/${segmentCount}`, `${segment.name} • ${message}${chunk}${rows}`, segmentIndex);
+            }) : null);
+            if (!parsed) continue;
+            const x = readProp(parsed, 'x');
+            const y = readProp(parsed, 'y');
+            const z = readProp(parsed, 'z');
+            if (!x || !y || !z) {
+                if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) segment.parsed = null;
+                continue;
+            }
+            const count = Math.min(parsed.count || x.length, x.length, y.length, z.length);
+            const trajectory = parsed.trajectory as Float32Array | null;
+            const keyframes = Math.max(0, Math.floor(parsed.keyframes || 0));
+            const xyzStride = Math.max(1, Math.floor(parsed.xyzStride || Math.max(1, Math.round(((parsed.frames || parsed.maxMu || segment.duration || keyframes || 1) - 1) / Math.max(1, keyframes - 1)))));
+            const originalIndices = readProp(parsed, 'original_index');
+            const lifetimeMu = readProp(parsed, 'lifetime_mu');
+            const lifetimeW = readProp(parsed, 'lifetime_w');
+            const totalFrames = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || segment.duration || 1));
+            const lifetimeRange = (index: number) => {
+                if (!lifetimeMu || !lifetimeW) return null;
+                const mu = lifetimeMu[index];
+                const w = lifetimeW[index];
+                if (!Number.isFinite(mu) || !Number.isFinite(w)) return null;
+                return { start: mu - Math.max(0, w), end: mu + Math.max(0, w) };
+            };
+            const lifetimeFrameRange = (index: number): { start: number; end: number } | null => {
+                const range = lifetimeRange(index);
+                const start = Math.max(0, Math.ceil(range?.start ?? 0));
+                const end = Math.min(totalFrames - 1, Math.floor(range?.end ?? totalFrames - 1));
+                return end >= start ? { start, end } : null;
+            };
+            // #WDD-gpt 2026-05-16 - 圆柱 all-time 选择按生命周期有效帧采样插值轨迹，生命周期外命中不算选中
+            const trajectoryPointAtFrame = (originalIndex: number, frame: number): [number, number, number] | null => {
+                if (!trajectory || keyframes <= 0) return null;
+                const keyframeMax = Math.max(0, (keyframes - 1) * xyzStride);
+                const tClamped = Math.max(0, Math.min(frame, keyframeMax));
+                const k0 = Math.min(Math.max(0, Math.floor(tClamped / xyzStride)), keyframes - 1);
+                const k1 = Math.min(k0 + 1, keyframes - 1);
+                const t0 = k0 * xyzStride;
+                const t1 = k1 * xyzStride;
+                const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
+                const base = originalIndex * keyframes * 3;
+                const o0 = base + k0 * 3;
+                const o1 = base + k1 * 3;
+                if (o0 < 0 || o1 < 0 || o0 + 2 >= trajectory.length || o1 + 2 >= trajectory.length) return null;
+                const x0 = trajectory[o0 + 0], y0 = trajectory[o0 + 1], z0 = trajectory[o0 + 2];
+                const x1 = trajectory[o1 + 0], y1 = trajectory[o1 + 1], z1 = trajectory[o1 + 2];
+                return [
+                    x0 + (x1 - x0) * ratio,
+                    y0 + (y1 - y0) * ratio,
+                    z0 + (z1 - z0) * ratio
+                ];
+            };
+            reportProgress(segmentBase + segmentSpan * 0.68, `Cylinder ${processedSegments}/${segmentCount}`, `Testing ${count.toLocaleString()} splats in ${segment.name}`, segmentIndex);
+            const existingSelection = this.getSequenceEditSelectionData(segmentIndex) as Uint8Array | null;
+            const existingAllTime = this.getSequenceEditAllTimeSelectionData(segmentIndex) as Uint8Array | null;
+            const selectionData = new Uint8Array(Math.max(count * 4, existingSelection?.length || 0));
+            const allTimeSelectionData = new Uint8Array(Math.max(count * 4, existingAllTime?.length || existingSelection?.length || 0));
+            if (existingSelection) selectionData.set(existingSelection.subarray(0, Math.min(existingSelection.length, selectionData.length)));
+            if (existingAllTime) allTimeSelectionData.set(existingAllTime.subarray(0, Math.min(existingAllTime.length, allTimeSelectionData.length)));
+            for (let i = 0; i < selectionData.length; i += 4) selectionData[i] = 0;
+            for (let i = 0; i < allTimeSelectionData.length; i += 4) allTimeSelectionData[i] = 0;
+
+            let selected = 0;
+            let currentSelected = 0;
+            const segmentStart = this.sog4SequenceOffsets[segmentIndex] || 0;
+            const currentLocalFrame = this.currentTime >= segmentStart && this.currentTime < segmentStart + segment.duration
+                ? Math.max(0, Math.min(totalFrames - 1, Math.floor(this.currentTime - segmentStart)))
+                : null;
+            let lastYield = performance.now();
+            for (let i = 0; i < count; i++) {
+                const validFrames = lifetimeFrameRange(i);
+                if (!validFrames) continue;
+                const basePoint = transformPoint([x[i], y[i], z[i]]);
+                let hit = false;
+                let currentHit = currentLocalFrame !== null
+                    && currentLocalFrame >= validFrames.start
+                    && currentLocalFrame <= validFrames.end
+                    && inside(basePoint);
+                if (trajectory && keyframes > 1) {
+                    const originalIndex = originalIndices ? Math.max(0, Math.round(originalIndices[i] || 0)) : i;
+                    for (let frame = validFrames.start; frame <= validFrames.end; frame++) {
+                        const p = trajectoryPointAtFrame(originalIndex, frame);
+                        if (!p) continue;
+                        if (inside(transformPoint(p))) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (currentLocalFrame !== null && currentLocalFrame >= validFrames.start && currentLocalFrame <= validFrames.end) {
+                        const p = trajectoryPointAtFrame(originalIndex, currentLocalFrame);
+                        currentHit = !!p && inside(transformPoint(p));
+                    }
+                } else {
+                    hit = inside(basePoint);
+                }
+                if (hit) {
+                    const off = i * 4;
+                    if (selectionData[off + 1] <= 0) {
+                        allTimeSelectionData[off] = 255;
+                        if (currentHit) {
+                            selectionData[off] = 255;
+                            currentSelected++;
+                        }
+                        selected++;
+                    }
+                }
+                if ((i & 511) === 0) {
+                    const now = performance.now();
+                    if (now - lastYield > 12) {
+                        const scanPct = 0.68 + 0.22 * (i / Math.max(1, count));
+                        reportProgress(
+                            segmentBase + segmentSpan * scanPct,
+                            `Cylinder ${processedSegments}/${segmentCount}`,
+                            `Testing ${i.toLocaleString()}/${count.toLocaleString()} splats in ${segment.name}`,
+                            segmentIndex
+                        );
+                        await yieldToBrowser();
+                        lastYield = performance.now();
+                    }
+                }
+            }
+            totalSelected += selected;
+            reportProgress(segmentBase + segmentSpan * 0.92, `Cylinder ${processedSegments}/${segmentCount}`, `Writing ${selected.toLocaleString()} all-time / ${currentSelected.toLocaleString()} current splats for ${segment.name}`, segmentIndex);
+            this.setSequenceEditSelectionData(segmentIndex, selectionData, allTimeSelectionData);
+            if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) {
+                segment.parsed = null;
+                const element = this.splatSequence?.elements?.[segmentIndex] as any;
+                if (element) element.parsed = null;
+            }
+            reportProgress(segmentBase + segmentSpan, `Cylinder ${processedSegments}/${segmentCount}`, `Finished ${segment.name}`, segmentIndex);
+        }
+        reportProgress(100, 'Cylinder Selection', `Selected ${totalSelected.toLocaleString()} splats across ${processedSegments} segments`);
+        if (this.ply4SequenceLoadMode === 'segmented') this.hideLazySegmentProgress(900);
+        return { total: totalSelected, segments: processedSegments };
     }
 
     // #WDD-gpt 2026-05-15 - 智能选择工具应用地面对齐结果，并同步多段序列与导出状态
@@ -4147,7 +4732,69 @@ export class Viewer {
 
     // #WDD-gpt 2026-04-20 - 提供给 SelectionTool：遍历序列全部段的运行时数据
     public getSplatSequenceSelectionElements() {
-        return this.splatSequence?.elements || [];
+        const elements = this.splatSequence?.elements || [];
+        // #WDD-gpt 2026-05-16 - 分段缓冲下给选择/删除工具暴露已卸载段的轻量编辑状态
+        for (let i = 0; i < elements.length; i++) {
+            const saved = this.sequenceEditStates.get(i);
+            const segment = this.sog4SequenceSegments[i] as any;
+            const element = elements[i] as any;
+            element.pointCount = segment?.parsed?.count || segment?.header?.count || Math.floor((saved?.selectionData?.length || 0) / 4) || element.pointCount || 0;
+            if (saved) {
+                element.runtime = element.runtime || {};
+                element.runtime.selectionData = element.runtime.selectionData || (saved.selectionData ? new Uint8Array(saved.selectionData) : new Uint8Array(0));
+                element.runtime.allTimeSelectionData = element.runtime.allTimeSelectionData || (saved.allTimeSelectionData
+                    ? new Uint8Array(saved.allTimeSelectionData)
+                    : (saved.selectionData ? new Uint8Array(saved.selectionData.length) : new Uint8Array(0)));
+                if (saved.selectionData && element.runtime.selectionData instanceof Uint8Array) {
+                    element.runtime.selectionData.set(saved.selectionData.subarray(0, Math.min(saved.selectionData.length, element.runtime.selectionData.length)));
+                }
+                if (saved.allTimeSelectionData && element.runtime.allTimeSelectionData instanceof Uint8Array) {
+                    element.runtime.allTimeSelectionData.set(saved.allTimeSelectionData.subarray(0, Math.min(saved.allTimeSelectionData.length, element.runtime.allTimeSelectionData.length)));
+                }
+            }
+        }
+        return elements;
+    }
+
+    // #WDD-gpt 2026-05-16 - 导出和批量选择读取分段缓冲保存的选择/删除状态
+    public getSequenceEditSelectionData(index: number) {
+        this.saveSog4SegmentEditState(index);
+        const saved = this.sequenceEditStates.get(index);
+        const runtime = (this.splatSequence?.elements?.[index] as any)?.runtime;
+        return saved?.selectionData || runtime?.selectionData || null;
+    }
+
+    public getSequenceEditAllTimeSelectionData(index: number) {
+        this.saveSog4SegmentEditState(index);
+        const saved = this.sequenceEditStates.get(index);
+        const runtime = (this.splatSequence?.elements?.[index] as any)?.runtime;
+        return saved?.allTimeSelectionData || runtime?.allTimeSelectionData || null;
+    }
+
+    public setSequenceEditSelectionData(index: number, selectionData: Uint8Array, allTimeSelectionData?: Uint8Array | null) {
+        const savedSelection = new Uint8Array(selectionData);
+        const savedAllTime = allTimeSelectionData ? new Uint8Array(allTimeSelectionData) : new Uint8Array(selectionData);
+        this.sequenceEditStates.set(index, {
+            selectionData: savedSelection,
+            allTimeSelectionData: savedAllTime
+        });
+        const element = (this.splatSequence?.elements?.[index] as any) || null;
+        if (element) {
+            element.runtime = element.runtime || {};
+            element.runtime.selectionData = savedSelection;
+            element.runtime.allTimeSelectionData = savedAllTime;
+            if (index === this.sog4SequenceIndex && element.runtime.selectionTexture) {
+                const lock = element.runtime.selectionTexture.lock();
+                lock.set(savedSelection);
+                element.runtime.selectionTexture.unlock();
+                this.updateSelectionUniform(element.runtime.selectionTexture);
+                if (this.selectionTool) {
+                    this.selectionTool.selectionData = savedSelection;
+                    this.selectionTool.allTimeSelectionData = savedAllTime;
+                    this.selectionTool.selectionTexture = element.runtime.selectionTexture;
+                }
+            }
+        }
     }
 
     // #WDD-kimi 2026-04-20 - 提供给 SelectionTool：捕获 undo 需要的视图上下文（段落/时间）
@@ -4170,7 +4817,7 @@ export class Viewer {
             const idx = Number.isFinite(idxRaw)
                 ? Math.max(0, Math.min(this.sog4SequenceSegments.length - 1, Math.floor(idxRaw)))
                 : this.sog4SequenceIndex;
-            this.activateSog4SequenceSegment(idx);
+            void this.activateSog4SequenceSegment(idx);
         }
 
         const total = Math.max(1, this.getTimelineTotalFrames());

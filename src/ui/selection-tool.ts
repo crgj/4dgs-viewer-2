@@ -18,6 +18,8 @@ export class SelectionTool {
     // #WDD 2026-04-11: All-time selection for invert operation
     // Stores points that are in selection area at ANY time (not just current time)
     allTimeSelectionData: Uint8Array | null = null;
+    // #WDD-gpt 2026-05-16 - 记录当前选区语义；圆柱选择写入的是 all-time 选区，反选/删除必须按全时段处理
+    private selectionScope: 'current' | 'alltime' = 'current';
 
     // Tools
     currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' = 'none';
@@ -107,6 +109,7 @@ export class SelectionTool {
     }
 
     clearSelection() {
+        if (this.isSegmentLoading()) return;
         const before = this.captureGlobalSelectionState();
         // #WDD-kimi 2026-04-20 - 取消选择改为跨所有段：清空每段的 R 通道和 all-time 选择通道
         const targets = this.getGlobalSelectionTargets();
@@ -123,8 +126,10 @@ export class SelectionTool {
                 target.allTimeSelectionData[i] = 0;
             }
             this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
+            this.commitGlobalSelectionTarget(target);
         }
         if (changed) this.pushUndoSnapshot(before);
+        if (changed) this.selectionScope = 'current';
         this.updateTexture();
     }
 
@@ -139,7 +144,10 @@ export class SelectionTool {
             const totalSplats = Math.floor(target.selectionData.length / 4);
             for (let i = 0; i < totalSplats; i++) {
                 const idx = i * 4;
-                if (target.selectionData[idx] > 0) {
+                // #WDD-gpt 2026-05-16 - 多段 PLY4 切段后选区可能只保留在 all-time 缓冲，删除时两个 R 通道都要识别
+                const selectedNow = target.selectionData[idx] > 0;
+                const selectedAllTime = !!target.allTimeSelectionData && idx < target.allTimeSelectionData.length && target.allTimeSelectionData[idx] > 0;
+                if (selectedNow || selectedAllTime) {
                     deletedIndices.push(i);
                     target.selectionData[idx + 1] = 255;
                     target.selectionData[idx] = 0;
@@ -152,11 +160,13 @@ export class SelectionTool {
             if (deletedIndices.length > 0) {
                 deletedTotal += deletedIndices.length;
                 this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
+                this.commitGlobalSelectionTarget(target);
             }
         }
 
         if (deletedTotal > 0) {
             this.pushUndoSnapshot(before);
+            this.selectionScope = 'current';
             this.updateTexture();
             console.log(`[Selection] Deleted ${deletedTotal} points across sequence. Undo stack: ${this.undoStack.length}`);
         }
@@ -173,21 +183,45 @@ export class SelectionTool {
             : [];
         if (Array.isArray(sequenceElements) && sequenceElements.length > 0) {
             const before = this.captureGlobalSelectionState();
+            const invertAllTime = this.isAllTimeTool() || this.selectionScope === 'alltime';
+            const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+                ? this.viewer.splatSequence.activeElementIndex
+                : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
             let changed = false;
             // #WDD-kimi 2026-04-20 - 反选改为全序列：对每个段的所有非删除点执行反向
             for (const element of sequenceElements) {
                 const rt = this.buildSelectionRuntimeFromElement(element);
                 const data = (rt?.selectionData as Uint8Array | null) || null;
+                let allTimeData = (rt?.allTimeSelectionData as Uint8Array | null) || null;
                 const tex = (rt?.selectionTexture as pc.Texture | null) || null;
                 if (!data) continue;
+                if (invertAllTime && (!allTimeData || allTimeData.length !== data.length)) {
+                    allTimeData = new Uint8Array(data.length);
+                    rt.allTimeSelectionData = allTimeData;
+                    element.runtime = element.runtime || {};
+                    element.runtime.allTimeSelectionData = allTimeData;
+                }
                 const count = Math.floor(data.length / 4);
+                const elementIndex = Array.isArray(sequenceElements) ? sequenceElements.indexOf(element) : -1;
+                const currentTime = elementIndex === activeIndex ? this.getCurrentTime() : null;
                 for (let i = 0; i < count; i++) {
                     const idx = i * 4;
                     if (data[idx + 1] > 0) continue;
                     changed = true;
-                    data[idx] = data[idx] > 0 ? 0 : 255;
+                    if (invertAllTime && allTimeData) {
+                        // #WDD-gpt 2026-05-16 - 圆柱 all-time 反选必须以 all-time 通道为基准，不能用当前帧高亮通道
+                        allTimeData[idx] = allTimeData[idx] > 0 ? 0 : 255;
+                        data[idx] = currentTime !== null && this.isVisibleAtTimeForRuntime(rt, i, currentTime) ? allTimeData[idx] : 0;
+                    } else {
+                        data[idx] = data[idx] > 0 ? 0 : 255;
+                        if (allTimeData && idx < allTimeData.length) allTimeData[idx] = data[idx];
+                    }
                 }
                 this.updateTextureForRuntime(tex, data);
+                if (elementIndex >= 0) {
+                    const allTime = (allTimeData || data) as Uint8Array;
+                    this.commitSequenceEditState(elementIndex, data, allTime);
+                }
             }
             if (changed) this.pushUndoSnapshot(before);
             this.updateTexture();
@@ -196,13 +230,24 @@ export class SelectionTool {
 
         const before = this.captureGlobalSelectionState();
         const isAllTime = this.isAllTimeTool();
+        const shouldInvertAllTime = isAllTime || this.selectionScope === 'alltime';
         let changed = false;
+        if (shouldInvertAllTime && (!this.allTimeSelectionData || this.allTimeSelectionData.length !== this.selectionData.length)) {
+            this.allTimeSelectionData = new Uint8Array(this.selectionData.length);
+        }
         for (let i = 0; i < totalSplats; i++) {
             const idx = i * 4;
             if (this.selectionData[idx + 1] > 0) continue;
-            if (isAllTime || this.isVisibleAtCurrentTime(i)) {
+            if (shouldInvertAllTime && this.allTimeSelectionData) {
+                changed = true;
+                this.allTimeSelectionData[idx] = this.allTimeSelectionData[idx] > 0 ? 0 : 255;
+                this.selectionData[idx] = this.isVisibleAtCurrentTime(i) ? this.allTimeSelectionData[idx] : 0;
+            } else if (this.isVisibleAtCurrentTime(i)) {
                 changed = true;
                 this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
+                if (this.allTimeSelectionData && idx < this.allTimeSelectionData.length) {
+                    this.allTimeSelectionData[idx] = this.selectionData[idx];
+                }
             }
         }
         if (changed) this.pushUndoSnapshot(before);
@@ -222,6 +267,73 @@ export class SelectionTool {
             }
         }
         this.updateTexture();
+    }
+
+    markAllTimeSelectionScope() {
+        this.selectionScope = 'alltime';
+    }
+
+    // #WDD-gpt 2026-05-16 - all-time 选择分离当前高亮通道和全时段操作通道，避免当前帧显示大量圆柱外点
+    selectAllTimeIndices(currentIndices: number[], allTimeIndices: number[], replace = true) {
+        if (!this.selectionData) return 0;
+        if (!this.allTimeSelectionData || this.allTimeSelectionData.length !== this.selectionData.length) {
+            this.allTimeSelectionData = new Uint8Array(this.selectionData.length);
+        }
+        const before = this.captureGlobalSelectionState();
+        if (replace) {
+            for (let i = 0; i < this.selectionData.length; i += 4) this.selectionData[i] = 0;
+            for (let i = 0; i < this.allTimeSelectionData.length; i += 4) this.allTimeSelectionData[i] = 0;
+        }
+        const current = this.writeSelectionIndices(this.selectionData, currentIndices);
+        const allTime = this.writeSelectionIndices(this.allTimeSelectionData, allTimeIndices);
+        this.selectionScope = 'alltime';
+        this.pushUndoSnapshot(before);
+        this.updateTexture();
+        return allTime || current;
+    }
+
+    selectAllTimeIndicesForElement(element: any, currentIndices: number[], allTimeIndices: number[], replace = true) {
+        const rt = this.buildSelectionRuntimeFromElement(element);
+        const positions = rt?.cachedPositions as Float32Array | null | undefined;
+        if (!rt || !positions) return 0;
+        const count = Math.floor(positions.length / 3);
+        const bytes = Math.max(count * 4, rt.selectionData?.length || 0);
+        if (!rt.selectionData || rt.selectionData.length < count * 4) rt.selectionData = new Uint8Array(bytes);
+        if (!rt.allTimeSelectionData || rt.allTimeSelectionData.length < count * 4) rt.allTimeSelectionData = new Uint8Array(bytes);
+        const selectionData = rt.selectionData as Uint8Array;
+        const allTimeSelectionData = rt.allTimeSelectionData as Uint8Array;
+        if (replace) {
+            for (let i = 0; i < selectionData.length; i += 4) selectionData[i] = 0;
+            for (let i = 0; i < allTimeSelectionData.length; i += 4) allTimeSelectionData[i] = 0;
+        }
+        const current = this.writeSelectionIndices(selectionData, currentIndices, count);
+        const allTime = this.writeSelectionIndices(allTimeSelectionData, allTimeIndices, count);
+        element.runtime = element.runtime || {};
+        element.runtime.selectionData = selectionData;
+        element.runtime.allTimeSelectionData = allTimeSelectionData;
+        element.runtime.selectionTexture = rt.selectionTexture || element.runtime.selectionTexture || null;
+        if (rt.selectionTexture) this.updateTextureForRuntime(rt.selectionTexture, selectionData);
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        const elementIndex = Array.isArray(sequenceElements) ? sequenceElements.indexOf(element) : -1;
+        if (elementIndex >= 0) this.commitSequenceEditState(elementIndex, selectionData, allTimeSelectionData);
+        this.selectionScope = 'alltime';
+        return allTime || current;
+    }
+
+    private writeSelectionIndices(target: Uint8Array, indices: number[], count = Math.floor(target.length / 4)) {
+        let selected = 0;
+        for (const splatIdx of indices) {
+            if (!Number.isFinite(splatIdx)) continue;
+            const i = Math.floor(splatIdx);
+            if (i < 0 || i >= count) continue;
+            const offset = i * 4;
+            if (target[offset + 1] > 0) continue;
+            target[offset] = 255;
+            selected++;
+        }
+        return selected;
     }
 
     // #WDD-gpt 2026-05-16 - 允许智能选择算法按点索引批量写入当前选择通道
@@ -260,6 +372,7 @@ export class SelectionTool {
         }
 
         if (changed) {
+            if (allTime) this.selectionScope = 'alltime';
             this.pushUndoSnapshot(before);
             this.updateTexture();
         }
@@ -312,6 +425,9 @@ export class SelectionTool {
         element.runtime.allTimeSelectionData = allTimeSelectionData;
         element.runtime.selectionTexture = rt.selectionTexture || element.runtime.selectionTexture || null;
         if (rt.selectionTexture) this.updateTextureForRuntime(rt.selectionTexture, selectionData);
+        const elementIndex = Array.isArray(sequenceElements) ? sequenceElements.indexOf(element) : -1;
+        if (elementIndex >= 0) this.commitSequenceEditState(elementIndex, selectionData, allTimeSelectionData);
+        if (allTime) this.selectionScope = 'alltime';
 
         if (isActiveElement) {
             this.selectionData = selectionData;
@@ -368,6 +484,8 @@ export class SelectionTool {
         segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
         viewContext: any;
     } {
+        // #WDD-gpt 2026-05-16 - 当前帧选择后可能尚未写入段落保存态，捕获前先提交，避免旧的 all-time 删除状态覆盖实时选区
+        this.commitActiveSelectionState();
         const targets = this.getGlobalSelectionTargets();
         const segments = targets.map((t) => ({
             elementIndex: t.elementIndex,
@@ -433,6 +551,7 @@ export class SelectionTool {
             }
 
             this.updateTextureForRuntime(target.selectionTexture, target.selectionData);
+            this.commitGlobalSelectionTarget(target);
         }
 
         // #WDD-kimi 2026-04-20 - 恢复视图上下文（先变换/段落/时间），保证与选择状态回退顺序一致
@@ -472,6 +591,45 @@ export class SelectionTool {
     createHelpModal() { return this.helpManager.createHelpModal(); }
     toggleHelpModal() { return this.helpManager.toggleHelpModal(); }
     hideHelpModal() { return this.helpManager.hideHelpModal(); }
+
+    // All-time selection progress overlay
+    private allTimeProgressEl: HTMLElement | null = null;
+
+    private createAllTimeProgressOverlay() {
+        const el = document.createElement('div');
+        el.id = 'alltime-progress-overlay';
+        el.className = 'fixed inset-0 z-50 hidden flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm pointer-events-auto';
+        el.innerHTML = `
+            <div class="glass-blue p-5 rounded-xl flex flex-col items-center gap-3 min-w-[240px]">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amber-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" stroke-linecap="round"/>
+                    </svg>
+                    <span class="text-sm font-bold text-white">All-Time Selection</span>
+                </div>
+                <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div id="alltime-progress-bar" class="h-full bg-amber-400 rounded-full transition-all duration-200" style="width: 0%"></div>
+                </div>
+                <span id="alltime-progress-text" class="text-xs text-gray-300 font-mono">0 / 0 frames</span>
+            </div>
+        `;
+        document.body.appendChild(el);
+        this.allTimeProgressEl = el;
+    }
+
+    private showAllTimeProgress(current: number, total: number) {
+        if (!this.allTimeProgressEl) return;
+        this.allTimeProgressEl.classList.remove('hidden');
+        const bar = document.getElementById('alltime-progress-bar');
+        const text = document.getElementById('alltime-progress-text');
+        const pct = total > 0 ? (current / total) * 100 : 0;
+        if (bar) bar.style.width = `${pct}%`;
+        if (text) text.textContent = `${current} / ${total} frames`;
+    }
+
+    private hideAllTimeProgress() {
+        this.allTimeProgressEl?.classList.add('hidden');
+    }
 
     /* ORIGINAL createHelpModal MOVED to selection-tool-help.ts
     createHelpModal() {
@@ -598,11 +756,11 @@ export class SelectionTool {
         // Create Left Toolbar
         const div = document.createElement('div');
         div.id = 'selection-toolbar';
-        div.className = 'fixed left-6 z-20 flex flex-col items-start gap-2 pointer-events-none transition-all duration-500';
+        div.className = 'fixed left-6 z-20 flex flex-row items-start gap-2 pointer-events-none transition-all duration-500';
         div.innerHTML = `
             <div id="selection-toolbar-inner" class="flex flex-col gap-2 w-[160px]">
                 <!-- Current-Time Selection Tools (3 in a row) -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
+                <div id="selection-current-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush Selection">
                         ${ICON_BRUSH}
                     </button>
@@ -615,7 +773,7 @@ export class SelectionTool {
                 </div>
 
                 <!-- All-Time Selection Tools (3 in a row) -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
+                <div id="selection-alltime-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush Selection">
                         ${ICON_BRUSH_ALLTIME}
                     </button>
@@ -628,7 +786,7 @@ export class SelectionTool {
                 </div>
 
                 <!-- Operations: Invert / Clear / Undo / Redo -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
+                <div id="selection-operation-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
                     <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert Selection">
                         ${ICON_INVERT}
                     </button>
@@ -644,7 +802,7 @@ export class SelectionTool {
                 </div>
 
                 <!-- Selection Mode -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
+                <div id="selection-mode-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
                     <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode">
                         ${ICON_CENTER}
                     </button>
@@ -654,7 +812,7 @@ export class SelectionTool {
                 </div>
 
                 <!-- Delete & Help Panel -->
-                <div class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
+                <div id="selection-delete-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
                      <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete Selected">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
@@ -720,6 +878,9 @@ export class SelectionTool {
         // #WDD 2026-04-10: Create Help Modal
         this.createHelpModal();
 
+        // All-time selection progress overlay
+        this.createAllTimeProgressOverlay();
+
         this.toolbar = div;
 
         // Listeners
@@ -765,9 +926,56 @@ export class SelectionTool {
         
         // Initialize selection mode UI
         this.setSelectionMode('center');
+        this.refreshLazyModeVisibility();
+    }
+
+    // #WDD-gpt 2026-05-16 - Lazy PLY4 模式下隐藏手工区域/笔刷工具，只保留反选组和删除组
+    refreshLazyModeVisibility() {
+        const lazy = typeof (this.viewer as any).isPly4LazySequenceMode === 'function'
+            ? !!(this.viewer as any).isPly4LazySequenceMode()
+            : false;
+        for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-mode-tools']) {
+            const group = document.getElementById(id);
+            if (!group) continue;
+            group.classList.toggle('hidden', lazy);
+            // #WDD-gpt 2026-05-16 - 避免动态 Tailwind class 顺序导致 flex 组在 Lazy 模式仍显示
+            group.style.display = lazy ? 'none' : '';
+            group.setAttribute('aria-hidden', lazy ? 'true' : 'false');
+            for (const button of Array.from(group.querySelectorAll('button'))) {
+                (button as HTMLButtonElement).disabled = lazy;
+                button.classList.toggle('pointer-events-none', lazy);
+                button.classList.toggle('opacity-40', lazy);
+            }
+        }
+        if (lazy && this.currentTool !== 'none') {
+            this.setTool('none');
+        }
+        if (lazy) {
+            const settings = document.getElementById('brush-settings');
+            settings?.classList.add('hidden');
+            settings?.classList.remove('flex');
+            document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
+            if (this.polyOverlay) this.polyOverlay.style.display = 'none';
+        }
+        document.getElementById('selection-toolbar')?.classList.toggle('selection-lazy-mode', lazy);
+    }
+
+    private isLazyManualSelectionDisabled() {
+        return typeof (this.viewer as any).isPly4LazySequenceMode === 'function'
+            ? !!(this.viewer as any).isPly4LazySequenceMode()
+            : false;
+    }
+
+    private isSegmentLoading() {
+        return typeof (this.viewer as any).isPly4SegmentLoading === 'function'
+            ? !!(this.viewer as any).isPly4SegmentLoading()
+            : false;
     }
 
     setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none') {
+        if (tool !== 'none' && this.isLazyManualSelectionDisabled()) {
+            tool = 'none';
+        }
         if (this.currentTool === tool && tool !== 'none') {
             this.currentTool = 'none'; // Toggle off if clicking the same tool
         } else {
@@ -865,6 +1073,10 @@ export class SelectionTool {
             }
 
             // #WDD 2026-04-20: Number keys for six selection tools
+            if (this.isLazyManualSelectionDisabled() && ['1', '2', '3', '4', '5', '6'].includes(e.key)) {
+                this.setTool('none');
+                return;
+            }
             if (e.key === '1') {
                 if (this.currentTool === 'brush') {
                     this.setTool('none');
@@ -966,7 +1178,7 @@ export class SelectionTool {
         
         if (this.polyPoints.length > 2) {
             console.log("CALLING PERFORM POLYGON");
-            this.performPolygon(this.polyPoints);
+            void this.performPolygon(this.polyPoints);
         }
         this.polyPoints = [];
         this.updatePolyOverlay();
@@ -1038,9 +1250,9 @@ export class SelectionTool {
             if (this.isAllTimeTool()) {
                 this.brushPath.push({x: e.clientX, y: e.clientY});
                 if (this.selectionMode === 'ellipse') {
-                    this.performBrushEllipseAllTimePath(this.brushPath);
+                    void this.performBrushEllipseAllTimePath(this.brushPath);
                 } else {
-                    this.performBrushAllTimePath(this.brushPath);
+                    void this.performBrushAllTimePath(this.brushPath);
                 }
                 this.brushPath = [];
             }
@@ -1193,6 +1405,38 @@ export class SelectionTool {
         selectionTexture.unlock();
     }
 
+    // #WDD-gpt 2026-05-16 - Lazy PLY4 卸载段修改后必须立即写回 Viewer 的分段编辑状态
+    private commitSequenceEditState(elementIndex: number, selectionData: Uint8Array, allTimeSelectionData: Uint8Array) {
+        const setter = (this.viewer as any).setSequenceEditSelectionData;
+        if (typeof setter === 'function') {
+            setter.call(this.viewer, elementIndex, selectionData, allTimeSelectionData);
+        }
+    }
+
+    private commitActiveSelectionState() {
+        if (!this.selectionData) return;
+        const elements = this.viewer?.splatSequence?.elements;
+        if (!Array.isArray(elements) || elements.length === 0) return;
+        const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+            ? this.viewer.splatSequence.activeElementIndex
+            : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
+        if (activeIndex < 0 || activeIndex >= elements.length) return;
+        const allTime = this.allTimeSelectionData && this.allTimeSelectionData.length === this.selectionData.length
+            ? this.allTimeSelectionData
+            : new Uint8Array(this.selectionData.length);
+        // #WDD-gpt 2026-05-16 - 非 lazy 多段切换/删除前同步当前激活段，保证当前帧选择不会被旧保存态回滚
+        this.commitSequenceEditState(activeIndex, this.selectionData, allTime);
+    }
+
+    private commitGlobalSelectionTarget(target: {
+        elementIndex: number;
+        selectionData: Uint8Array;
+        allTimeSelectionData: Uint8Array;
+    }) {
+        if (target.elementIndex < 0) return;
+        this.commitSequenceEditState(target.elementIndex, target.selectionData, target.allTimeSelectionData);
+    }
+
     // #WDD-kimi 2026-04-20 - 当 runtime 尚未构建时，用 parsed 数据构造可用于 all-time 比对的运行时视图
     private buildSelectionRuntimeFromElement(element: any): any {
         const runtime = element?.runtime || {};
@@ -1274,11 +1518,27 @@ export class SelectionTool {
                 allTimeSelectionData: Uint8Array;
                 selectionTexture: pc.Texture | null;
             }> = [];
+            const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+                ? this.viewer.splatSequence.activeElementIndex
+                : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : 0);
             for (let idx = 0; idx < sequenceElements.length; idx++) {
                 const element = sequenceElements[idx];
                 const rt = this.buildSelectionRuntimeFromElement(element);
-                if (!rt?.cachedPositions) continue;
-                const count = Math.floor((rt.cachedPositions as Float32Array).length / 3);
+                // #WDD-gpt 2026-05-16 - 当前帧手工选择写入的是 SelectionTool 当前缓冲，删除目标必须优先同步激活段引用
+                if (idx === activeIndex && this.selectionData) {
+                    element.runtime = element.runtime || {};
+                    rt.selectionData = this.selectionData;
+                    rt.allTimeSelectionData = this.allTimeSelectionData || rt.allTimeSelectionData || new Uint8Array(this.selectionData.length);
+                    rt.selectionTexture = this.selectionTexture || rt.selectionTexture || null;
+                    element.runtime.selectionData = rt.selectionData;
+                    element.runtime.allTimeSelectionData = rt.allTimeSelectionData;
+                    element.runtime.selectionTexture = rt.selectionTexture;
+                }
+                const count = rt?.cachedPositions
+                    ? Math.floor((rt.cachedPositions as Float32Array).length / 3)
+                    : Math.max(0, Math.floor(Number(element?.pointCount) || Math.floor(((rt?.selectionData as Uint8Array | null)?.length || 0) / 4)));
+                // #WDD-gpt 2026-05-16 - 分段缓冲模式中卸载段没有 cachedPositions，但仍要参与删除通道写入
+                if (!rt || count <= 0) continue;
                 if (!rt.selectionData || rt.selectionData.length < count * 4) {
                     rt.selectionData = new Uint8Array(count * 4);
                 }
@@ -1397,7 +1657,7 @@ export class SelectionTool {
         }
 
         if (this.isAllTimeTool()) {
-            this.performRectAllTime(x1, y1, x2, y2);
+            void this.performRectAllTime(x1, y1, x2, y2);
             return;
         }
         
@@ -1579,7 +1839,7 @@ export class SelectionTool {
     // Simple ellipse-rect intersection
     performRectEllipse(x1: number, y1: number, x2: number, y2: number) {
         if (this.isAllTimeTool()) {
-            this.performRectEllipseAllTime(x1, y1, x2, y2);
+            void this.performRectEllipseAllTime(x1, y1, x2, y2);
             return;
         }
         const positions = this.getCachedPositions();
@@ -1654,14 +1914,28 @@ export class SelectionTool {
 
     // ===== ALL-TIME SELECTION METHODS =====
 
+    // Yield control to the browser so UI can update (progress bar, etc.)
+    private static yieldFrame(): Promise<void> {
+        return new Promise(resolve => requestAnimationFrame(() => resolve()));
+    }
+
     // Generic all-time selection: check all frames for points that are visible and in selection area
-    private selectAllTimePoints(checkScreen: (screenX: number, screenY: number, screenZ: number, splatIdx: number) => boolean): boolean {
+    // Now async to allow progress UI updates during the long-running operation
+    private async selectAllTimePoints(checkScreen: (screenX: number, screenY: number, screenZ: number, splatIdx: number) => boolean): Promise<boolean> {
         const camera = this.viewer.camera?.camera;
         if (!camera) return false;
+        const before = this.captureGlobalSelectionState();
+        this.selectionScope = 'alltime';
 
-        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+        let sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
             ? this.viewer.getSplatSequenceSelectionElements()
             : [];
+        if (Array.isArray(sequenceElements) && sequenceElements.length > 0) {
+            await this.ensureAllTimeSequenceElementsReady(sequenceElements);
+            sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+                ? this.viewer.getSplatSequenceSelectionElements()
+                : sequenceElements;
+        }
         const hasSequence = Array.isArray(sequenceElements) && sequenceElements.length > 0;
         const targets = hasSequence ? sequenceElements : [{
             entity: this.viewer.splatEntity,
@@ -1682,9 +1956,19 @@ export class SelectionTool {
         }];
 
         let anyChanged = false;
+        const changedCounts: Array<{ name: string; allTime: number; display: number }> = [];
         const localPos = new pc.Vec3();
         const worldPos = new pc.Vec3();
         const screen = new pc.Vec3();
+
+        // Calculate total frames for progress
+        let totalProgressFrames = 0;
+        for (const target of targets) {
+            const rt = hasSequence ? this.buildSelectionRuntimeFromElement(target) : target?.runtime;
+            totalProgressFrames += Math.max(1, Math.ceil(rt?.totalFrames ?? 1));
+        }
+        let processedFrames = 0;
+        this.showAllTimeProgress(0, totalProgressFrames);
 
         for (const target of targets) {
             const rt = hasSequence ? this.buildSelectionRuntimeFromElement(target) : target?.runtime;
@@ -1708,16 +1992,27 @@ export class SelectionTool {
 
             const numSplats = Math.floor(basePositions.length / 3);
             const found = new Uint8Array(numSplats);
+            // #WDD-gpt 2026-05-16 - PLY4 序列 all-time 选择覆盖所有段全部时刻，但当前高亮只显示当前激活段当前帧
+            const currentFound = new Uint8Array(numSplats);
             const tempPos = new Float32Array(numSplats * 3);
             const modelMat = entity.getWorldTransform();
             const totalFrames = Math.max(1, Math.ceil(rt?.totalFrames ?? 1));
+            const targetIndex = hasSequence && Array.isArray(sequenceElements) ? sequenceElements.indexOf(target) : -1;
+            const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+                ? this.viewer.splatSequence.activeElementIndex
+                : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
+            // #WDD-gpt 2026-05-16 - 多 PLY4 all-time 手工选择要给每段保存本地显示帧，避免只有当前段有 R 通道
+            const currentLocalFrame = !hasSequence || targetIndex === activeIndex
+                ? Math.max(0, Math.min(totalFrames - 1, Math.floor(this.getCurrentTime())))
+                : 0;
 
             for (let t = 0; t < totalFrames; t++) {
                 const framePositions = this.getPositionsAtTimeForRuntime(rt, t, tempPos);
                 if (!framePositions) continue;
+                const isCurrentFrame = currentLocalFrame !== null && t === currentLocalFrame;
 
                 for (let i = 0; i < numSplats; i++) {
-                    if (found[i]) continue;
+                    if (found[i] && !isCurrentFrame) continue;
 
                     const idx4 = i * 4;
                     if (selectionData[idx4 + 1] > 0) continue;
@@ -1729,41 +2024,73 @@ export class SelectionTool {
 
                     if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i)) {
                         found[i] = 1;
+                        if (isCurrentFrame) currentFound[i] = 1;
                     }
+                }
+
+                processedFrames++;
+                // Yield to browser every 3 frames so progress UI can update
+                if (processedFrames % 3 === 0) {
+                    this.showAllTimeProgress(processedFrames, totalProgressFrames);
+                    await SelectionTool.yieldFrame();
                 }
             }
 
             let changed = false;
+            let allTimeCount = 0;
+            let displayCount = 0;
             for (let i = 0; i < numSplats; i++) {
-                if (!found[i]) continue;
                 const idx4 = i * 4;
-                if (this.isSubtracting) {
+                if (this.isSubtracting && found[i]) {
+                    if (allTimeSelectionData[idx4] !== 0) changed = true;
                     allTimeSelectionData[idx4] = 0;
-                    if (selectionData[idx4] > 0) {
-                        selectionData[idx4] = 0;
-                        changed = true;
-                    }
                 } else {
+                    if (!found[i]) continue;
+                    if (allTimeSelectionData[idx4] !== 255) changed = true;
                     allTimeSelectionData[idx4] = 255;
-                    if (selectionData[idx4] === 0) {
-                        selectionData[idx4] = 255;
-                        changed = true;
-                    }
                 }
+                const nextCurrent = currentFound[i] && allTimeSelectionData[idx4] > 0 ? 255 : 0;
+                if (selectionData[idx4] !== nextCurrent) changed = true;
+                selectionData[idx4] = nextCurrent;
+                if (allTimeSelectionData[idx4] > 0) allTimeCount++;
+                if (selectionData[idx4] > 0) displayCount++;
             }
 
             if (changed) {
                 anyChanged = true;
+                changedCounts.push({ name: target?.name || `segment ${targetIndex}`, allTime: allTimeCount, display: displayCount });
                 this.updateTextureForRuntime(selectionTexture, selectionData);
+                if (hasSequence && targetIndex >= 0) {
+                    this.commitSequenceEditState(targetIndex, selectionData, allTimeSelectionData);
+                }
             }
         }
 
+        this.hideAllTimeProgress();
+        if (anyChanged) {
+            this.selectionScope = 'alltime';
+            this.pushUndoSnapshot(before);
+            console.log('[Selection] All-time manual selection updated', changedCounts);
+        }
         return anyChanged;
     }
 
-    performBrushAllTime(cx: number, cy: number) {
+    // #WDD-gpt 2026-05-16 - PLY4 序列 all-time 选择必须覆盖所有 PLY4 段；未加载段先后台准备，避免只选当前段
+    private async ensureAllTimeSequenceElementsReady(sequenceElements: any[]) {
+        const prepare = (this.viewer as any).prepareSog4SequenceSegment;
+        if (typeof prepare !== 'function') return;
+        for (let i = 0; i < sequenceElements.length; i++) {
+            const element = sequenceElements[i];
+            if (!element || element.type !== 'ply4') continue;
+            const rt = element.runtime || {};
+            if (element.entity && (rt.cachedPositions || element.parsed)) continue;
+            await prepare.call(this.viewer, i);
+        }
+    }
+
+    async performBrushAllTime(cx: number, cy: number) {
         const rSq = this.brushRadius * this.brushRadius;
-        const changed = this.selectAllTimePoints((sx, sy) => {
+        const changed = await this.selectAllTimePoints((sx, sy) => {
             const dx = sx - cx;
             const dy = sy - cy;
             return dx * dx + dy * dy < rSq;
@@ -1771,21 +2098,21 @@ export class SelectionTool {
         if (changed) this.updateTexture();
     }
 
-    performRectAllTime(x1: number, y1: number, x2: number, y2: number) {
+    async performRectAllTime(x1: number, y1: number, x2: number, y2: number) {
         const minX = Math.min(x1, x2);
         const maxX = Math.max(x1, x2);
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
-        const changed = this.selectAllTimePoints((sx, sy) => {
+        const changed = await this.selectAllTimePoints((sx, sy) => {
             return sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
         });
         if (changed) this.updateTexture();
     }
 
-    performBrushEllipseAllTime(cx: number, cy: number) {
+    async performBrushEllipseAllTime(cx: number, cy: number) {
         const r = this.brushRadius;
         const rSq = r * r;
-        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
             const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
             const totalRadius = r + pixelSize;
             const totalRSq = totalRadius * totalRadius;
@@ -1796,12 +2123,12 @@ export class SelectionTool {
         if (changed) this.updateTexture();
     }
 
-    performRectEllipseAllTime(x1: number, y1: number, x2: number, y2: number) {
+    async performRectEllipseAllTime(x1: number, y1: number, x2: number, y2: number) {
         const minX = Math.min(x1, x2);
         const maxX = Math.max(x1, x2);
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
-        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
             const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
             return sx >= minX - pixelSize && sx <= maxX + pixelSize &&
                    sy >= minY - pixelSize && sy <= maxY + pixelSize;
@@ -1810,7 +2137,7 @@ export class SelectionTool {
     }
 
     // Deferred all-time brush path selection (performance optimization)
-    performBrushAllTimePath(path: Array<{x: number, y: number}>) {
+    async performBrushAllTimePath(path: Array<{x: number, y: number}>) {
         if (path.length === 0) return;
 
         // Simplify path: remove points that are too close to each other
@@ -1832,7 +2159,7 @@ export class SelectionTool {
         const rSq = this.brushRadius * this.brushRadius;
         const circles = simplified.map(p => ({x: p.x, y: p.y, rSq}));
 
-        const changed = this.selectAllTimePoints((sx, sy) => {
+        const changed = await this.selectAllTimePoints((sx, sy) => {
             for (const c of circles) {
                 const dx = sx - c.x;
                 const dy = sy - c.y;
@@ -1844,7 +2171,7 @@ export class SelectionTool {
         if (changed) this.updateTexture();
     }
 
-    performBrushEllipseAllTimePath(path: Array<{x: number, y: number}>) {
+    async performBrushEllipseAllTimePath(path: Array<{x: number, y: number}>) {
         if (path.length === 0) return;
 
         // Simplify path: remove points that are too close to each other
@@ -1866,7 +2193,7 @@ export class SelectionTool {
         const r = this.brushRadius;
         const circles = simplified.map(p => ({x: p.x, y: p.y}));
 
-        const changed = this.selectAllTimePoints((sx, sy, sz) => {
+        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
             const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
             for (const c of circles) {
                 const totalRadius = r + pixelSize;
@@ -1900,7 +2227,7 @@ export class SelectionTool {
         this.polyCursorLine.setAttribute('y1', last.y.toString());
     }
 
-    performPolygon(pts: Array<{x: number, y: number}>) {
+    async performPolygon(pts: Array<{x: number, y: number}>) {
         if (pts.length < 3) return;
         
         const isAllTime = this.isAllTimeTool();
@@ -1931,7 +2258,7 @@ export class SelectionTool {
 
         // #WDD 2026-04-20: For all-time tool, use selectAllTimePoints helper which iterates through all frames
         if (isAllTime) {
-            const changed = this.selectAllTimePoints((sx, sy, sz) => checkInPoly(sx, sy, sz));
+            const changed = await this.selectAllTimePoints((sx, sy, sz) => checkInPoly(sx, sy, sz));
             if (changed) this.updateTexture();
             return;
         }

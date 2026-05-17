@@ -252,6 +252,19 @@ body.theme-light {
     color: var(--text-primary);
 }
 
+/* #WDD-gpt 2026-05-16 - playbar 多段 PLY4 当前片段信息 */
+.sequence-segment-info {
+    max-width: 280px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    background: rgba(34, 211, 238, 0.1);
+    color: rgb(165, 243, 252);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
 body.theme-light .fps-item:not(.active):hover {
     background: rgba(0, 0, 0, 0.05);
 }
@@ -633,6 +646,93 @@ body.theme-light .fps-item:not(.active):hover {
     word-break: break-word;
 }
 
+/* #WDD-gpt 2026-05-16 - PLY4 Lazy 模式提示改为应用内同风格弹窗 */
+.ply4-lazy-mode-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(10px);
+}
+
+.ply4-lazy-mode-card {
+    width: 380px;
+    max-width: calc(100vw - 48px);
+    border-radius: 8px;
+    padding: 18px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 18px 50px var(--glass-shadow);
+    color: var(--text-primary);
+}
+
+.ply4-lazy-mode-kicker {
+    color: var(--text-highlight);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+
+.ply4-lazy-mode-title {
+    margin-top: 6px;
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: 0.01em;
+}
+
+.ply4-lazy-mode-body {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.55;
+}
+
+.ply4-lazy-mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+}
+
+.ply4-lazy-mode-row strong {
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 10px;
+}
+
+.ply4-lazy-mode-body ul {
+    margin: 0;
+    padding-left: 16px;
+}
+
+.ply4-lazy-mode-actions {
+    margin-top: 16px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.ply4-lazy-mode-button {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: 6px;
+    color: var(--text-highlight);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
 .panel-stat-monitor {
     padding: 4px 6px;
     min-height: 28px;
@@ -654,6 +754,68 @@ body.theme-light .fps-item:not(.active):hover {
     inset: 0;
     pointer-events: none;
     z-index: 10;
+}
+
+/* #WDD-gpt 2026-05-16 - timeline 多段 PLY4 片段竖线分割和段号 */
+.timeline-segment-markers {
+    position: absolute;
+    inset: -10px 0 -2px 0;
+    z-index: 12;
+    pointer-events: none;
+}
+
+.timeline-segment-markers.hidden {
+    display: none;
+}
+
+.timeline-segment-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    pointer-events: auto;
+}
+
+.timeline-segment-line {
+    width: 1px;
+    height: 24px;
+    border-radius: 999px;
+    background: rgba(34, 211, 238, 0.58);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.25);
+}
+
+.timeline-segment-number {
+    min-width: 14px;
+    height: 14px;
+    margin-top: 1px;
+    padding: 0 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid rgba(34, 211, 238, 0.35);
+    background: rgba(4, 18, 28, 0.82);
+    color: rgb(165, 243, 252);
+    font-size: 8px;
+    line-height: 1;
+    font-weight: 800;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.timeline-segment-marker.active .timeline-segment-line {
+    width: 2px;
+    background: rgb(16, 185, 129);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.65);
+}
+
+.timeline-segment-marker.active .timeline-segment-number {
+    border-color: rgba(16, 185, 129, 0.65);
+    background: rgba(16, 185, 129, 0.2);
+    color: rgb(209, 250, 229);
 }
 
 .timeline-loop-range {
@@ -981,4 +1143,73 @@ select.ui-input option {
 .custom-scroll::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
+}
+
+/* #WDD-gpt 2026-05-16 - Lazy PLY4 分段读取时在右下角显示当前片段进度 */
+.lazy-segment-progress {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 80;
+    width: min(320px, calc(100vw - 48px));
+    padding: 10px 12px;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    border-radius: 8px;
+    background: rgba(4, 18, 28, 0.86);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(14px);
+    pointer-events: none;
+}
+
+.lazy-segment-progress.hidden {
+    display: none;
+}
+
+.lazy-segment-progress-title {
+    color: rgb(165, 243, 252);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+}
+
+.lazy-segment-progress-track {
+    width: 100%;
+    height: 5px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.22);
+}
+
+.lazy-segment-progress-bar {
+    width: 0%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgb(34, 211, 238), rgb(16, 185, 129));
+    transition: width 120ms linear;
+}
+
+.lazy-segment-progress-detail {
+    color: rgba(226, 232, 240, 0.76);
+    font-size: 9px;
+    line-height: 1.35;
+    margin-top: 7px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* #WDD-gpt 2026-05-16 - Lazy PLY4 分段读取时覆盖全屏的透明遮罩，阻止 UI 交互 */
+.lazy-blocker {
+    position: fixed;
+    inset: 0;
+    z-index: 75;
+    background: transparent;
+    pointer-events: auto;
+    cursor: wait;
+}
+
+.lazy-blocker.hidden {
+    display: none;
 }

@@ -4,6 +4,7 @@ import { PlyExporter } from '../utils/ply-exporter';
 import { TrueSplatsLoader } from '../utils/truesplats-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../utils/sog4-encoder';
 import { PLY4Encoder } from '../utils/ply4-encoder';
+import { PLY4Loader } from '../utils/ply4-loader';
 import {
     chooseExportModelTransform,
     cloneModelTransform,
@@ -674,6 +675,7 @@ export class ViewerExportManager {
                 textObjects: c.textObjects
             }));
             const zip = new JSZip();
+            const ply4Loader = new PLY4Loader();
 
             for (let i = 0; i < segments.length; i++) {
                 const segment = segments[i];
@@ -682,14 +684,19 @@ export class ViewerExportManager {
                 const sequenceElements = typeof v.getSplatSequenceSelectionElements === 'function'
                     ? v.getSplatSequenceSelectionElements()
                     : [];
-                const selectionData = sequenceElements[i]?.runtime?.selectionData || null;
+                const selectionData = (typeof v.getSequenceEditSelectionData === 'function'
+                    ? v.getSequenceEditSelectionData(i)
+                    : sequenceElements[i]?.runtime?.selectionData) || null;
 
                 setExportProgress(
                     (i / segments.length) * 90,
                     `Encoding ${outputName} (${i + 1}/${segments.length})`
                 );
 
-                const buffer = await PLY4Encoder.encode(segment.parsed, {
+                // #WDD-gpt 2026-05-16 - 分段缓冲导出时按段临时解码，避免一次性恢复全部 PLY4
+                const parsed = segment.parsed || (segment.file ? await ply4Loader.load(segment.file, () => { }) : null);
+                if (!parsed) throw new Error(`Segment ${segmentName} is not available for export.`);
+                const buffer = await PLY4Encoder.encode(parsed, {
                     selectionData,
                     // #WDD-gpt 2026-04-20 - 序列导出时将当前场景统一的变换和相机预设写入每一个 PLY4
                     model_transform: transform,
@@ -700,6 +707,9 @@ export class ViewerExportManager {
                 });
 
                 zip.file(outputName, new Uint8Array(buffer));
+                if (!segment.parsed) {
+                    segment.parsed = null;
+                }
             }
 
             setExportProgress(92, 'Packaging ZIP...');

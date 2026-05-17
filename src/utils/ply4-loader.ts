@@ -30,6 +30,22 @@ export class PLY4Loader {
         return this.parsePLYBuffer(file, progressCallback);
     }
 
+    // #WDD-gpt 2026-05-16 - 大序列分段缓冲模式只读取 header，用于建立时间轴而不解码整段
+    async inspectFile(file: File) {
+        const headerChunk = await file.slice(0, PLY4Loader.HEADER_PROBE_BYTES).arrayBuffer();
+        const { headerEnd, headerText } = this.extractHeaderFromBuffer(headerChunk);
+        const parsedHeader = this.parseHeaderText(headerText);
+        const keyframeMax = parsedHeader.K_xyz > 1 ? (parsedHeader.K_xyz - 1) * parsedHeader.xyzStride + 1 : 1;
+        const rotKeyframeMax = parsedHeader.K_rot > 1 ? (parsedHeader.K_rot - 1) * parsedHeader.rotStride + 1 : 1;
+        const duration = Math.max(parsedHeader.totalFrames || 1, keyframeMax, rotKeyframeMax);
+        return {
+            ...parsedHeader,
+            headerEnd,
+            duration,
+            count: parsedHeader.vertexCount
+        };
+    }
+
     private emitProgress(
         onProgress: ((p: number, msg: string, meta?: PLY4LoadProgressMeta) => void) | undefined,
         progress: number,

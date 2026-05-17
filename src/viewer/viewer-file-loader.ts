@@ -463,10 +463,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                     }
                 }
 
-                // #WDD 2026-01-22: Auto-Play and Switch to Play Mode
-                console.log("[Viewer] Auto-starting playback and switching to Play Mode");
-                v.toggleUIVisibility(true); // Switch to Simplified UI
-                if (!v.isPlaying) v.togglePlay(); // Start Animation
+                // #WDD 2026-05-16: Do not auto-play or hide UI on load
                 v.refreshExportButtons?.();
 
                 return;

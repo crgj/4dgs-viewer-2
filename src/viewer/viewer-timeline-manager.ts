@@ -100,6 +100,80 @@ export class ViewerTimelineManager {
         if (timeLabel) {
             timeLabel.innerText = `${Math.floor(displayFrame)} / ${Math.max(0, total)}`;
         }
+        this.updateSequenceSegmentInfo(displayFrame);
+        this.updateSequenceSegmentMarkerActive(displayFrame);
+    }
+
+    // #WDD-gpt 2026-05-16 - 多段 PLY4 播放时在 playbar 上显示当前片段编号/段内帧/加载模式
+    private updateSequenceSegmentInfo(displayFrame: number) {
+        const v = this.viewer as any;
+        const el = document.getElementById('sequence-segment-info');
+        if (!el) return;
+
+        const segments = Array.isArray(v.sog4SequenceSegments) ? v.sog4SequenceSegments : [];
+        const offsets = Array.isArray(v.sog4SequenceOffsets) ? v.sog4SequenceOffsets : [];
+        const isMultiPly4 = !!v.isSog4SequenceMode
+            && segments.length > 1
+            && segments.some((segment: any) => String(segment?.name || '').toLowerCase().endsWith('.ply4'));
+
+        if (!isMultiPly4) {
+            el.classList.add('hidden');
+            el.textContent = 'SEG --';
+            el.title = '';
+            return;
+        }
+
+        const frame = Math.max(0, Math.floor(displayFrame));
+        let index = Math.max(0, Math.min(segments.length - 1, Number(v.sog4SequenceIndex) || 0));
+        for (let i = 0; i < segments.length; i++) {
+            const start = offsets[i] || 0;
+            const end = i + 1 < offsets.length ? offsets[i + 1] : (v.sog4SequenceTotalFrames || start + (segments[i]?.duration || 1));
+            if (frame >= start && frame < end) {
+                index = i;
+                break;
+            }
+        }
+
+        const segment = segments[index] || {};
+        const start = offsets[index] || 0;
+        const duration = Math.max(1, Math.floor(segment.duration || 1));
+        const localFrame = Math.max(0, Math.min(duration - 1, frame - start));
+        const name = String(segment.name || `segment_${index + 1}.ply4`);
+        const shortName = name.length > 26 ? `${name.slice(0, 11)}...${name.slice(-12)}` : name;
+        const mode = v.ply4SequenceLoadMode === 'segmented' ? 'LAZY' : 'FULL';
+        const loaded = segment.asset && segment.entity ? 'READY' : 'UNLOADED';
+
+        el.classList.remove('hidden');
+        el.textContent = `SEG ${index + 1}/${segments.length} · ${shortName} · ${localFrame}/${duration - 1} · ${mode}`;
+        el.title = `${name}\nSegment ${index + 1}/${segments.length}\nGlobal frames ${start}-${start + duration - 1}\nLocal frame ${localFrame}/${duration - 1}\nMode: ${mode}\nCache: ${loaded}`;
+    }
+
+    private getSequenceSegmentIndexForFrame(displayFrame: number) {
+        const v = this.viewer as any;
+        const segments = Array.isArray(v.sog4SequenceSegments) ? v.sog4SequenceSegments : [];
+        const offsets = Array.isArray(v.sog4SequenceOffsets) ? v.sog4SequenceOffsets : [];
+        const frame = Math.max(0, Math.floor(displayFrame));
+        let index = Math.max(0, Math.min(segments.length - 1, Number(v.sog4SequenceIndex) || 0));
+        for (let i = 0; i < segments.length; i++) {
+            const start = offsets[i] || 0;
+            const end = i + 1 < offsets.length ? offsets[i + 1] : (v.sog4SequenceTotalFrames || start + (segments[i]?.duration || 1));
+            if (frame >= start && frame < end) {
+                index = i;
+                break;
+            }
+        }
+        return index;
+    }
+
+    // #WDD-gpt 2026-05-16 - 播放时高亮 timeline 上当前 PLY4 片段分割标记
+    private updateSequenceSegmentMarkerActive(displayFrame: number) {
+        const layer = document.getElementById('timeline-segment-markers');
+        if (!layer || layer.classList.contains('hidden')) return;
+        const activeIndex = this.getSequenceSegmentIndexForFrame(displayFrame);
+        for (const marker of Array.from(layer.querySelectorAll('.timeline-segment-marker'))) {
+            const idx = Number((marker as HTMLElement).dataset.segmentIndex);
+            marker.classList.toggle('active', idx === activeIndex);
+        }
     }
 
     renderTimelineDecorations() {
@@ -130,6 +204,46 @@ export class ViewerTimelineManager {
                 : 'Full Range';
             loopToggle?.classList.remove('active');
         }
+        this.renderSequenceSegmentMarkers(maxFrame);
+        this.updateSequenceSegmentMarkerActive(Math.floor(v.currentTime || 0));
+    }
+
+    // #WDD-gpt 2026-05-16 - 在 timeline 上用竖线和数字标出每个 PLY4 片段边界
+    private renderSequenceSegmentMarkers(maxFrame: number) {
+        const v = this.viewer as any;
+        const layer = document.getElementById('timeline-segment-markers');
+        if (!layer) return;
+        const segments = Array.isArray(v.sog4SequenceSegments) ? v.sog4SequenceSegments : [];
+        const offsets = Array.isArray(v.sog4SequenceOffsets) ? v.sog4SequenceOffsets : [];
+        const isMultiPly4 = !!v.isSog4SequenceMode
+            && segments.length > 1
+            && segments.some((segment: any) => String(segment?.name || '').toLowerCase().endsWith('.ply4'));
+        if (!isMultiPly4 || maxFrame <= 0) {
+            layer.classList.add('hidden');
+            layer.innerHTML = '';
+            return;
+        }
+
+        layer.classList.remove('hidden');
+        layer.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        for (let i = 0; i < segments.length; i++) {
+            const start = offsets[i] || 0;
+            const duration = Math.max(1, Math.floor(segments[i]?.duration || 1));
+            const left = Math.max(0, Math.min(100, (start / maxFrame) * 100));
+            const marker = document.createElement('div');
+            marker.className = 'timeline-segment-marker';
+            marker.dataset.segmentIndex = String(i);
+            marker.style.left = `${left}%`;
+            const name = String(segments[i]?.name || `segment_${i + 1}.ply4`);
+            marker.title = `${name}\nSegment ${i + 1}/${segments.length}\nGlobal frames ${start}-${start + duration - 1}`;
+            marker.innerHTML = `
+                <div class="timeline-segment-line"></div>
+                <div class="timeline-segment-number">${i + 1}</div>
+            `;
+            fragment.appendChild(marker);
+        }
+        layer.appendChild(fragment);
     }
 
     seekToFrame(frame: number, options: { pause?: boolean } = {}) {

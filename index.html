@@ -35,7 +35,11 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.17</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.18</span>
+                <!-- #WDD-gpt 2026-05-16 - 显示 PLY4 序列当前读取模式，避免用户不清楚是否进入 lazy 分段缓冲 -->
+                <span id="sequence-load-mode-badge"
+                    class="hidden text-[8px] font-extrabold tracking-tight uppercase px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-400/20"
+                    title="Current sequence loading mode">PLY4 FULL</span>
                 <div class="h-3 w-px ui-border mx-1"></div>
 
                 <div class="relative">
@@ -491,6 +495,9 @@
             <div class="ui-playbar flex items-center p-0.5 rounded-lg pointer-events-auto overflow-hidden">
                 <div class="flex items-center px-2 py-1 gap-2 border-r ui-border">
                     <span id="time-label" class="font-mono text-[9px] ui-text-primary tabular-nums">0 / 0</span>
+                    <!-- #WDD-gpt 2026-05-16 - 多段 PLY4 播放时在 playbar 显示当前片段信息 -->
+                    <span id="sequence-segment-info"
+                        class="sequence-segment-info hidden font-mono text-[8px] tabular-nums">SEG --</span>
                 </div>
                 <div class="flex items-center px-1">
                     <div class="flex gap-1 p-0.5">
@@ -547,6 +554,8 @@
                         All</div>
                 </div>
                 <div class="timeline-track-shell">
+                    <!-- #WDD-gpt 2026-05-16 - 多段 PLY4 在 timeline 上显示片段分割线和段号 -->
+                    <div id="timeline-segment-markers" class="timeline-segment-markers hidden"></div>
                     <div id="timeline-loop-range" class="timeline-loop-range hidden"></div>
                     <input type="range" id="time-slider" min="0" max="1" step="1" value="0"
                         class="relative z-20 w-full h-1 accent-emerald-500 cursor-pointer appearance-none rounded-full bg-transparent" />

@@ -8,6 +8,7 @@ type ViewerAnalysisSource = {
     positions: Float32Array | null;
     trajectoryData: Float32Array | null;
     keyframes: number;
+    xyzStride?: number;
     originalIndices: Float32Array | null;
     lifetimeMu: Float32Array | null;
     lifetimeW: Float32Array | null;
@@ -34,6 +35,7 @@ export class SmartSelectionTool {
     private progressBar: HTMLElement | null = null;
     private progressStage: HTMLElement | null = null;
     private progressDetail: HTMLElement | null = null;
+    private progressTitle: HTMLElement | null = null;
     private progressRequestId = 0;
     private cylinderRegion: CylinderSelectionRegion | null = null;
     private cylinderVisible = false;
@@ -57,7 +59,7 @@ export class SmartSelectionTool {
         this.cylinderToggleEl = document.getElementById('smart-cylinder-toggle');
         document.getElementById('smart-align-run')?.addEventListener('click', () => this.runAlignment());
         this.cylinderToggleEl?.addEventListener('click', () => this.setCylinderVisible(!this.cylinderVisible, true));
-        document.getElementById('smart-cylinder-select')?.addEventListener('click', () => this.applyCylinderSelectionFromUI());
+        document.getElementById('smart-cylinder-select')?.addEventListener('click', () => void this.applyCylinderSelectionFromUI());
         for (const id of ['smart-cylinder-radius', 'smart-cylinder-height', 'smart-cylinder-x', 'smart-cylinder-z', 'smart-cylinder-ground']) {
             document.getElementById(id)?.addEventListener('input', () => this.updateCylinderFromInputs());
         }
@@ -95,10 +97,10 @@ export class SmartSelectionTool {
     }
 
     private async runAlignment() {
-        this.showProgress(0, 'PREPARING', 'Sampling 4DGS points');
+        this.showProgress(0, 'PREPARING', 'Sampling 4DGS points', 'Smart Align');
         try {
+            const alignmentSource = await this.getAlignmentSource();
             const sources = this.getAnalysisSources();
-            const alignmentSource = sources[0];
             if (!alignmentSource) {
                 throw new Error('No points available for auto ground alignment.');
             }
@@ -107,25 +109,36 @@ export class SmartSelectionTool {
                 throw new Error('No points available for auto ground alignment.');
             }
             const batchText = sources.length > 1 ? ` from first PLY4, batch ${sources.length} segments` : '';
-            this.showProgress(18, 'WORKER', `Starting worker with ${points.length} sampled points${batchText}`);
+            this.showProgress(18, 'WORKER', `Starting worker with ${points.length} sampled points${batchText}`, 'Smart Align');
             const result = await this.runAlgorithmInWorker(points);
             this.lastResult = result;
             this.renderResult(result, result.success ? 'ALIGNED' : 'FAILED');
             if (result.success && result.transform) {
-                this.showProgress(94, 'CYLINDER', 'Applying scene transform and creating adjustable cylinder only');
+                this.showProgress(94, 'CYLINDER', 'Applying scene transform and creating adjustable cylinder only', 'Smart Align');
                 this.viewer.applyAutoGroundAlignmentTransform(result.transform.rotationMatrix, result.transform.translation);
-                this.createCylinderRegionFromResult(sources[0], result);
+                this.createCylinderRegionFromResult(alignmentSource, result);
             }
-            this.showProgress(100, result.success ? 'CYLINDER READY' : 'FAILED', result.errors[0] || result.warnings[0] || 'Adjust cylinder, then apply selection');
+            this.showProgress(100, result.success ? 'CYLINDER READY' : 'FAILED', result.errors[0] || result.warnings[0] || 'Adjust cylinder, then apply selection', 'Smart Align');
             window.setTimeout(() => this.hideProgress(), result.success ? 700 : 1800);
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             const result: AutoGroundAlignmentResult = { success: false, confidence: 0, warnings: [], errors: [message] };
             this.lastResult = result;
             this.renderResult(result, 'FAILED');
-            this.showProgress(100, 'FAILED', message);
+            this.showProgress(100, 'FAILED', message, 'Smart Align');
             window.setTimeout(() => this.hideProgress(), 2200);
         }
+    }
+
+    // #WDD-gpt 2026-05-16 - PLY4 序列自动对齐固定使用第一个 PLY4，避免当前 Lazy 段影响对齐结果
+    private async getAlignmentSource(): Promise<ViewerAnalysisSource | null> {
+        const getter = (this.viewer as any).getSmartSelectionFirstPly4AnalysisSource;
+        if (typeof getter === 'function') {
+            const source = await getter.call(this.viewer);
+            if (source?.positions) return source as ViewerAnalysisSource;
+        }
+        const sources = this.getAnalysisSources();
+        return sources[0] || null;
     }
 
     private getAnalysisSources(): ViewerAnalysisSource[] {
@@ -157,7 +170,7 @@ export class SmartSelectionTool {
             const fallback = (error: unknown) => {
                 console.warn('[SmartSelectionTool] Worker unavailable, falling back to main thread', error);
                 worker.terminate();
-                this.showProgress(35, 'FALLBACK', 'Running on main thread');
+                this.showProgress(35, 'FALLBACK', 'Running on main thread', 'Smart Align');
                 resolve(autoAlign4DGSScene(points, [], this.runAlgorithmOptions(points)));
             };
             worker.onerror = fallback;
@@ -165,7 +178,7 @@ export class SmartSelectionTool {
                 const msg = event.data;
                 if (!msg || msg.id !== id) return;
                 if (msg.type === 'progress') {
-                    this.showProgress(msg.percent, msg.stage, msg.detail || '');
+                    this.showProgress(msg.percent, msg.stage, msg.detail || '', 'Smart Align');
                     return;
                 }
                 worker.terminate();
@@ -275,7 +288,7 @@ export class SmartSelectionTool {
             centerZ: this.readInputNumber('smart-cylinder-z', current.centerZ),
             radius: Math.max(0.001, this.readInputNumber('smart-cylinder-radius', current.radius)),
             height: Math.max(0.001, this.readInputNumber('smart-cylinder-height', current.height)),
-            groundPad: Math.max(0, this.readInputNumber('smart-cylinder-ground', current.groundPad))
+            groundPad: this.readInputNumber('smart-cylinder-ground', current.groundPad)
         };
         this.updateCylinderPreview();
     }
@@ -356,7 +369,7 @@ export class SmartSelectionTool {
     }
 
     // #WDD-gpt 2026-05-16 - 将圆柱区域应用到当前模型或全部 PLY4 序列段的选择纹理
-    private applyCylinderSelectionFromUI() {
+    private async applyCylinderSelectionFromUI() {
         if (!this.cylinderRegion || !this.viewer.selectionTool) {
             this.setStatus('NO CYL', 'warn');
             return;
@@ -366,73 +379,172 @@ export class SmartSelectionTool {
             return;
         }
         this.updateCylinderFromInputs();
+        const segmentedSelector = (this.viewer as any).selectCylinderForAllPly4Segments;
+        if (typeof segmentedSelector === 'function') {
+            this.showProgress(5, 'SELECTING', 'Scanning PLY4 segments one by one', 'Cylinder Select');
+            const batchResult = await segmentedSelector.call(this.viewer, this.cylinderRegion, (progress: any) => {
+                const percent = Number(progress?.percent);
+                if (Number.isFinite(percent)) {
+                    this.showProgress(Math.max(5, Math.min(95, percent)), progress.stage || 'SELECTING', progress.detail || '', 'Cylinder Select');
+                }
+            });
+            if (batchResult) {
+                this.viewer.selectionTool.markAllTimeSelectionScope?.();
+                this.showProgress(100, 'SELECTED', `${batchResult.total} points across ${batchResult.segments} segments`, 'Cylinder Select');
+                window.setTimeout(() => this.hideProgress(), 700);
+                this.setStatus(batchResult.total > 0 ? 'SELECTED' : 'EMPTY', batchResult.total > 0 ? 'ok' : 'warn');
+                if (this.planeStatEl) this.planeStatEl.textContent = `${batchResult.total}`;
+                if (this.staticStatEl) this.staticStatEl.textContent = `${batchResult.segments} seg`;
+                console.log('[SmartSelectionTool] Segmented cylinder selection', { ...batchResult, region: this.cylinderRegion });
+                return;
+            }
+        }
         const sources = this.getAnalysisSources();
         let total = 0;
         let segments = 0;
+        const totalSources = Math.max(1, sources.length);
+        this.showProgress(5, 'SELECTING', `Scanning ${totalSources} source${totalSources > 1 ? 's' : ''}`, 'Cylinder Select');
         for (const source of sources) {
             if (!source.positions) continue;
-            const indices = this.computeCylinderSelectionIndices(source, this.cylinderRegion);
-            const selected = source.selectionElement && typeof this.viewer.selectionTool.selectIndicesForElement === 'function'
-                ? this.viewer.selectionTool.selectIndicesForElement(source.selectionElement, indices, true, true)
-                : this.viewer.selectionTool.selectIndices(indices, true, true);
+            const indices = await this.computeCylinderSelectionIndicesAsync(source, this.cylinderRegion, segments, totalSources);
+            const selected = source.selectionElement && typeof this.viewer.selectionTool.selectAllTimeIndicesForElement === 'function'
+                ? this.viewer.selectionTool.selectAllTimeIndicesForElement(source.selectionElement, indices.current, indices.allTime, true)
+                : this.viewer.selectionTool.selectAllTimeIndices(indices.current, indices.allTime, true);
             total += selected;
             segments++;
         }
+        this.showProgress(100, 'SELECTED', `${total} points across ${segments} segments`, 'Cylinder Select');
+        window.setTimeout(() => this.hideProgress(), 700);
         this.setStatus(total > 0 ? 'SELECTED' : 'EMPTY', total > 0 ? 'ok' : 'warn');
         if (this.planeStatEl) this.planeStatEl.textContent = `${total}`;
         if (this.staticStatEl) this.staticStatEl.textContent = `${segments} seg`;
         console.log('[SmartSelectionTool] Cylinder selection', { total, segments, region: this.cylinderRegion });
     }
 
-    private computeCylinderSelectionIndices(source: ViewerAnalysisSource, region: CylinderSelectionRegion) {
-        const indices: number[] = [];
+    // #WDD-gpt 2026-05-16 - 圆柱选择按时间片扫描，避免大 PLY4 全时段检测阻塞浏览器主线程
+    private async computeCylinderSelectionIndicesAsync(
+        source: ViewerAnalysisSource,
+        region: CylinderSelectionRegion,
+        sourceIndex: number,
+        sourceCount: number
+    ) {
+        const allTime: number[] = [];
+        const current: number[] = [];
         const count = Math.floor(source.positions!.length / 3);
+        const currentFrame = this.getSourceCurrentFrame(source);
+        const base = 5 + (sourceIndex / Math.max(1, sourceCount)) * 90;
+        const span = 90 / Math.max(1, sourceCount);
+        let lastYield = performance.now();
         for (let i = 0; i < count; i++) {
             if (this.pointEntersCylinderAnyFrame(source, i, region)) {
-                indices.push(i);
+                allTime.push(i);
+                if (currentFrame !== null && this.pointInsideCylinderAtFrame(source, i, region, currentFrame)) {
+                    current.push(i);
+                }
+            }
+            if ((i & 511) === 0) {
+                const now = performance.now();
+                if (now - lastYield > 12) {
+                    const pct = base + span * (i / Math.max(1, count));
+                    const name = source.name ? `${source.name} • ` : '';
+                    this.showProgress(pct, `Scanning ${sourceIndex + 1}/${sourceCount}`, `${name}${i.toLocaleString()}/${count.toLocaleString()} splats`, 'Cylinder Select');
+                    await this.yieldToBrowser();
+                    lastYield = performance.now();
+                }
             }
         }
-        return indices;
+        return { current, allTime };
     }
 
-    // #WDD-gpt 2026-05-16 - 圆柱选择改为全时段命中：任意关键帧进入区域即选中该高斯点
+    private yieldToBrowser(): Promise<void> {
+        return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+
+    // #WDD-gpt 2026-05-16 - 圆柱 all-time 选择只检测生命周期有效帧，生命周期外位置命中不算选中
     // 关键修复：统一使用渲染顺序索引。trajectoryData 是原始顺序，通过 originalIndices 正确映射。
     private pointEntersCylinderAnyFrame(source: ViewerAnalysisSource, renderIndex: number, region: CylinderSelectionRegion) {
-        // 1) 检查当前帧位置（positions 是渲染顺序，直接用 renderIndex）
-        if (this.isPointInsideCylinder(this.getWorldPoint(source, renderIndex), region)) {
-            return true;
-        }
-
+        const frameRange = this.getLifetimeFrameRange(source, renderIndex);
+        if (!frameRange) return false;
         if (!source.trajectoryData || source.keyframes <= 1) {
-            return false;
+            return this.isPointInsideCylinder(this.getWorldPoint(source, renderIndex), region);
         }
-
-        // 2) 将当前 renderIndex 映射到原始索引，用于读取 trajectoryData
-        // originalIndices[renderIndex] = originalIndex（渲染顺序 -> 原始顺序）
         const originalIndex = source.originalIndices
             ? Math.max(0, Math.round(source.originalIndices[renderIndex] || 0))
             : renderIndex;
-
-        // 3) 读取该原始索引在所有关键帧中的轨迹位置
-        const K = source.keyframes;
-        const base = originalIndex * K * 3;
-        const maxOffset = source.trajectoryData.length - 3;
-
-        for (let frame = 0; frame < K; frame++) {
-            const offset = base + frame * 3;
-            if (offset < 0 || offset > maxOffset) continue;
-            const p: Vec3 = [
-                source.trajectoryData![offset + 0],
-                source.trajectoryData![offset + 1],
-                source.trajectoryData![offset + 2]
-            ];
-            // trajectoryData 中的点是模型局部坐标，需要应用实体变换
-            const worldPoint = source.transformPoint ? source.transformPoint(p) : p;
+        for (let frame = frameRange.start; frame <= frameRange.end; frame++) {
+            const localPoint = this.readTrajectoryPointAtFrame(source, originalIndex, frame);
+            if (!localPoint) continue;
+            const worldPoint = source.transformPoint ? source.transformPoint(localPoint) : localPoint;
             if (this.isPointInsideCylinder(worldPoint, region)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private pointInsideCylinderAtFrame(source: ViewerAnalysisSource, renderIndex: number, region: CylinderSelectionRegion, frame: number) {
+        const frameRange = this.getLifetimeFrameRange(source, renderIndex);
+        if (!frameRange || frame < frameRange.start || frame > frameRange.end) return false;
+        if (!source.trajectoryData || source.keyframes <= 1) {
+            return this.isPointInsideCylinder(this.getWorldPoint(source, renderIndex), region);
+        }
+        const originalIndex = source.originalIndices
+            ? Math.max(0, Math.round(source.originalIndices[renderIndex] || 0))
+            : renderIndex;
+        const localPoint = this.readTrajectoryPointAtFrame(source, originalIndex, frame);
+        const worldPoint = localPoint && source.transformPoint ? source.transformPoint(localPoint) : localPoint;
+        return !!worldPoint && this.isPointInsideCylinder(worldPoint, region);
+    }
+
+    private getSourceCurrentFrame(source: ViewerAnalysisSource): number | null {
+        const rawTime = Number((this.viewer as any).currentTime ?? 0);
+        const element = source.selectionElement;
+        const start = Number(element?.globalStartFrame ?? 0);
+        const end = Number(element?.globalEndFrame ?? NaN);
+        if (Number.isFinite(end) && (rawTime < start || rawTime >= end)) return null;
+        const local = Number.isFinite(start) ? rawTime - start : rawTime;
+        const maxFrame = Math.max(0, Math.floor(source.totalFrames || 1) - 1);
+        return Math.max(0, Math.min(maxFrame, Math.floor(local)));
+    }
+
+    private getLifetimeFrameRange(source: ViewerAnalysisSource, index: number): { start: number; end: number } | null {
+        const maxFrame = Math.max(0, Math.floor(source.totalFrames || 1) - 1);
+        const range = this.getLifetimeRange(source, index);
+        const start = Math.max(0, Math.ceil(range?.start ?? 0));
+        const end = Math.min(maxFrame, Math.floor(range?.end ?? maxFrame));
+        return end >= start ? { start, end } : null;
+    }
+
+    private getLifetimeRange(source: ViewerAnalysisSource, index: number): { start: number; end: number } | null {
+        if (!source.lifetimeMu || !source.lifetimeW) return null;
+        const mu = source.lifetimeMu[index];
+        const w = source.lifetimeW[index];
+        if (!Number.isFinite(mu) || !Number.isFinite(w)) return null;
+        return { start: mu - Math.max(0, w), end: mu + Math.max(0, w) };
+    }
+
+    private readTrajectoryPointAtFrame(source: ViewerAnalysisSource, originalIndex: number, frame: number): Vec3 | null {
+        if (!source.trajectoryData || source.keyframes <= 0) return null;
+        const K = source.keyframes;
+        const stride = Math.max(1, Math.floor(source.xyzStride || Math.max(1, Math.round((source.totalFrames - 1) / Math.max(1, K - 1)))));
+        const keyframeMax = Math.max(0, (K - 1) * stride);
+        const tClamped = Math.max(0, Math.min(frame, keyframeMax));
+        const k0 = Math.min(Math.max(0, Math.floor(tClamped / stride)), K - 1);
+        const k1 = Math.min(k0 + 1, K - 1);
+        const t0 = k0 * stride;
+        const t1 = k1 * stride;
+        const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
+        const base = originalIndex * K * 3;
+        const o0 = base + k0 * 3;
+        const o1 = base + k1 * 3;
+        if (o0 < 0 || o1 < 0 || o0 + 2 >= source.trajectoryData.length || o1 + 2 >= source.trajectoryData.length) return null;
+        const x0 = source.trajectoryData[o0 + 0], y0 = source.trajectoryData[o0 + 1], z0 = source.trajectoryData[o0 + 2];
+        const x1 = source.trajectoryData[o1 + 0], y1 = source.trajectoryData[o1 + 1], z1 = source.trajectoryData[o1 + 2];
+        return [
+            x0 + (x1 - x0) * ratio,
+            y0 + (y1 - y0) * ratio,
+            z0 + (z1 - z0) * ratio
+        ];
     }
 
     private isPointInsideCylinder(point: Vec3, region: CylinderSelectionRegion) {
@@ -600,7 +712,7 @@ export class SmartSelectionTool {
         overlay.className = 'smart-align-progress-overlay hidden';
         overlay.innerHTML = `
             <div class="smart-align-progress-card">
-                <div class="smart-align-progress-title">Auto Ground Alignment</div>
+                <div id="smart-align-progress-title" class="smart-align-progress-title">Auto Ground Alignment</div>
                 <div id="smart-align-progress-stage" class="smart-align-progress-stage">Preparing</div>
                 <div class="smart-align-progress-track">
                     <div id="smart-align-progress-bar" class="smart-align-progress-bar"></div>
@@ -613,14 +725,16 @@ export class SmartSelectionTool {
         this.progressBar = document.getElementById('smart-align-progress-bar');
         this.progressStage = document.getElementById('smart-align-progress-stage');
         this.progressDetail = document.getElementById('smart-align-progress-detail');
+        this.progressTitle = document.getElementById('smart-align-progress-title');
     }
 
-    private showProgress(percent: number, stage: string, detail: string) {
+    private showProgress(percent: number, stage: string, detail: string, title?: string) {
         this.createProgressOverlay();
         this.progressOverlay?.classList.remove('hidden');
         if (this.progressBar) this.progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
         if (this.progressStage) this.progressStage.textContent = `${stage} ${Math.round(percent)}%`;
         if (this.progressDetail) this.progressDetail.textContent = detail;
+        if (this.progressTitle && title) this.progressTitle.textContent = title;
     }
 
     private hideProgress() {
