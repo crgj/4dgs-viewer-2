@@ -417,13 +417,13 @@ export class ViewerFileLoader {
                 v.performanceMonitor.endLoadPhase('file-load');
 
                 // Finalize
-                this.updateStats(asset);
+                // #wdd-claude 2026-06-11 删除重复调用(原有两次 updateStats), 复制粘贴遗留。
                 this.updateStats(asset);
                 // #WDD 2026-03-31: 同步 entity 变换到 UI（PLY4 meta 已在上面的代码中应用）
                 console.log("[Load] About to call updateTransformUIFromEntity. Entity pos:", v.splatEntity?.getLocalPosition()?.toString());
                 v.updateTransformUIFromEntity();
                 console.log("[Load] UI should be updated now");
-                v.resetCamera();
+                // #wdd-claude 2026-06-11 删除重复调用(原有两次 resetCamera)。
                 v.resetCamera();
                 const container = document.getElementById('timeline-ticks');
                 if (container) container.innerHTML = '';

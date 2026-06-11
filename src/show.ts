@@ -848,6 +848,9 @@ class ShowViewer {
             this.totalFrames = duration;
             this.currentTime = 0;
             this.playbackTime = 0;
+            // #wdd-claude 2026-06-11 修复换模型残留: lastUpdatedFrame 未随加载重置，新模型若首帧恰好等于
+            // 上个模型的残留帧号，updateDynamicPositions 会误判"未变化"而跳过位置写入。重置为 -1。
+            this.lastUpdatedFrame = -1;
 
             // Update slider max
             const slider = document.getElementById('show-time-slider') as HTMLInputElement;
@@ -1183,6 +1186,17 @@ class ShowViewer {
             const slider = document.getElementById('show-time-slider') as HTMLInputElement;
             if (slider) slider.value = String(displayFrame);
             this.syncTimeUI();
+
+            // #wdd-claude 2026-06-11 修复 lifetime 动画播放时冻结: 非-4D 路径(无 trajectory)在播放时
+            // 只推进 currentTime 却从不更新材质 uTime(原先只有暂停分支才设)。含 lifetime 纹理但无轨迹的
+            // 模型，其 USE_LIFETIME_TEXTURE 透明度动画依赖 uTime，会卡在第0帧。4D 路径由 applyVisible4DFrame 设置，此处仅补非-4D。
+            if (!(this.is4DGS && this.trajectoryData) && this.splatEntity?.gsplat) {
+                const material = (this.splatEntity.gsplat as any).instance?.material;
+                if (material) {
+                    material.setParameter('uTime', displayFrame);
+                    material.setParameter('uGlobalTotalFrames', this.duration);
+                }
+            }
         } else {
             if (this.is4DGS && this.trajectoryData && !this.isWaitingForSort) {
                 this.updateDynamicPositions(Math.floor(this.currentTime));

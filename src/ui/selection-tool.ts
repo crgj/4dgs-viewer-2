@@ -2002,9 +2002,12 @@ export class SelectionTool {
                 ? this.viewer.splatSequence.activeElementIndex
                 : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
             // #WDD-gpt 2026-05-16 - 多 PLY4 all-time 手工选择要给每段保存本地显示帧，避免只有当前段有 R 通道
-            const currentLocalFrame = !hasSequence || targetIndex === activeIndex
+            // #wdd-claude 2026-06-11 修复非激活段误高亮: 原先非激活段赋值为 0(而非 null), 而下方判断用
+            // `currentLocalFrame !== null` 恒为真, 导致 t===0 时非激活段也被写入当前帧显示通道(R), 切到该段时
+            // 出现不应有的高亮。非激活段应为 null(无当前显示帧), 类型相应改为 number | null。
+            const currentLocalFrame: number | null = !hasSequence || targetIndex === activeIndex
                 ? Math.max(0, Math.min(totalFrames - 1, Math.floor(this.getCurrentTime())))
-                : 0;
+                : null;
 
             for (let t = 0; t < totalFrames; t++) {
                 const framePositions = this.getPositionsAtTimeForRuntime(rt, t, tempPos);

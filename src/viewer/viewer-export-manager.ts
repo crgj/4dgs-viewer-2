@@ -600,7 +600,10 @@ export class ViewerExportManager {
             const baseName = (v.currentFileName || 'model').replace(/\.[^/.]+$/, "");
             const filename = `saved_${baseName}.sog4`;
 
-            const blob = new Blob([buffer.buffer as ArrayBuffer], { type: "application/octet-stream" });
+            // #wdd-claude 2026-06-11 修复潜在导出损坏: 原用 buffer.buffer 会包含底层 ArrayBuffer 的全部字节,
+            // 若 encode 返回的是子视图(byteOffset!=0 或 byteLength<底层)则写入多余字节导致 .sog4 损坏。
+            // 直接传 Uint8Array 视图(尊重 byteOffset/byteLength), 与 PLY4/TrueSplats 导出一致。
+            const blob = new Blob([buffer as Uint8Array<ArrayBuffer>], { type: "application/octet-stream" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;

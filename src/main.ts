@@ -1281,7 +1281,9 @@ export class Viewer {
                     }
 
                     if (this.splatEntity?.gsplat) {
-                        const material = (this.splatEntity.gsplat as any).instance.material;
+                        // #wdd-claude 2026-06-11 修复高频崩溃: instance 在异步加载/换段瞬间可能为 undefined，
+                        // 原先 .instance.material 缺可选链会在 onUpdate(每帧)抛 TypeError。补 ?. 与其它访问点一致。
+                        const material = (this.splatEntity.gsplat as any).instance?.material;
                         if (material) {
                             const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
                             material.setParameter('uTime', shaderTime);
@@ -1303,7 +1305,8 @@ export class Viewer {
                     this.syncTimelineUI(info.displayFrame, Math.max(0, Math.ceil(info.total) - 1));
                 } else {
                     if (this.splatEntity?.gsplat) {
-                        const material = (this.splatEntity.gsplat as any).instance.material;
+                        // #wdd-claude 2026-06-11 修复高频崩溃: 同上, instance 可能未就绪, 补可选链。
+                        const material = (this.splatEntity.gsplat as any).instance?.material;
                         if (material) {
                             const shaderTime = Math.floor(this.currentTime); // #WDD 2026-01-18: Integer time
                             material.setParameter('uTime', shaderTime);

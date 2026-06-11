@@ -207,23 +207,28 @@ export const splatMainVS = `
         uniform float uXYZStride; // #WDD 2026-01-15
     #endif
 
-    // Rotation & Scale Logic Declarations
-    #ifdef USE_ROTATION
-        uniform sampler2D uRotationTexture;
-        uniform sampler2D uScalesTexture;
-        uniform float uRotKeyframes;
-        uniform float uRotStride; // #WDD 2026-01-15
-
     // Color Trajectory
+    // #wdd-claude 2026-06-11 修复编译崩溃: 颜色轨迹 uniform 原先被错误嵌套在 USE_ROTATION 块内，
+    // 但其使用处(USE_COLOR_TRAJECTORY, 第~531行)在该块外。当模型有颜色轨迹却无旋转轨迹时，
+    // USE_COLOR_TRAJECTORY 定义而 USE_ROTATION 未定义 -> uniform 未声明却被引用 -> GLSL 编译失败。故移出。
     #ifdef USE_COLOR_TRAJECTORY
         uniform sampler2D uColorTrajectoryTexture;
         uniform float uColorKeyframes;
         uniform float uColorStride;
     #endif
 
+    // #wdd-claude 2026-06-11 修复编译崩溃: 后处理 uniform 在 main 中被无条件使用(第~634行)，
+    // 原先误置于 USE_ROTATION 块内，导致无旋转轨迹的模型编译失败。改为无条件声明。
     uniform float uBrightness; // #WDD 2026-01-30 PostProcess
     uniform float uContrast;   // #WDD 2026-01-30 PostProcess
     uniform float uExposure;   // #WDD 2026-01-30 PostProcess
+
+    // Rotation & Scale Logic Declarations
+    #ifdef USE_ROTATION
+        uniform sampler2D uRotationTexture;
+        uniform sampler2D uScalesTexture;
+        uniform float uRotKeyframes;
+        uniform float uRotStride; // #WDD 2026-01-15
 
         vec4 slerp(vec4 a, vec4 b, float t) {
             a = normalize(a);

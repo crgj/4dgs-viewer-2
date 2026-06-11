@@ -501,7 +501,11 @@ export class SmartSelectionTool {
         const element = source.selectionElement;
         const start = Number(element?.globalStartFrame ?? 0);
         const end = Number(element?.globalEndFrame ?? NaN);
-        if (Number.isFinite(end) && (rawTime < start || rawTime >= end)) return null;
+        // #wdd-claude 2026-06-11 修复边界判断: 原先 start 下界检查被并入 `Number.isFinite(end)` 条件中,
+        // 当段缺少 globalEndFrame(end=NaN)时, rawTime<start 的检查被一并跳过, 使当前时间落在段起始之前时
+        // 仍把第0帧当作当前帧。拆开两个边界, 使 start 检查独立于 end。
+        if (Number.isFinite(start) && rawTime < start) return null;
+        if (Number.isFinite(end) && rawTime >= end) return null;
         const local = Number.isFinite(start) ? rawTime - start : rawTime;
         const maxFrame = Math.max(0, Math.floor(source.totalFrames || 1) - 1);
         return Math.max(0, Math.min(maxFrame, Math.floor(local)));
