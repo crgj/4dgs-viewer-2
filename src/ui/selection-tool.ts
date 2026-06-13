@@ -137,6 +137,8 @@ export class SelectionTool {
         const before = this.captureGlobalSelectionState();
         const targets = this.getGlobalSelectionTargets();
         let deletedTotal = 0;
+        let hiddenSelectedTotal = 0;
+        const allowAllTimeDelete = this.isAllTimeTool() || this.selectionScope === 'alltime';
 
         // #WDD-kimi 2026-04-20 - 删除改为跨所有段：对每段已选点同步打删除标记
         for (const target of targets) {
@@ -144,10 +146,11 @@ export class SelectionTool {
             const totalSplats = Math.floor(target.selectionData.length / 4);
             for (let i = 0; i < totalSplats; i++) {
                 const idx = i * 4;
-                // #WDD-gpt 2026-05-16 - 多段 PLY4 切段后选区可能只保留在 all-time 缓冲，删除时两个 R 通道都要识别
+                // #WDD-gpt 2026-06-13 - 普通 Delete 只删除当前显示高亮；all-time 工具/作用域才删除隐藏生命周期选区
                 const selectedNow = target.selectionData[idx] > 0;
                 const selectedAllTime = !!target.allTimeSelectionData && idx < target.allTimeSelectionData.length && target.allTimeSelectionData[idx] > 0;
-                if (selectedNow || selectedAllTime) {
+                if (!selectedNow && selectedAllTime) hiddenSelectedTotal++;
+                if (selectedNow || (allowAllTimeDelete && selectedAllTime)) {
                     deletedIndices.push(i);
                     target.selectionData[idx + 1] = 255;
                     target.selectionData[idx] = 0;
@@ -169,6 +172,8 @@ export class SelectionTool {
             this.selectionScope = 'current';
             this.updateTexture();
             console.log(`[Selection] Deleted ${deletedTotal} points across sequence. Undo stack: ${this.undoStack.length}`);
+        } else if (hiddenSelectedTotal > 0 && !allowAllTimeDelete) {
+            console.warn(`[Selection] Delete skipped ${hiddenSelectedTotal} hidden all-time selected points. Switch to an all-time selection tool to delete them.`);
         }
     }
 
@@ -1622,15 +1627,10 @@ export class SelectionTool {
                     // Skip if deleted
                     if (this.selectionData[idx + 1] > 0) continue;
 
-                    // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
-                    if (this.isSubtracting) {
-                        this.allTimeSelectionData[idx] = 0;
-                    } else {
-                        this.allTimeSelectionData[idx] = 255;
-                    }
-
                     // #WDD 2026-04-10: Only update current selection if visible at current time
                     if (this.isVisibleAtCurrentTime(i)) {
+                        // #WDD-gpt 2026-06-13 - 普通 brush 只把当前帧可见命中写入 all-time，避免隐藏生命周期点被误删
+                        this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
                         if (this.isSubtracting) {
                             if (this.selectionData[idx] > 0) {
                                 this.selectionData[idx] = 0;
@@ -1642,6 +1642,7 @@ export class SelectionTool {
                                 changed = true;
                             }
                         }
+                        if (!this.isAllTimeTool()) this.selectionScope = 'current';
                     }
                 }
             }
@@ -1699,15 +1700,10 @@ export class SelectionTool {
                     // Skip if deleted
                     if (this.selectionData[idx + 1] > 0) continue;
 
-                    // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
-                    if (this.isSubtracting) {
-                        this.allTimeSelectionData[idx] = 0;
-                    } else {
-                        this.allTimeSelectionData[idx] = 255;
-                    }
-
                     // #WDD 2026-04-10: Only update current selection if visible at current time
                     if (this.isVisibleAtCurrentTime(i)) {
+                        // #WDD-gpt 2026-06-13 - 普通 rect 只同步当前帧可见命中，避免 2D 框选污染隐藏 all-time 选区
+                        this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
                         if (this.isSubtracting) {
                             if (this.selectionData[idx] > 0) {
                                 this.selectionData[idx] = 0;
@@ -1719,6 +1715,7 @@ export class SelectionTool {
                                 changed = true;
                             }
                         }
+                        if (!this.isAllTimeTool()) this.selectionScope = 'current';
                     }
                 }
             }
@@ -1809,15 +1806,10 @@ export class SelectionTool {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue;
 
-                // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
-                if (this.isSubtracting) {
-                    this.allTimeSelectionData[idx] = 0;
-                } else {
-                    this.allTimeSelectionData[idx] = 255;
-                }
-
                 // #WDD 2026-04-10: Only update current selection if visible at current time
                 if (this.isVisibleAtCurrentTime(i)) {
+                    // #WDD-gpt 2026-06-13 - 普通 ellipse brush 只同步当前帧可见命中，避免隐藏点进入删除候选
+                    this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
                     if (this.isSubtracting) {
                         if (this.selectionData[idx] > 0) {
                             this.selectionData[idx] = 0;
@@ -1829,6 +1821,7 @@ export class SelectionTool {
                             changed = true;
                         }
                     }
+                    if (!this.isAllTimeTool()) this.selectionScope = 'current';
                 }
             }
         }
@@ -1885,15 +1878,10 @@ export class SelectionTool {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue;
 
-                // #WDD 2026-04-11: Always update all-time selection (regardless of time visibility)
-                if (this.isSubtracting) {
-                    this.allTimeSelectionData[idx] = 0;
-                } else {
-                    this.allTimeSelectionData[idx] = 255;
-                }
-
                 // #WDD 2026-04-10: Only update current selection if visible at current time
                 if (this.isVisibleAtCurrentTime(i)) {
+                    // #WDD-gpt 2026-06-13 - 普通 ellipse rect 只同步当前帧可见命中，避免隐藏点进入删除候选
+                    this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
                     if (this.isSubtracting) {
                         if (this.selectionData[idx] > 0) {
                             this.selectionData[idx] = 0;
@@ -1905,6 +1893,7 @@ export class SelectionTool {
                             changed = true;
                         }
                     }
+                    if (!this.isAllTimeTool()) this.selectionScope = 'current';
                 }
             }
         }
@@ -2291,7 +2280,11 @@ export class SelectionTool {
             if (screen.z > 0 && checkInPoly(screen.x, screen.y, screen.z)) {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue; // Skip deleted
-                
+                // #WDD-gpt 2026-06-13 - 普通 poly 与 brush/rect 一致，只维护当前帧可见选择
+                if (this.allTimeSelectionData && idx < this.allTimeSelectionData.length) {
+                    this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
+                }
+
                 if (this.isSubtracting) {
                     if (this.selectionData[idx] > 0) {
                         this.selectionData[idx] = 0;
@@ -2303,6 +2296,7 @@ export class SelectionTool {
                         changed = true;
                     }
                 }
+                this.selectionScope = 'current';
             }
         }
 
