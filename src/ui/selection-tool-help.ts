@@ -2,6 +2,7 @@
 // Help modal logic for SelectionTool
 // #WDD-gpt 2026-05-16: 全面升级帮助界面，覆盖智能对齐、圆柱选择、Lazy模式等全部新功能
 // #WDD-gpt 2026-05-17: 改为多页标签式布局，去除滚动条，支持主题自适应
+// #WDD-gpt 2026-06-13 - 更新帮助内容，补充 Render ALL 与 Delete Hidden 清理流程
 
 export class SelectionToolHelp {
     private helpModal: HTMLElement | null = null;
@@ -128,6 +129,7 @@ export class SelectionToolHelp {
                         <h3 class="text-xs uppercase font-bold text-red-400 mb-2 tracking-wider">删除操作</h3>
                         <ul class="space-y-1.5 text-gray-200">
                             <li class="flex items-center gap-2"><kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Delete</kbd><span>删除当前<strong>选中的点</strong></span></li>
+                            <li class="flex items-center gap-2"><span class="px-2 py-0.5 bg-pink-500/15 rounded text-xs font-bold text-pink-300">Hidden</span><span><strong>Delete Hidden</strong> 删除 normal 下不可见但仍存在的点</span></li>
                             <li class="flex items-center gap-2"><kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Z</kbd><span><strong>撤销</strong>删除（最多30步）</span></li>
                             <li class="flex items-center gap-2"><kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Y</kbd><span>或 <kbd class="px-1.5 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Shift+Z</kbd> <strong>重做</strong>删除</span></li>
                         </ul>
@@ -222,6 +224,12 @@ export class SelectionToolHelp {
                         <h3 class="text-xs uppercase font-bold text-yellow-400 mb-1 tracking-wider">💡 时间感知选择</h3>
                         <p class="text-gray-300 text-xs leading-relaxed">
                             选择工具现在是<strong>时间感知</strong>的！只会选择当前时刻可见的点。播放动画时，当前时刻会自动更新。
+                        </p>
+                    </div>
+                    <div class="p-3 bg-pink-500/10 rounded-lg border border-pink-500/20">
+                        <h3 class="text-xs uppercase font-bold text-pink-400 mb-1 tracking-wider">💡 Render ALL 调试</h3>
+                        <p class="text-gray-300 text-xs leading-relaxed">
+                            右侧 <strong>RENDER → ALL</strong> 会以点云显示所有未删除点：青色为 normal 可见，粉色为 normal 不可见。ALL 下保留 <strong>Delete Hidden</strong>，确认后清理粉色点并立即从 ALL 中消失。
                         </p>
                     </div>
                     <div class="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">

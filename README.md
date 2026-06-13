@@ -42,6 +42,7 @@
 
 - **实时编辑**
   - 删除选中的高斯点
+  - `Render ALL` 调试模式下可一键删除 normal 模式不可见但数据中仍存在的点
   - GPU 渲染结果即时更新
   - 编辑状态可写回导出文件
 
@@ -81,7 +82,8 @@
 
 ### 🎭 场景与视觉
 - Grid / Axes 开关
-- Gaussian Render 模式切换
+- Gaussian Render 模式切换：`NORMAL / CENTER / OUTLINE / ALL`
+- `ALL` 调试点云：无视生命周期和透明度显示未删除点，青色表示 normal 可见，粉色表示 normal 不可见
 - 粒子过渡特效
 - Dark / Light 主题切换
 - Post Processing: Exposure / Brightness / Contrast
@@ -120,6 +122,18 @@
 ---
 
 ## 📝 版本修改记录
+
+### 2026-06-13
+
+#### Render ALL 调试点云
+- `RENDER` 面板新增 `ALL` 模式，使用独立 `DebugAllGaussianPoints` entity 绘制点云，不改主 GSplat shader。
+- `ALL` 模式显示当前激活模型/段中所有未删除点，忽略生命周期和 opacity，便于检查数据中存在但 normal 模式不可见的点。
+- 颜色约定：
+  - 青色：normal 模式下预计可见的点。
+  - 粉色：normal 模式下不可见但尚未删除的点。
+  - 已删除点：不绘制。
+- 进入 `ALL` 时隐藏普通选择工具，只保留 `Delete Hidden` 清理入口；切回 `NORMAL / CENTER / OUTLINE` 后恢复原 UI。
+- `Delete Hidden` 会先弹出确认，再将当前帧 normal 不可见且尚未删除的点写入 deleted 标记；执行后 `ALL` 点云立即刷新，被删除点不再显示。
 
 ### 2026-05-16 (v2.18.1)
 
@@ -368,6 +382,13 @@ npm run build
 - 全时段笔刷 (`4`)、全时段矩形 (`5`) 和全时段多边形 (`6`) 可选中所有时间帧内可见的高斯点
 - 不受当前播放进度限制，适合清理跨帧存在的噪点
 - 反选操作同样作用于全时段范围
+
+#### Render ALL 与隐藏点清理
+- 右侧 `RENDER` 面板的 `ALL` 按钮会切换到独立调试点云，不使用 normal 的生命周期和透明度过滤。
+- `ALL` 只绘制未删除点：青色表示 normal 下可见，粉色表示 normal 下不可见。
+- 在 `ALL` 模式下普通选择工具会隐藏，只保留 `Delete Hidden` 按钮。
+- 点击 `Delete Hidden` 后会确认删除当前帧 normal 不可见且尚未删除的点；确认后这些点会写入 deleted 标记，导出时也会被过滤。
+- 删除后 `ALL` 点云会立即刷新，已删除点不再显示。
 
 #### 智能对齐与圆柱选择
 1. 加载模型后，点击左侧 **Auto Align** 按钮

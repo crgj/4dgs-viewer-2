@@ -177,6 +177,52 @@ export class SelectionTool {
         }
     }
 
+    deleteNormallyHiddenPointsWithConfirm() {
+        if (!this.selectionData) return;
+        const positions = this.getCachedPositions();
+        const count = positions ? Math.floor(positions.length / 3) : Math.floor(this.selectionData.length / 4);
+        const isNormallyVisible = typeof this.viewer?.isDebugPointNormallyVisible === 'function'
+            ? (index: number) => !!this.viewer.isDebugPointNormallyVisible(index)
+            : (_index: number) => true;
+
+        const targets: number[] = [];
+        const max = Math.min(count, Math.floor(this.selectionData.length / 4));
+        for (let i = 0; i < max; i++) {
+            const idx = i * 4;
+            if (this.selectionData[idx + 1] > 0) continue;
+            if (!isNormallyVisible(i)) targets.push(i);
+        }
+
+        if (targets.length === 0) {
+            alert('当前帧没有检测到 normal 模式下不可见且尚未删除的点。');
+            return;
+        }
+
+        const ok = confirm(`确认删除当前帧 normal 模式下不可见的 ${targets.length.toLocaleString()} 个点吗？\n\n这些点会被标记为 deleted，导出时也会被过滤。`);
+        if (!ok) return;
+
+        const before = this.captureGlobalSelectionState();
+        for (const i of targets) {
+            const idx = i * 4;
+            this.selectionData[idx] = 0;
+            this.selectionData[idx + 1] = 255;
+            if (this.allTimeSelectionData && idx + 1 < this.allTimeSelectionData.length) {
+                this.allTimeSelectionData[idx] = 0;
+                this.allTimeSelectionData[idx + 1] = 255;
+            }
+        }
+
+        // #WDD-gpt 2026-06-13 - 独立按钮批量删除 normal 不可见点，写入当前激活段选择纹理并保留 undo
+        this.pushUndoSnapshot(before);
+        this.selectionScope = 'current';
+        this.updateTexture();
+        this.commitActiveSelectionState();
+        if (typeof this.viewer?.refreshDebugAllPointsEntity === 'function') {
+            this.viewer.refreshDebugAllPointsEntity();
+        }
+        console.log(`[Selection] Deleted ${targets.length} normally hidden points at current frame.`);
+    }
+
     invertSelection(totalSplats: number) {
         // #WDD 2026-04-18: Invert selection based on current tool mode
         // Normal tools: only invert currently visible points
@@ -821,6 +867,9 @@ export class SelectionTool {
                      <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
+                    <button id="action-delete-hidden" class="p-1.5 rounded-lg hover:bg-pink-500/20 text-pink-400 active:scale-95 transition-all has-tooltip" aria-label="Delete Hidden" data-tip="Delete Hidden">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 6.5c2.76 0 5 2.24 5 5 0 .66-.13 1.29-.36 1.87l3.18 3.18C21.17 15.35 22.23 13.78 23 11.5 21.27 6.89 16.89 4 12 4c-1.4 0-2.74.24-3.98.68l2.35 2.35c.52-.34 1.13-.53 1.63-.53zM2.28 3 1 4.27l2.42 2.42C2.37 7.85 1.55 9.43 1 11.5 2.73 16.11 7.11 19 12 19c1.56 0 3.04-.3 4.38-.84L19.73 21 21 19.73 2.28 3zM7.53 10.8l1.55 1.55c.3 1.35 1.37 2.42 2.72 2.72l1.55 1.55c-.43.15-.88.23-1.35.23-2.76 0-5-2.24-5-5 0-.47.08-.92.23-1.35z"/></svg>
+                    </button>
                     <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Help">
                         ${ICON_HELP}
                     </button>
@@ -910,6 +959,9 @@ export class SelectionTool {
 
         get('action-delete')?.addEventListener('click', () => {
             this.deleteSelected();
+        });
+        get('action-delete-hidden')?.addEventListener('click', () => {
+            this.deleteNormallyHiddenPointsWithConfirm();
         });
 
         get('action-undo')?.addEventListener('click', () => this.undo());

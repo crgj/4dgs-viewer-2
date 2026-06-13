@@ -76,7 +76,14 @@ export class Viewer {
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
-    private gaussianRenderMode = 0; // 0=normal, 1=center point, 2=ellipse outline
+    private gaussianRenderMode = 0; // 0=normal, 1=center point, 2=ellipse outline, 3=debug all points
+    private debugAllPointsEntity: pc.Entity | null = null;
+    private debugAllPointsSourceEntity: pc.Entity | null = null;
+    private debugAllPointsCount = 0;
+    private debugAllPointsFrame = -1;
+    private debugAllPointsMaterial: pc.Material | null = null;
+    private debugAllPointsColors: Float32Array | null = null;
+    private readonly debugAllPointsSize = 6.0;
 
     private is4DGS = false;
     private trajectoryData: Float32Array | null = null;
@@ -322,7 +329,397 @@ export class Viewer {
         }
     }
 
+    private destroyDebugAllPointsEntity() {
+        if (this.debugAllPointsEntity) {
+            this.debugAllPointsEntity.destroy();
+            this.debugAllPointsEntity = null;
+        }
+        this.debugAllPointsSourceEntity = null;
+        this.debugAllPointsCount = 0;
+        this.debugAllPointsFrame = -1;
+        this.debugAllPointsColors = null;
+    }
+
+    private setPrimarySplatVisibility(visible: boolean) {
+        if (this.isSequenceMode) {
+            if (visible) {
+                const active = this.sequenceActiveEntity || this.splatEntity;
+                if (active) active.enabled = true;
+            } else {
+                this.sequenceEntityPool.forEach((ent) => { ent.enabled = false; });
+            }
+            return;
+        }
+
+        if (this.isSog4SequenceMode) {
+            if (visible) {
+                this.setSog4SequenceVisibleSegment(this.sog4SequenceIndex);
+            } else {
+                this.sog4SequenceSegments.forEach((seg) => {
+                    if (seg.entity) seg.entity.enabled = false;
+                });
+            }
+            return;
+        }
+
+        if (this.splatEntity) this.splatEntity.enabled = visible;
+    }
+
+    private syncDebugAllPointsTransform(source: pc.Entity | null) {
+        if (!source || !this.debugAllPointsEntity) return;
+        const sourceParent = source.parent || this.app.root;
+        if (this.debugAllPointsEntity.parent !== sourceParent) {
+            sourceParent.addChild(this.debugAllPointsEntity);
+        }
+        this.debugAllPointsEntity.setLocalPosition(source.getLocalPosition());
+        this.debugAllPointsEntity.setLocalRotation(source.getLocalRotation());
+        this.debugAllPointsEntity.setLocalScale(source.getLocalScale());
+    }
+
+    private readDebugParsedProp(name: string): Float32Array | null {
+        const parsed = this.lastParsedData;
+        if (!parsed) return null;
+        if (parsed[name] instanceof Float32Array) return parsed[name] as Float32Array;
+        const props = parsed?.plyData?.elements?.[0]?.properties || [];
+        const hit = props.find((p: any) => p?.name === name);
+        return (hit?.storage as Float32Array) || null;
+    }
+
+    private getDebugParsedPositions(frame: number): Float32Array | null {
+        const x = this.readDebugParsedProp('x');
+        const y = this.readDebugParsedProp('y');
+        const z = this.readDebugParsedProp('z');
+        if (!x || !y || !z) return null;
+
+        const count = Math.min(x.length, y.length, z.length);
+        const positions = new Float32Array(count * 3);
+        const trajectory = this.lastParsedData?.trajectory as Float32Array | null | undefined;
+        const keyframes = Math.max(0, Math.floor(this.lastParsedData?.keyframes || this.keyframes || 0));
+        const stride = Math.max(1, Math.floor(this.lastParsedData?.xyzStride || this.xyzStride || 1));
+
+        if (trajectory && keyframes > 0 && trajectory.length >= count * keyframes * 3) {
+            const keyframeMax = Math.max(0, (keyframes - 1) * stride);
+            const maxTime = Math.max(0, Math.min(this.duration - 1, keyframeMax));
+            const tClamped = Math.max(0, Math.min(frame, maxTime));
+            const k0 = keyframes <= 1 ? 0 : Math.min(Math.floor(tClamped / stride), keyframes - 1);
+            const k1 = keyframes <= 1 ? 0 : Math.min(k0 + 1, keyframes - 1);
+            const t0 = k0 * stride;
+            const t1 = k1 * stride;
+            const ratio = (k0 === k1 || t1 === t0) ? 0 : Math.max(0, Math.min(1, (tClamped - t0) / (t1 - t0)));
+            const origIndices = this.originalIndices || this.readDebugParsedProp('original_index');
+            for (let i = 0; i < count; i++) {
+                const oidx = origIndices ? Math.round(origIndices[i] || 0) : i;
+                const base = oidx * keyframes * 3;
+                const b0 = base + k0 * 3;
+                const b1 = base + k1 * 3;
+                positions[i * 3 + 0] = trajectory[b0 + 0] + (trajectory[b1 + 0] - trajectory[b0 + 0]) * ratio;
+                positions[i * 3 + 1] = trajectory[b0 + 1] + (trajectory[b1 + 1] - trajectory[b0 + 1]) * ratio;
+                positions[i * 3 + 2] = trajectory[b0 + 2] + (trajectory[b1 + 2] - trajectory[b0 + 2]) * ratio;
+            }
+            return positions;
+        }
+
+        for (let i = 0; i < count; i++) {
+            positions[i * 3 + 0] = x[i];
+            positions[i * 3 + 1] = y[i];
+            positions[i * 3 + 2] = z[i];
+        }
+        return positions;
+    }
+
+    private getDebugAllPointsPositions(): Float32Array | null {
+        const parsed = this.getDebugParsedPositions(Math.floor(this.currentTime));
+        const current = this.getCurrentPositions();
+        if (parsed && (!current || parsed.length > current.length)) return parsed;
+        if (current && current.length >= 3) return current;
+        if (parsed && parsed.length >= 3) return parsed;
+
+        const splatData = (this.splatEntity?.gsplat as any)?.asset?.resource?.splatData
+            || (this.splatEntity?.gsplat as any)?.instance?.splatData
+            || null;
+        const x = splatData?.getProp?.('x') as Float32Array | null;
+        const y = splatData?.getProp?.('y') as Float32Array | null;
+        const z = splatData?.getProp?.('z') as Float32Array | null;
+        if (!x || !y || !z) return null;
+
+        const count = Math.min(x.length, y.length, z.length);
+        const positions = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+            positions[i * 3 + 0] = x[i];
+            positions[i * 3 + 1] = y[i];
+            positions[i * 3 + 2] = z[i];
+        }
+        return positions;
+    }
+
+    private createDebugAllPointsMaterial(): pc.Material {
+        const material = new pc.Material();
+        material.shader = new pc.Shader(this.app.graphicsDevice, {
+            name: 'DebugAllGaussianPointsShader',
+            attributes: {
+                vertex_position: pc.SEMANTIC_POSITION,
+                vertex_color: pc.SEMANTIC_COLOR
+            },
+            vshader: `
+                attribute vec3 vertex_position;
+                attribute vec4 vertex_color;
+                uniform mat4 matrix_model;
+                uniform mat4 matrix_viewProjection;
+                uniform float uPointSize;
+                varying vec4 vColor;
+
+                void main(void) {
+                    gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0);
+                    gl_PointSize = uPointSize;
+                    vColor = vertex_color;
+                }
+            `,
+            fshader: `
+                precision mediump float;
+                varying vec4 vColor;
+
+                void main(void) {
+                    vec2 p = gl_PointCoord - vec2(0.5);
+                    if (dot(p, p) > 0.25) discard;
+                    gl_FragColor = vColor;
+                }
+            `
+        });
+        material.depthWrite = true;
+        material.blendType = pc.BLEND_NONE;
+        material.setParameter('uPointSize', this.debugAllPointsSize);
+        material.update();
+        return material;
+    }
+
+    private getCurrentSplatData(): any | null {
+        return (this.splatEntity?.gsplat as any)?.asset?.resource?.splatData
+            || (this.splatEntity?.gsplat as any)?.instance?.splatData
+            || null;
+    }
+
+    private getDebugDeletedIndexSet(): Set<number> | null {
+        const deleted = this.lastParsedData?.deleted_indices;
+        if (!Array.isArray(deleted) || deleted.length === 0) return null;
+        return new Set(deleted.map((v: any) => Math.floor(Number(v))).filter(Number.isFinite));
+    }
+
+    private isDebugPointDeleted(index: number, deletedSet: Set<number> | null = this.getDebugDeletedIndexSet()): boolean {
+        const sel = this.selectionTool?.selectionData || null;
+        const selIdx = index * 4;
+        if (sel && selIdx + 1 < sel.length && sel[selIdx + 1] > 0) return true;
+        return !!deletedSet?.has(index);
+    }
+
+    private isDebugPointLifetimeVisible(index: number, frame: number): boolean {
+        const lifeTexData = this.lifeTexData;
+        if (!lifeTexData) return true;
+
+        const idx = index * 4;
+        if (idx + 2 >= lifeTexData.length) return true;
+
+        const mu = lifeTexData[idx + 0];
+        const w = lifeTexData[idx + 1];
+        const k = lifeTexData[idx + 2];
+        const totalFrames = Math.ceil(this.duration ?? 100);
+        const segmentMax = Math.max(0, totalFrames - 1);
+        const time = Math.floor(frame);
+
+        if (time < 0 || time > segmentMax) return false;
+
+        const lifeStart = mu - w;
+        const lifeEnd = mu + w;
+        if (lifeEnd <= 0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
+
+        const left = 1.0 / (1.0 + Math.exp(-k * (time - lifeStart)));
+        const right = 1.0 / (1.0 + Math.exp(k * (time - lifeEnd)));
+        return (left * right) > 0.01;
+    }
+
+    public isDebugPointNormallyVisible(index: number, frame: number = Math.floor(this.currentTime)): boolean {
+        const opacity = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null;
+        if (this.isDebugPointDeleted(index)) return false;
+        if (!this.isDebugPointLifetimeVisible(index, frame)) return false;
+
+        if (opacity && index < opacity.length) {
+            const raw = opacity[index];
+            const alpha = raw >= 0 && raw <= 1 ? raw : 1 / (1 + Math.exp(-raw));
+            if (alpha <= (1 / 255)) return false;
+        }
+
+        return true;
+    }
+
+    private buildDebugAllPointsRenderData(sourcePositions: Float32Array, frame: number): { positions: Float32Array; colors: Float32Array; sourceCount: number; visibleCount: number; hiddenCount: number; deletedCount: number } {
+        const sourceCount = Math.floor(sourcePositions.length / 3);
+        const deletedSet = this.getDebugDeletedIndexSet();
+        let visibleCount = 0;
+        let hiddenCount = 0;
+        let deletedCount = 0;
+
+        for (let i = 0; i < sourceCount; i++) {
+            const deleted = this.isDebugPointDeleted(i, deletedSet);
+            if (deleted) {
+                deletedCount++;
+                continue;
+            }
+            const visible = this.isDebugPointNormallyVisible(i, frame);
+            if (visible) visibleCount++;
+            else hiddenCount++;
+        }
+
+        const outputCount = visibleCount + hiddenCount;
+        const positions = new Float32Array(outputCount * 3);
+        const colors = new Float32Array(outputCount * 4);
+        let outPoint = 0;
+
+        for (let i = 0; i < sourceCount; i++) {
+            // #WDD-gpt 2026-06-13 - render ALL 不再绘制已删除点；删除 hidden 后需要从 debug mesh 中消失
+            if (this.isDebugPointDeleted(i, deletedSet)) continue;
+
+            const visible = this.isDebugPointNormallyVisible(i, frame);
+            const src = i * 3;
+            const dst = outPoint * 3;
+            positions[dst + 0] = sourcePositions[src + 0];
+            positions[dst + 1] = sourcePositions[src + 1];
+            positions[dst + 2] = sourcePositions[src + 2];
+
+            const out = outPoint * 4;
+            if (visible) {
+                colors[out + 0] = 0.0;
+                colors[out + 1] = 1.0;
+                colors[out + 2] = 0.9;
+                colors[out + 3] = 1.0;
+            } else {
+                colors[out + 0] = 1.0;
+                colors[out + 1] = 0.18;
+                colors[out + 2] = 0.55;
+                colors[out + 3] = 1.0;
+            }
+            outPoint++;
+        }
+
+        this.debugAllPointsColors = colors;
+        if (hiddenCount > 0 || deletedCount > 0) {
+            console.log(`[Debug All Points] ${hiddenCount.toLocaleString()} hidden + ${deletedCount.toLocaleString()} deleted / ${sourceCount.toLocaleString()} source points at frame ${frame}.`);
+        }
+        return { positions, colors, sourceCount, visibleCount, hiddenCount, deletedCount };
+    }
+
+    private setSelectionToolbarForRenderAll(active: boolean) {
+        const toolbar = document.getElementById('selection-toolbar');
+        if (!toolbar) return;
+
+        if (!active) {
+            toolbar.classList.remove('hidden');
+            for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-operation-tools', 'selection-mode-tools', 'selection-delete-tools']) {
+                const group = document.getElementById(id);
+                if (!group) continue;
+                group.classList.remove('hidden');
+                group.style.display = '';
+                group.setAttribute('aria-hidden', 'false');
+            }
+            document.getElementById('action-delete')?.classList.remove('hidden');
+            document.getElementById('action-delete-hidden')?.classList.remove('hidden');
+            document.getElementById('action-help')?.classList.remove('hidden');
+            this.selectionTool?.refreshLazyModeVisibility?.();
+            return;
+        }
+
+        toolbar.classList.remove('hidden');
+        const deleteTools = document.getElementById('selection-delete-tools');
+        if (deleteTools) {
+            // #WDD-gpt 2026-06-13 - render ALL 隐藏选择工具，但保留 Delete Hidden 入口用于清理 normal 不可见点
+            deleteTools.classList.remove('hidden');
+            deleteTools.style.display = '';
+            deleteTools.setAttribute('aria-hidden', 'false');
+        }
+        for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-operation-tools', 'selection-mode-tools']) {
+            const group = document.getElementById(id);
+            if (!group) continue;
+            group.classList.add('hidden');
+            group.style.display = 'none';
+            group.setAttribute('aria-hidden', 'true');
+        }
+        document.getElementById('action-delete')?.classList.add('hidden');
+        document.getElementById('action-delete-hidden')?.classList.remove('hidden');
+        document.getElementById('action-help')?.classList.add('hidden');
+        if (this.selectionTool?.currentTool !== 'none') this.selectionTool.setTool('none');
+    }
+
+    private refreshDebugAllPointsEntity() {
+        if (this.gaussianRenderMode !== 3) return;
+        const source = this.splatEntity;
+        const frame = Math.floor(this.currentTime);
+        const sourcePositions = this.getDebugAllPointsPositions();
+        if (!source || !sourcePositions || sourcePositions.length < 3) {
+            this.destroyDebugAllPointsEntity();
+            return;
+        }
+
+        const renderData = this.buildDebugAllPointsRenderData(sourcePositions, frame);
+        if (renderData.positions.length < 3) {
+            this.destroyDebugAllPointsEntity();
+            this.setPrimarySplatVisibility(false);
+            this.setSelectionToolbarForRenderAll(true);
+            return;
+        }
+
+        const count = renderData.visibleCount + renderData.hiddenCount;
+        const needsRebuild = !this.debugAllPointsEntity
+            || this.debugAllPointsSourceEntity !== source
+            || this.debugAllPointsCount !== count;
+        const needsPositionUpdate = needsRebuild || this.debugAllPointsFrame !== frame;
+
+        if (needsRebuild) {
+            this.destroyDebugAllPointsEntity();
+
+            const mesh = new pc.Mesh(this.app.graphicsDevice);
+            mesh.setPositions(renderData.positions, 3);
+            mesh.setColors(renderData.colors, 4);
+            mesh.update(pc.PRIMITIVE_POINTS);
+
+            if (!this.debugAllPointsMaterial) {
+                // #WDD-gpt 2026-06-13 - 自定义 point shader 设置 gl_PointSize，让 ALL 点云比默认 1px 更容易看清
+                this.debugAllPointsMaterial = this.createDebugAllPointsMaterial();
+            }
+
+            const entity = new pc.Entity('DebugAllGaussianPoints');
+            entity.addComponent('render', {
+                meshInstances: [new pc.MeshInstance(mesh, this.debugAllPointsMaterial)]
+            });
+            (source.parent || this.app.root).addChild(entity);
+            this.debugAllPointsEntity = entity;
+            this.debugAllPointsSourceEntity = source;
+            this.debugAllPointsCount = count;
+            console.log(`[Debug All Points] Showing ${count.toLocaleString()} non-deleted splat centers without lifetime/opacity filtering.`);
+        } else {
+            const mesh = this.debugAllPointsEntity!.render?.meshInstances?.[0]?.mesh;
+            if (mesh) {
+                if (needsPositionUpdate) mesh.setPositions(renderData.positions, 3);
+                mesh.setColors(renderData.colors, 4);
+                mesh.update(pc.PRIMITIVE_POINTS);
+            }
+        }
+        this.debugAllPointsFrame = frame;
+
+        this.syncDebugAllPointsTransform(source);
+        this.debugAllPointsEntity!.enabled = true;
+        this.setPrimarySplatVisibility(false);
+        this.setSelectionToolbarForRenderAll(true);
+    }
+
     private applyGaussianRenderMode() {
+        if (this.gaussianRenderMode === 3) {
+            // #WDD-gpt 2026-06-13 - ALL 模式使用独立点云 entity，不再改主 GSplat shader，避免破坏 PLY4 normal
+            this.refreshDebugAllPointsEntity();
+            return;
+        }
+
+        if (this.debugAllPointsEntity) this.debugAllPointsEntity.enabled = false;
+        this.setSelectionToolbarForRenderAll(false);
+        this.setPrimarySplatVisibility(true);
+
         const apply = (ent: pc.Entity | null) => {
             if (!ent?.gsplat) return;
             const instance = (ent.gsplat as any).instance;
@@ -344,13 +741,15 @@ export class Viewer {
         const buttons = {
             normal: document.getElementById('render-mode-normal') as HTMLElement | null,
             center: document.getElementById('render-mode-center') as HTMLElement | null,
-            outline: document.getElementById('render-mode-outline') as HTMLElement | null
+            outline: document.getElementById('render-mode-outline') as HTMLElement | null,
+            all: document.getElementById('render-mode-all-points') as HTMLElement | null
         };
 
         const updateButtons = () => {
             this.updateToggleButton(buttons.normal, this.gaussianRenderMode === 0);
             this.updateToggleButton(buttons.center, this.gaussianRenderMode === 1);
             this.updateToggleButton(buttons.outline, this.gaussianRenderMode === 2);
+            this.updateToggleButton(buttons.all, this.gaussianRenderMode === 3);
         };
 
         buttons.normal?.addEventListener('click', () => {
@@ -365,6 +764,11 @@ export class Viewer {
         });
         buttons.outline?.addEventListener('click', () => {
             this.gaussianRenderMode = 2;
+            this.applyGaussianRenderMode();
+            updateButtons();
+        });
+        buttons.all?.addEventListener('click', () => {
+            this.gaussianRenderMode = 3;
             this.applyGaussianRenderMode();
             updateButtons();
         });
@@ -1320,6 +1724,9 @@ export class Viewer {
                     this.syncTimelineUI(Math.floor(this.currentTime), Math.max(0, Math.ceil(this.duration) - 1));
                 }
             }
+
+            // #WDD-gpt 2026-06-13 - ALL 点云模式按当前帧刷新位置，但不经过生命周期/透明度/删除过滤
+            this.refreshDebugAllPointsEntity();
         });
 
         // --- Samples Dropdown ---
@@ -1487,6 +1894,8 @@ export class Viewer {
     }
 
     private activeLoadingSequenceCleanup() {
+        // #WDD-gpt 2026-06-13 - 新序列加载前清理独立 ALL 点云，避免旧 debug mesh 残留
+        this.destroyDebugAllPointsEntity();
         if (this.splatEntity) {
             this.splatEntity.destroy();
             this.splatEntity = null;
@@ -2035,6 +2444,8 @@ export class Viewer {
                 this.sequenceActiveEntity = next;
                 this.splatEntity = next;
                 this.sequenceFrameIndex = frameIndex;
+                // #WDD-gpt 2026-06-13 - sequence 切帧后 ALL 点云刷新到当前激活帧，并继续隐藏原 GSplat
+                this.refreshDebugAllPointsEntity();
 
                 if (this.sequencePendingSwapFrame === frameIndex && this.sequencePendingSwapEntity === next) {
                     this.sequencePendingSwapFrame = null;
@@ -2684,6 +3095,8 @@ export class Viewer {
         }
 
         if (!options.preload) {
+            // #WDD-gpt 2026-06-13 - 单段加载替换模型前清理独立 ALL 点云
+            this.destroyDebugAllPointsEntity();
             if (this.splatEntity) this.splatEntity.destroy();
             this.presetManager.cameraPresets = [];
             this.presetManager.renderPresets();
@@ -3241,6 +3654,8 @@ export class Viewer {
 
         this.setSog4SequenceVisibleSegment(index);
         this.applySog4LocalTime(0);
+        // #WDD-gpt 2026-06-13 - 多段 PLY4 激活段变化后，ALL 点云跟随当前段刷新
+        this.refreshDebugAllPointsEntity();
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
         this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(this.sog4SequenceTotalFrames || this.duration) - 1));
         this.fileLoader.updateStats(segment.asset);
@@ -3310,6 +3725,8 @@ export class Viewer {
                 material.setParameter('uGlobalTotalFrames', this.duration);
             }
         }
+        // #WDD-gpt 2026-06-13 - 4D 动态排序应用帧后同步 ALL 点云位置
+        this.refreshDebugAllPointsEntity();
         this.syncTimelineUI(clamped, this.getTimelineMaxFrame());
     }
 
