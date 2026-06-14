@@ -257,6 +257,9 @@ export class SelectionTool {
         const ok = confirm(t('selection.confirmDeleteHidden', { count: targets.length.toLocaleString() }));
         if (!ok) return;
 
+        const cleanup = typeof this.viewer?.zeroInvisibleTrajectoryKeyframesForDeleteHidden === 'function'
+            ? this.viewer.zeroInvisibleTrajectoryKeyframesForDeleteHidden()
+            : null;
         const before = this.captureGlobalSelectionState();
         for (const i of targets) {
             const idx = i * 4;
@@ -275,6 +278,9 @@ export class SelectionTool {
         this.commitActiveSelectionState();
         if (typeof this.viewer?.refreshDebugAllPointsEntity === 'function') {
             this.viewer.refreshDebugAllPointsEntity();
+        }
+        if (cleanup && cleanup.clearedKeyframes > 0) {
+            console.log(`[Selection] Cleared ${cleanup.clearedKeyframes} invisible trajectory keyframes across ${cleanup.touchedPoints} points.`);
         }
         console.log(`[Selection] Deleted ${targets.length} never-visible normal points.`);
     }

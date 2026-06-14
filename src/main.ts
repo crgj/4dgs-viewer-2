@@ -100,6 +100,7 @@ export class Viewer {
 
     private is4DGS = false;
     private trajectoryData: Float32Array | null = null;
+    private trajectoryTexture: pc.Texture | null = null;
     private keyframes = 0;
     private xyzStride = 1;
     private rotTrajectoryData: Float32Array | null = null;
@@ -635,6 +636,97 @@ export class Viewer {
             if (flags[i] && !this.isDebugPointDeleted(i, deletedSet)) targets.push(i);
         }
         return targets;
+    }
+
+    private trajectoryKeyframeAffectsVisibleFrame(index: number, keyframe: number): boolean {
+        const opacityVisible = this.isDebugPointOpacityVisible(index);
+        if (!this.lifeTexData) return opacityVisible;
+        if (!opacityVisible) return false;
+
+        const stride = Math.max(1, this.xyzStride || 1);
+        const totalFrames = Math.max(1, Math.ceil(this.duration ?? this.totalFrames ?? 1));
+        const segmentMax = Math.max(0, totalFrames - 1);
+        const keyTime = keyframe * stride;
+        const start = Math.max(0, Math.ceil(keyTime - stride));
+        const end = Math.min(segmentMax, Math.floor(keyTime + stride));
+
+        for (let frame = start; frame <= end; frame++) {
+            if (this.isDebugPointLifetimeVisible(index, frame)) return true;
+        }
+        return false;
+    }
+
+    private refreshTrajectoryTextureFromData() {
+        if (!this.trajectoryTexture || !this.trajectoryData || !this.keyframes) return;
+        const count = Math.max(0, Number(this.getCurrentSplatData()?.numSplats || this.lastParsedData?.count || Math.floor((this.cachedPositions?.length || 0) / 3)));
+        if (count <= 0) return;
+
+        const texture = this.trajectoryTexture;
+        const traj = this.trajectoryData;
+        const K = this.keyframes;
+        const origIndices = this.originalIndices;
+        const dst = texture.lock();
+        const texData = new Float32Array(dst.buffer, dst.byteOffset, dst.byteLength / 4);
+
+        for (let i = 0; i < count; i++) {
+            const oidx = origIndices ? Math.round(origIndices[i]) : i;
+            const base = oidx * K * 3;
+            for (let k = 0; k < K; k++) {
+                const srcOff = base + k * 3;
+                const dstOff = (i * K + k) * 4;
+                texData[dstOff + 0] = traj[srcOff + 0] || 0;
+                texData[dstOff + 1] = traj[srcOff + 1] || 0;
+                texData[dstOff + 2] = traj[srcOff + 2] || 0;
+                texData[dstOff + 3] = 1.0;
+            }
+        }
+
+        texture.unlock();
+    }
+
+    public zeroInvisibleTrajectoryKeyframesForDeleteHidden(): { clearedKeyframes: number; touchedPoints: number } {
+        const trajectory = (this.lastParsedData?.trajectory as Float32Array | undefined) || this.trajectoryData;
+        const keyframes = Number(this.lastParsedData?.keyframes || this.keyframes || 0);
+        if (!trajectory || !keyframes) return { clearedKeyframes: 0, touchedPoints: 0 };
+
+        const sourcePositions = this.getDebugAllPointsPositions();
+        const count = sourcePositions ? Math.floor(sourcePositions.length / 3) : Math.max(0, Math.floor((this.selectionTool?.selectionData?.length || 0) / 4));
+        const originalIndexLimit = Math.floor(trajectory.length / (keyframes * 3));
+        const maxCount = Math.floor(this.lifeTexData ? Math.min(count, this.lifeTexData.length / 4) : count);
+        let clearedKeyframes = 0;
+        let touchedPoints = 0;
+
+        for (let i = 0; i < maxCount; i++) {
+            const oidx = this.originalIndices ? Math.round(this.originalIndices[i]) : i;
+            if (oidx < 0 || oidx >= originalIndexLimit) continue;
+
+            let touched = false;
+            const base = oidx * keyframes * 3;
+            for (let k = 0; k < keyframes; k++) {
+                if (this.trajectoryKeyframeAffectsVisibleFrame(i, k)) continue;
+                const off = base + k * 3;
+                if (trajectory[off] !== 0 || trajectory[off + 1] !== 0 || trajectory[off + 2] !== 0) {
+                    trajectory[off] = 0;
+                    trajectory[off + 1] = 0;
+                    trajectory[off + 2] = 0;
+                    clearedKeyframes++;
+                    touched = true;
+                }
+            }
+            if (touched) touchedPoints++;
+        }
+
+        if (clearedKeyframes > 0) {
+            // #WDD-gpt 2026-06-14 - Delete Hidden 同步清零不可见生命周期区域的轨迹关键点，保留可见插值需要的相邻关键点
+            this.trajectoryData = trajectory;
+            if (this.lastParsedData) this.lastParsedData.trajectory = trajectory;
+            this.debugNeverVisibleCache = null;
+            this.refreshTrajectoryTextureFromData();
+            this.lastUpdatedFrame = -1;
+            this.updateDynamicPositions(Math.floor(this.currentTime));
+        }
+
+        return { clearedKeyframes, touchedPoints };
     }
 
     public isDebugPointNormallyVisible(index: number, frame: number = Math.floor(this.currentTime)): boolean {
@@ -2776,6 +2868,7 @@ export class Viewer {
         this.isSequenceMode = true;
         this.is4DGS = false;
         this.trajectoryData = null;
+        this.trajectoryTexture = null;
         this.keyframes = 0;
         this.xyzStride = 1;
         this.rotTrajectoryData = null;
@@ -3757,6 +3850,7 @@ export class Viewer {
         this.splatEntity = null;
         this.is4DGS = false;
         this.trajectoryData = null;
+        this.trajectoryTexture = null;
         this.keyframes = 0;
         this.xyzStride = 1;
         this.rotTrajectoryData = null;
@@ -3903,6 +3997,7 @@ export class Viewer {
             this.lifeTexData = activeElement.runtime.lifeTexData;
             this.scalesTexData = activeElement.runtime.scalesTexData;
             this.trajectoryData = activeElement.runtime.trajectoryData;
+            this.trajectoryTexture = activeElement.runtime.trajectoryTexture;
             this.rotTrajectoryData = activeElement.runtime.rotTrajectoryData;
             this.dcTrajectoryData = activeElement.runtime.dcTrajectoryData;
             this.originalIndices = activeElement.runtime.originalIndices;
@@ -4280,6 +4375,7 @@ export class Viewer {
 
         // --- Trajectory Texture ---
         let trajectoryTexture: pc.Texture | null = null;
+        this.trajectoryTexture = null;
 
         // --- 4DGS Trajectory Texture ---
         if (parsed.trajectory) {
@@ -4322,6 +4418,7 @@ export class Viewer {
             }
 
             trajectoryTexture.unlock();
+            this.trajectoryTexture = trajectoryTexture;
         }
 
 
