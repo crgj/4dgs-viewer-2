@@ -242,19 +242,12 @@ export class SelectionTool {
 
     deleteNormallyHiddenPointsWithConfirm() {
         if (!this.selectionData) return;
-        const positions = this.getCachedPositions();
-        const count = positions ? Math.floor(positions.length / 3) : Math.floor(this.selectionData.length / 4);
-        const isNormallyVisible = typeof this.viewer?.isDebugPointNormallyVisible === 'function'
-            ? (index: number) => !!this.viewer.isDebugPointNormallyVisible(index)
-            : (_index: number) => true;
-
-        const targets: number[] = [];
-        const max = Math.min(count, Math.floor(this.selectionData.length / 4));
-        for (let i = 0; i < max; i++) {
-            const idx = i * 4;
-            if (this.selectionData[idx + 1] > 0) continue;
-            if (!isNormallyVisible(i)) targets.push(i);
-        }
+        const collected = typeof this.viewer?.collectDebugNeverVisiblePointIndices === 'function'
+            ? (this.viewer.collectDebugNeverVisiblePointIndices() as number[])
+            : [];
+        const max = Math.floor(this.selectionData.length / 4);
+        // #WDD-gpt 2026-06-14 - Delete Hidden 只删除全时段 normal 都不可见的真实存在点，不再删除当前帧暂时不可见点
+        const targets = collected.filter((i) => i >= 0 && i < max && this.selectionData![i * 4 + 1] <= 0);
 
         if (targets.length === 0) {
             alert(t('selection.noHiddenFound'));
@@ -275,7 +268,7 @@ export class SelectionTool {
             }
         }
 
-        // #WDD-gpt 2026-06-13 - 独立按钮批量删除 normal 不可见点，写入当前激活段选择纹理并保留 undo
+        // #WDD-gpt 2026-06-14 - 独立按钮批量删除全时段 normal 不可见点，写入当前激活段选择纹理并保留 undo
         this.pushUndoSnapshot(before);
         this.selectionScope = 'current';
         this.updateTexture();
@@ -283,7 +276,7 @@ export class SelectionTool {
         if (typeof this.viewer?.refreshDebugAllPointsEntity === 'function') {
             this.viewer.refreshDebugAllPointsEntity();
         }
-        console.log(`[Selection] Deleted ${targets.length} normally hidden points at current frame.`);
+        console.log(`[Selection] Deleted ${targets.length} never-visible normal points.`);
     }
 
     invertSelection(totalSplats: number) {
@@ -815,7 +808,7 @@ export class SelectionTool {
                     <!-- #WDD-gpt 2026-06-13 - Delete Hidden 属于 Edit 面板操作，不再放在 Smart 面板内部 -->
                     <button id="action-delete-hidden"
                         class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 text-pink-400 border border-pink-500/25 hover:bg-pink-500/15 has-tooltip"
-                        aria-label="Delete Hidden Points" data-tip="Delete normal hidden points" data-i18n-aria-label="selection.deleteHiddenAria" data-i18n-data-tip="selection.deleteHiddenTip">
+                        aria-label="Delete Hidden Points" data-tip="Delete points that never appear in normal render" data-i18n-aria-label="selection.deleteHiddenAria" data-i18n-data-tip="selection.deleteHiddenTip">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current" aria-hidden="true">
                             <path d="M12 6.5c2.76 0 5 2.24 5 5 0 .66-.13 1.29-.36 1.87l3.18 3.18C21.17 15.35 22.23 13.78 23 11.5 21.27 6.89 16.89 4 12 4c-1.4 0-2.74.24-3.98.68l2.35 2.35c.52-.34 1.13-.53 1.63-.53zM2.28 3 1 4.27l2.42 2.42C2.37 7.85 1.55 9.43 1 11.5 2.73 16.11 7.11 19 12 19c1.56 0 3.04-.3 4.38-.84L19.73 21 21 19.73 2.28 3zM7.53 10.8l1.55 1.55c.3 1.35 1.37 2.42 2.72 2.72l1.55 1.55c-.43.15-.88.23-1.35.23-2.76 0-5-2.24-5-5 0-.47.08-.92.23-1.35z" />
                         </svg>

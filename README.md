@@ -83,7 +83,7 @@
 ### 🎭 场景与视觉
 - Grid / Axes 开关
 - Gaussian Render 模式切换：`NORMAL / CENTER / OUTLINE / ALL`
-- `ALL` 调试点云：无视生命周期和透明度显示未删除点，青色表示 normal 可见，粉色表示 normal 不可见
+- `ALL` 调试点云：无视生命周期和透明度显示未删除点，青色表示 normal 至少有一帧可见，红色表示所有帧 normal 都不可见
 - 粒子过渡特效
 - Dark / Light 主题切换
 - Post Processing: Exposure / Brightness / Contrast
@@ -142,13 +142,13 @@
 
 #### Render ALL 调试点云
 - `RENDER` 面板新增 `ALL` 模式，使用独立 `DebugAllGaussianPoints` entity 绘制点云，不改主 GSplat shader。
-- `ALL` 模式显示当前激活模型/段中所有未删除点，忽略生命周期和 opacity，便于检查数据中存在但 normal 模式不可见的点。
+- `ALL` 模式显示当前激活模型/段中所有未删除点，忽略当前帧生命周期和 opacity，便于检查数据中真实存在但所有帧 normal 都不可见的点。
 - 颜色约定：
-  - 青色：normal 模式下预计可见的点。
-  - 粉色：normal 模式下不可见但尚未删除的点。
+  - 青色：normal 模式下至少有一帧可见的点。
+  - 红色：真实存在但所有帧 normal 都不可见且尚未删除的点。
   - 已删除点：不绘制。
 - 进入 `ALL` 时自动切到左侧 `Edit` 面板，普通编辑按钮会禁用，仅 `Delete Hidden` 保持可用；切回 `NORMAL / CENTER / OUTLINE` 后恢复原 UI。
-- `Delete Hidden` 会先弹出确认，再将当前帧 normal 不可见且尚未删除的点写入 deleted 标记；执行后 `ALL` 点云立即刷新，被删除点不再显示。
+- `Delete Hidden` 会先弹出确认，再将真实存在但所有帧 normal 都不可见且尚未删除的点写入 deleted 标记；执行后 `ALL` 点云立即刷新，被删除点不再显示。
 - 左侧工具区改为面板级两个 tab：`Smart` 放置自动对齐、统计和圆柱选择；`Edit` 放置选择、删除和隐藏点清理等操作。
 
 ### 2026-05-16 (v2.18.1)
@@ -406,8 +406,8 @@ npm run build
 
 #### Render ALL 与隐藏点清理
 - 右侧 `RENDER` 面板的 `ALL` 按钮会切换到独立调试点云，不使用 normal 的生命周期和透明度过滤。
-- `ALL` 只绘制未删除点：青色表示 normal 下可见，粉色表示 normal 下不可见。
-- 切到左侧工具区的 `Edit` tab，点击 `Delete Hidden` 后会确认删除当前帧 normal 不可见且尚未删除的点；确认后这些点会写入 deleted 标记，导出时也会被过滤。
+- `ALL` 只绘制未删除点：青色表示 normal 下至少有一帧可见，红色表示所有帧 normal 都不可见。
+- 切到左侧工具区的 `Edit` tab，点击 `Delete Hidden` 后会确认删除真实存在但所有帧 normal 都不可见且尚未删除的点；确认后这些点会写入 deleted 标记，导出时也会被过滤。
 - 在 `ALL` 模式下会自动切到 `Edit` tab，普通编辑按钮禁用，仅 `Delete Hidden` 按钮保持可用。
 - 删除后 `ALL` 点云会立即刷新，已删除点不再显示。
 

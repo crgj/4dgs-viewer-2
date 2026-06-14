@@ -35,6 +35,14 @@ import { ViewerSceneManager } from './viewer/viewer-scene-manager';
 import { ViewerFileInfoPanel } from './viewer/viewer-file-info-panel';
 import { applyI18n, bindLanguageToggle } from './i18n';
 
+type DebugNeverVisibleCache = {
+    count: number;
+    durationFrames: number;
+    lifeTexData: Float32Array | null;
+    opacity: Float32Array | null;
+    flags: Uint8Array;
+};
+
 export class Viewer {
     app: pc.Application;
     camera: pc.Entity | null = null;
@@ -88,6 +96,7 @@ export class Viewer {
     private debugAllPointsMaterial: pc.Material | null = null;
     private debugAllPointsColors: Float32Array | null = null;
     private readonly debugAllPointsSize = 6.0;
+    private debugNeverVisibleCache: DebugNeverVisibleCache | null = null;
 
     private is4DGS = false;
     private trajectoryData: Float32Array | null = null;
@@ -342,6 +351,7 @@ export class Viewer {
         this.debugAllPointsCount = 0;
         this.debugAllPointsFrame = -1;
         this.debugAllPointsColors = null;
+        this.debugNeverVisibleCache = null;
     }
 
     private setPrimarySplatVisibility(visible: boolean) {
@@ -540,23 +550,103 @@ export class Viewer {
         return (left * right) > 0.01;
     }
 
-    public isDebugPointNormallyVisible(index: number, frame: number = Math.floor(this.currentTime)): boolean {
-        const opacity = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null;
-        if (this.isDebugPointDeleted(index)) return false;
-        if (!this.isDebugPointLifetimeVisible(index, frame)) return false;
+    private isDebugPointOpacityVisible(index: number, opacity: Float32Array | null = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null): boolean {
+        if (!opacity || index >= opacity.length) return true;
+        const raw = opacity[index];
+        const alpha = raw >= 0 && raw <= 1 ? raw : 1 / (1 + Math.exp(-raw));
+        return alpha > (1 / 255);
+    }
 
-        if (opacity && index < opacity.length) {
-            const raw = opacity[index];
-            const alpha = raw >= 0 && raw <= 1 ? raw : 1 / (1 + Math.exp(-raw));
-            if (alpha <= (1 / 255)) return false;
+    private isDebugPointLifetimeEverVisible(index: number, durationFrames: number): boolean {
+        const lifeTexData = this.lifeTexData;
+        if (!lifeTexData) return true;
+
+        const idx = index * 4;
+        if (idx + 2 >= lifeTexData.length) return true;
+
+        const mu = lifeTexData[idx + 0];
+        const w = lifeTexData[idx + 1];
+        const k = lifeTexData[idx + 2];
+        const segmentMax = Math.max(0, durationFrames - 1);
+        const lifeStart = mu - w;
+        const lifeEnd = mu + w;
+        if (lifeEnd <= 0 || lifeStart >= segmentMax || lifeEnd <= lifeStart || !Number.isFinite(k)) return false;
+
+        const candidates = new Set<number>();
+        const addCandidate = (value: number) => {
+            if (!Number.isFinite(value)) return;
+            const clamped = Math.max(0, Math.min(segmentMax, value));
+            candidates.add(Math.floor(clamped));
+            candidates.add(Math.ceil(clamped));
+        };
+        addCandidate(mu);
+        addCandidate(lifeStart);
+        addCandidate(lifeEnd);
+        addCandidate(0);
+        addCandidate(segmentMax);
+
+        for (const frame of candidates) {
+            if (this.isDebugPointLifetimeVisible(index, frame)) return true;
+        }
+        return false;
+    }
+
+    private getDebugNeverVisibleFlags(count: number): Uint8Array {
+        const opacity = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null;
+        const durationFrames = Math.max(1, Math.ceil(this.duration ?? this.totalFrames ?? 1));
+        const cached = this.debugNeverVisibleCache;
+        if (
+            cached &&
+            cached.count === count &&
+            cached.durationFrames === durationFrames &&
+            cached.lifeTexData === this.lifeTexData &&
+            cached.opacity === opacity
+        ) {
+            return cached.flags;
         }
 
-        return true;
+        const flags = new Uint8Array(count);
+        // #WDD-gpt 2026-06-14 - Render ALL 红色/删除隐藏点必须表示全时段 normal 都不可见，而不是当前帧不可见
+        for (let i = 0; i < count; i++) {
+            if (!this.isDebugPointOpacityVisible(i, opacity) || !this.isDebugPointLifetimeEverVisible(i, durationFrames)) {
+                flags[i] = 1;
+            }
+        }
+        this.debugNeverVisibleCache = { count, durationFrames, lifeTexData: this.lifeTexData, opacity, flags };
+        return flags;
+    }
+
+    public isDebugPointNeverNormallyVisible(index: number): boolean {
+        if (this.isDebugPointDeleted(index)) return false;
+        const sourcePositions = this.getDebugAllPointsPositions();
+        const count = sourcePositions ? Math.floor(sourcePositions.length / 3) : Math.max(0, Math.floor((this.selectionTool?.selectionData?.length || 0) / 4));
+        if (index < 0 || index >= count) return false;
+        return this.getDebugNeverVisibleFlags(count)[index] > 0;
+    }
+
+    public collectDebugNeverVisiblePointIndices(): number[] {
+        const sourcePositions = this.getDebugAllPointsPositions();
+        const count = sourcePositions ? Math.floor(sourcePositions.length / 3) : Math.max(0, Math.floor((this.selectionTool?.selectionData?.length || 0) / 4));
+        if (count <= 0) return [];
+        const deletedSet = this.getDebugDeletedIndexSet();
+        const flags = this.getDebugNeverVisibleFlags(count);
+        const targets: number[] = [];
+        for (let i = 0; i < count; i++) {
+            if (flags[i] && !this.isDebugPointDeleted(i, deletedSet)) targets.push(i);
+        }
+        return targets;
+    }
+
+    public isDebugPointNormallyVisible(index: number, frame: number = Math.floor(this.currentTime)): boolean {
+        if (this.isDebugPointDeleted(index)) return false;
+        if (!this.isDebugPointLifetimeVisible(index, frame)) return false;
+        return this.isDebugPointOpacityVisible(index);
     }
 
     private buildDebugAllPointsRenderData(sourcePositions: Float32Array, frame: number): { positions: Float32Array; colors: Float32Array; sourceCount: number; visibleCount: number; hiddenCount: number; deletedCount: number } {
         const sourceCount = Math.floor(sourcePositions.length / 3);
         const deletedSet = this.getDebugDeletedIndexSet();
+        const neverVisibleFlags = this.getDebugNeverVisibleFlags(sourceCount);
         let visibleCount = 0;
         let hiddenCount = 0;
         let deletedCount = 0;
@@ -567,9 +657,8 @@ export class Viewer {
                 deletedCount++;
                 continue;
             }
-            const visible = this.isDebugPointNormallyVisible(i, frame);
-            if (visible) visibleCount++;
-            else hiddenCount++;
+            if (neverVisibleFlags[i]) hiddenCount++;
+            else visibleCount++;
         }
 
         const outputCount = visibleCount + hiddenCount;
@@ -581,7 +670,7 @@ export class Viewer {
             // #WDD-gpt 2026-06-13 - render ALL 不再绘制已删除点；删除 hidden 后需要从 debug mesh 中消失
             if (this.isDebugPointDeleted(i, deletedSet)) continue;
 
-            const visible = this.isDebugPointNormallyVisible(i, frame);
+            const neverVisible = neverVisibleFlags[i] > 0;
             const src = i * 3;
             const dst = outPoint * 3;
             positions[dst + 0] = sourcePositions[src + 0];
@@ -589,15 +678,15 @@ export class Viewer {
             positions[dst + 2] = sourcePositions[src + 2];
 
             const out = outPoint * 4;
-            if (visible) {
+            if (!neverVisible) {
                 colors[out + 0] = 0.0;
                 colors[out + 1] = 1.0;
                 colors[out + 2] = 0.9;
                 colors[out + 3] = 1.0;
             } else {
                 colors[out + 0] = 1.0;
-                colors[out + 1] = 0.18;
-                colors[out + 2] = 0.55;
+                colors[out + 1] = 0.08;
+                colors[out + 2] = 0.06;
                 colors[out + 3] = 1.0;
             }
             outPoint++;
@@ -605,7 +694,7 @@ export class Viewer {
 
         this.debugAllPointsColors = colors;
         if (hiddenCount > 0 || deletedCount > 0) {
-            console.log(`[Debug All Points] ${hiddenCount.toLocaleString()} hidden + ${deletedCount.toLocaleString()} deleted / ${sourceCount.toLocaleString()} source points at frame ${frame}.`);
+            console.log(`[Debug All Points] ${hiddenCount.toLocaleString()} never-visible + ${deletedCount.toLocaleString()} deleted / ${sourceCount.toLocaleString()} source points.`);
         }
         return { positions, colors, sourceCount, visibleCount, hiddenCount, deletedCount };
     }
