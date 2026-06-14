@@ -1,6 +1,6 @@
 [
   {
-    "name": "Charming Girl",
+    "name": "OLD::Charming Girl",
     "url": "./sog4/少女.sog4",
     "img": "./images/少女.png",
     "model_id": "RK600",
@@ -12,7 +12,7 @@
     "size": "22 MB"
   },
   {
-    "name": "Laodan",
+    "name": "OLD::Laodan",
     "url": "./sog4/老旦.sog4",
     "img": "./images/老旦.png",
     "model_id": "DLH-770",
@@ -24,19 +24,7 @@
     "size": "81 MB"
   },
   {
-    "name": "Erhu Performer",
-    "url": "./sog4/二胡.sog4",
-    "img": "./images/二胡起手.png",
-    "model_id": "EXP-09",
-    "status": "ACTIVE",
-    "type": "MUSICIAN",
-    "dynamics": "92.8%",
-    "skybox": "adams_place_bridge_2k",
-    "duration": "10.0s",
-    "size": "21 MB"
-  },
-  {
-    "name": "Laodan Practitioner",
+    "name": "OLD::Laodan Practitioner",
     "url": "./sog4/老旦练习.sog4",
     "img": "./images/老旦练习.png",
     "model_id": "GUI-102",
@@ -48,7 +36,7 @@
     "size": "57 MB"
   },
   {
-    "name": "Mouse Surgery",
+    "name": "OLD::Mouse Surgery",
     "url": "./sog4/小鼠流血.sog4",
     "img": "./images/小鼠流血.png",
     "model_id": "ED-U10",
@@ -58,5 +46,29 @@
     "skybox": "wooden_motel_2k",
     "duration": "14.5s",
     "size": "37 MB"
+  },
+  {
+    "name": "New::Erhu",
+    "url": "./sog4/erhu.sog4",
+    "img": "./images/二胡起手.png",
+    "model_id": "EXP-09",
+    "status": "ACTIVE",
+    "type": "MUSICIAN",
+    "dynamics": "92.8%",
+    "skybox": "adams_place_bridge_2k",
+    "duration": "10.0s",
+    "size": "21 MB"
+  },
+  {
+    "name": "New::Coser",
+    "url": "./sog4/coser.sog4",
+    "img": "./images/二胡起手.png",
+    "model_id": "EXP-09",
+    "status": "ACTIVE",
+    "type": "MUSICIAN",
+    "dynamics": "92.8%",
+    "skybox": "adams_place_bridge_2k",
+    "duration": "10.0s",
+    "size": "21 MB"
   }
 ]
