@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-i18n-title="batch.title">
 
 <head>
     <meta charset="UTF-8" />
@@ -601,9 +601,10 @@
             }
         }
     </style>
-  <script type="module" crossorigin src="./assets/batch-convert-DI1c8013.js"></script>
+  <script type="module" crossorigin src="./assets/batch-convert-B_aDmLkl.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/sog4-loader-BZ0rWGTW.js">
-  <link rel="stylesheet" crossorigin href="./assets/style-CfIKFfrR.css">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-BugeL31a.js">
+  <link rel="stylesheet" crossorigin href="./assets/i18n-BrvUls5l.css">
 </head>
 
 <body class="batch-page text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -614,13 +615,16 @@
                     <div class="batch-hero-heading">
                         <div class="batch-brand-row">
                             <div class="batch-brand-name">TrueSplats<span>.ai</span></div>
-                            <span class="batch-version">Batch Converter</span>
+                            <span class="batch-version" data-i18n="batch.version">Batch Converter</span>
                         </div>
 
                     </div>
                 </div>
                 <div class="batch-hero-actions">
-                    <a href="./index.html" class="batch-back-link" aria-label="Back to viewer" title="Back to viewer">
+                    <button id="language-toggle" class="batch-button is-secondary" data-i18n="language.toggle"
+                        data-i18n-title="language.tip" title="Switch Language">中文</button>
+                    <a href="./index.html" class="batch-back-link" aria-label="Back to viewer" title="Back to viewer"
+                        data-i18n-aria-label="batch.back" data-i18n-title="batch.back">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                             <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
                                 stroke-linejoin="round" />
@@ -635,31 +639,31 @@
                 <div class="batch-panel batch-panel--input">
                     <div class="flex items-center justify-between gap-3">
                         <div>
-                            <div class="batch-section-title">Input Source</div>
+                            <div class="batch-section-title" data-i18n="batch.inputSource">Input Source</div>
                         </div>
                         <div class="flex items-center gap-2">
                             <div
                                 class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
                                 <input id="format-sog4" name="export-format" type="radio" value="sog4" checked
                                     class="accent-emerald-500" />
-                                <label for="format-sog4" class="cursor-pointer">SOG4 4DSG</label>
+                                <label for="format-sog4" class="cursor-pointer" data-i18n="batch.format.sog4">SOG4 4DSG</label>
                             </div>
                             <div
                                 class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
                                 <input id="format-plyseq" name="export-format" type="radio" value="plyseq"
                                     class="accent-blue-500" />
-                                <label for="format-plyseq" class="cursor-pointer">PLY Sequence</label>
+                                <label for="format-plyseq" class="cursor-pointer" data-i18n="batch.format.plySeq">PLY Sequence</label>
                             </div>
                             <div
                                 class="flex items-center gap-1 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5">
                                 <input id="format-sog4seq" name="export-format" type="radio" value="sog4seq"
                                     class="accent-cyan-500" />
-                                <label for="format-sog4seq" class="cursor-pointer">SOG4 Sequence</label>
+                                <label for="format-sog4seq" class="cursor-pointer" data-i18n="batch.format.sog4Seq">SOG4 Sequence</label>
                             </div>
                             <label
                                 class=" hidden flex items-center gap-2 text-[11px] ui-text-secondary rounded-xl px-3 py-2 border border-white/10 bg-white/5 ml-1">
                                 <input id="auto-download-toggle" type="checkbox" checked />
-                                Auto download
+                                <span data-i18n="batch.autoDownload">Auto download</span>
                             </label>
                         </div>
                     </div>
@@ -677,13 +681,15 @@
                                 </svg>
                             </div>
                             <div>
-                                <div class="text-[11px] font-bold tracking-[0.16rem] uppercase ui-text-primary">Drop
-                                    PLY4 / SOG Files Here</div>
+                                <div class="text-[11px] font-bold tracking-[0.16rem] uppercase ui-text-primary"
+                                    data-i18n="batch.drop">Drop PLY4 / SOG Files Here</div>
                             </div>
                         </div>
                         <div class="batch-button-row">
-                            <button id="batch-pick-files" class="batch-button is-secondary">Choose Files</button>
-                            <button id="batch-pick-folder" class="batch-button is-secondary">Choose Folder</button>
+                            <button id="batch-pick-files" class="batch-button is-secondary"
+                                data-i18n="batch.chooseFiles">Choose Files</button>
+                            <button id="batch-pick-folder" class="batch-button is-secondary"
+                                data-i18n="batch.chooseFolder">Choose Folder</button>
                         </div>
 
                         <input id="batch-file-input" type="file" class="hidden" accept=".ply4,.sog,.sog4" multiple />
@@ -692,33 +698,39 @@
                     </div>
 
                     <div class="batch-button-row batch-button-row--footer">
-                        <button id="batch-convert-all" class="batch-button is-primary">Convert Entire Queue</button>
-                        <button id="batch-clear" class="batch-button is-secondary">Clear Queue</button>
+                        <button id="batch-convert-all" class="batch-button is-primary"
+                            data-i18n="batch.convertAll">Convert Entire Queue</button>
+                        <button id="batch-clear" class="batch-button is-secondary"
+                            data-i18n="batch.clearQueue">Clear Queue</button>
                     </div>
                 </div>
 
                 <div class="batch-panel">
-                    <div class="batch-section-title">Batch Summary</div>
+                    <div class="batch-section-title" data-i18n="batch.summary">Batch Summary</div>
                     <div class="batch-stat-grid mt-4 mb-4">
                         <div class="batch-stat-card">
-                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Queued Files</div>
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary"
+                                data-i18n="batch.queuedFiles">Queued Files</div>
                             <div id="summary-queued" class="text-2xl font-semibold mt-2">0</div>
                         </div>
                         <div class="batch-stat-card">
-                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Completed</div>
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary"
+                                data-i18n="batch.completed">Completed</div>
                             <div id="summary-done" class="text-2xl font-semibold mt-2">0</div>
                         </div>
                         <div class="batch-stat-card">
-                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Failed</div>
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary"
+                                data-i18n="batch.failed">Failed</div>
                             <div id="summary-error" class="text-2xl font-semibold mt-2">0</div>
                         </div>
                         <div class="batch-stat-card">
-                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary">Output Size</div>
+                            <div class="text-[10px] tracking-[0.16rem] uppercase ui-text-secondary"
+                                data-i18n="batch.outputSize">Output Size</div>
                             <div id="summary-size" class="text-2xl font-semibold mt-2">0 B</div>
                         </div>
                     </div>
                     <div class="flex items-center justify-between gap-3 text-[11px] ui-text-secondary mb-2">
-                        <span>Batch overall progress</span>
+                        <span data-i18n="batch.overallProgress">Batch overall progress</span>
                         <span id="summary-progress-label">0%</span>
                     </div>
                     <div class="batch-progress-track">
@@ -730,11 +742,11 @@
             <section class="batch-panel batch-queue-panel">
                 <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
-                        <div class="batch-section-title">Queue Detail</div>
+                        <div class="batch-section-title" data-i18n="batch.queueDetail">Queue Detail</div>
                     </div>
                 </div>
                 <div id="batch-task-list" class="batch-task-list">
-                    <div class="batch-empty">No files queued yet.</div>
+                    <div class="batch-empty" data-i18n="batch.emptyTitle">No files queued yet.</div>
                 </div>
             </section>
         </div>

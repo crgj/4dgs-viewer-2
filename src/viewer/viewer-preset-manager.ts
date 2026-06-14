@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
 import type { Viewer } from '../main';
 import type { CameraPreset } from '../types/viewer';
+import { applyI18n, t } from '../i18n';
 
 /**
  * #WDD 2026-04-20: Extracted from Viewer to reduce main.ts size.
@@ -93,14 +94,15 @@ export class ViewerPresetManager {
                     </svg>
                 </div>
                 <div class="flex items-center gap-1">
-                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text" data-tip="Text">
+                    <button class="add-text p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:ui-text-highlight transition-all has-tooltip" aria-label="Add Text" data-tip="Text" data-i18n-aria-label="preset.text" data-i18n-data-tip="preset.text">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                     </button>
-                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Preset" data-tip="Delete">
+                    <button class="delete-preset p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Preset" data-tip="Delete" data-i18n-aria-label="preset.delete" data-i18n-data-tip="preset.delete">
                         <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                     </button>
                 </div>
             `;
+            applyI18n(mainRow);
 
             // --- Text Objects List for this preset #WDD 2026-01-15 ---
             const textObjectsList = document.createElement('div');
@@ -110,11 +112,12 @@ export class ViewerPresetManager {
                     const textItem = document.createElement('div');
                     textItem.className = 'flex items-center justify-between group/text hover:bg-white/5 rounded px-1.5 py-0.5 cursor-pointer';
                     textItem.innerHTML = `
-                        <span class="text-[8px] opacity-40 group-hover/text:opacity-100 truncate flex-1">${textObj.content || '(Empty)'}</span>
-                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Text" data-tip="Delete">
+                        <span class="text-[8px] opacity-40 group-hover/text:opacity-100 truncate flex-1">${textObj.content || t('preset.empty')}</span>
+                        <button class="delete-text p-0.5 opacity-0 group-hover/text:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all has-tooltip" aria-label="Delete Text" data-tip="Delete" data-i18n-aria-label="preset.delete" data-i18n-data-tip="preset.delete">
                              <svg viewBox="0 0 24 24" class="w-2.5 h-2.5 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </button>
                     `;
+                    applyI18n(textItem);
                     textItem.addEventListener('click', (e) => {
                         e.stopPropagation();
                         this.openTextEdit(textObj, index);

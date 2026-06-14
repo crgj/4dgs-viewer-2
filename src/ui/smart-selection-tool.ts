@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
 import type { Viewer } from '../main';
 import { autoAlign4DGSScene, type AutoGroundAlignmentResult, type GaussianPoint, type Vec3 } from '../algorithms/autoGroundAlignment';
+import { applyI18n, t } from '../i18n';
 
 type ViewerAnalysisSource = {
     name?: string;
@@ -69,6 +70,7 @@ export class SmartSelectionTool {
         }
         this.showLeftPanelTab('smart');
         this.createProgressOverlay();
+        applyI18n(document);
     }
 
     private showLeftPanelTab(tabName: string) {
@@ -286,7 +288,10 @@ export class SmartSelectionTool {
         this.cylinderControlsEl?.classList.toggle('hidden', !visible);
         this.cylinderToggleEl?.classList.toggle('active', visible);
         const label = this.cylinderToggleEl?.querySelector('span');
-        if (label) label.textContent = visible ? 'Hide Cylinder' : 'Show Cylinder';
+        if (label) {
+            label.dataset.i18n = visible ? 'smart.hideCylinder' : 'smart.showCylinder';
+            label.textContent = t(label.dataset.i18n);
+        }
         if (!visible) {
             if (this.cylinderPreview) this.cylinderPreview.enabled = false;
             if (clearSelectionOnHide) this.viewer.selectionTool?.clearSelection();
@@ -746,15 +751,16 @@ export class SmartSelectionTool {
         overlay.className = 'smart-align-progress-overlay hidden';
         overlay.innerHTML = `
             <div class="smart-align-progress-card">
-                <div id="smart-align-progress-title" class="smart-align-progress-title">Auto Ground Alignment</div>
-                <div id="smart-align-progress-stage" class="smart-align-progress-stage">Preparing</div>
+                <div id="smart-align-progress-title" class="smart-align-progress-title" data-i18n="smart.progressTitle">Auto Ground Alignment</div>
+                <div id="smart-align-progress-stage" class="smart-align-progress-stage" data-i18n="smart.progressPreparing">Preparing</div>
                 <div class="smart-align-progress-track">
                     <div id="smart-align-progress-bar" class="smart-align-progress-bar"></div>
                 </div>
-                <div id="smart-align-progress-detail" class="smart-align-progress-detail">Sampling points</div>
+                <div id="smart-align-progress-detail" class="smart-align-progress-detail" data-i18n="smart.progressSampling">Sampling points</div>
             </div>
         `;
         document.body.appendChild(overlay);
+        applyI18n(overlay);
         this.progressOverlay = overlay;
         this.progressBar = document.getElementById('smart-align-progress-bar');
         this.progressStage = document.getElementById('smart-align-progress-stage');

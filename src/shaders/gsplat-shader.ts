@@ -802,8 +802,8 @@ export const splatMainPS = `
             return;
         }
 
-        // Compute max A based on actual finalScale (texCoord = vertex_position * finalScale / 2)
-        mediump float maxA = (vFinalScale / 2.0) * (vFinalScale / 2.0);
+        // #WDD-gpt 2026-06-13 - 轮廓模式使用现有 splat quad 的完整半径显示 2 倍轮廓，避免在 VS 引入 render-mode uniform 影响主渲染
+        mediump float maxA = vFinalScale * vFinalScale;
         if (A > maxA) {
             discard;
         }

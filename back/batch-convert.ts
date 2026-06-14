@@ -2,6 +2,7 @@ import { PLY4Loader, type PLY4LoadProgressMeta } from '../src/utils/ply4-loader'
 import { SOG4Loader } from '../src/utils/sog4-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../src/utils/sog4-encoder';
 import { PLYEncoder } from '../src/utils/ply-encoder';
+import { applyI18n, bindLanguageToggle, onLanguageChange, t } from '../src/i18n';
 // #WDD 2026-04-19 弃用4DGS格式序列导出，改为导出为独立的标准PLY单帧文件，以便于外部的3DGS查看器兼容。
 import { exportPLYSequence } from '../src/utils/ply-sequence-exporter';
 import JSZip from 'jszip';
@@ -9,9 +10,12 @@ import JSZip from 'jszip';
 type TaskStatus = 'queued' | 'preparing' | 'loading' | 'encoding' | 'downloading' | 'done' | 'error';
 type StepStateKind = 'pending' | 'active' | 'done' | 'error';
 type StepKey = 'prepare' | 'load' | 'encode' | 'download';
+type TranslationVars = Record<string, string | number>;
 
 type BatchStep = {
     label: string;
+    labelKey: string;
+    shortKey: string;
     pct: number;
     state: StepStateKind;
     detail: string;
@@ -27,6 +31,8 @@ type BatchTask = {
     status: TaskStatus;
     overallPct: number;
     summary: string;
+    summaryKey?: string;
+    summaryVars?: TranslationVars;
     error?: string;
     outputUrl?: string;
     outputName?: string;
@@ -50,11 +56,13 @@ const STEP_WEIGHTS: Record<StepKey, number> = {
     download: 5
 };
 
-const createStep = (label: string): BatchStep => ({
-    label,
+const createStep = (labelKey: string, shortKey: string): BatchStep => ({
+    label: t(labelKey),
+    labelKey,
+    shortKey,
     pct: 0,
     state: 'pending',
-    detail: 'Pending',
+    detail: t('batch.step.pending'),
     childLabel: '',
     childPct: 0,
     grandchildLabel: '',
@@ -125,8 +133,11 @@ class BatchConvertApp {
     private readonly logThrottle = new Map<string, { ts: number; pct: number }>();
 
     constructor() {
+        bindLanguageToggle(document.getElementById('language-toggle'));
+        applyI18n();
         this.bindEvents();
         this.render();
+        onLanguageChange(() => this.render());
     }
 
     private requestRender() {
@@ -180,6 +191,17 @@ class BatchConvertApp {
             window.clearInterval(task.encodeHeartbeat);
             task.encodeHeartbeat = undefined;
         }
+    }
+
+    private setTaskSummary(task: BatchTask, key: string, vars?: TranslationVars) {
+        task.summaryKey = key;
+        task.summaryVars = vars;
+        task.summary = t(key, vars);
+    }
+
+    private clearTaskSummaryKey(task: BatchTask) {
+        task.summaryKey = undefined;
+        task.summaryVars = undefined;
     }
 
     private releaseParsedData(parsed: any) {
@@ -252,7 +274,7 @@ class BatchConvertApp {
             if (action === 'retry' && !this.isConverting) {
                 task.status = 'queued';
                 task.error = undefined;
-                task.summary = 'Queued for retry';
+                this.setTaskSummary(task, 'batch.summary.retry');
                 task.logs = [];
                 task.steps = this.createSteps();
                 this.render();
@@ -268,14 +290,17 @@ class BatchConvertApp {
 
     private createSteps(): Record<StepKey, BatchStep> {
         const format = this.getExportFormat();
-        const encodeLabel = format === 'plyseq'
-            ? 'Export PLY Sequence'
-            : (format === 'sog4seq' ? 'Export SOG4 Sequence' : 'Encode SOG4');
+        const encodeKey = format === 'plyseq'
+            ? 'batch.step.exportPlySeq'
+            : (format === 'sog4seq' ? 'batch.step.exportSog4Seq' : 'batch.step.encodeSog4');
+        const encodeShortKey = format === 'plyseq'
+            ? 'batch.stepShort.exportPlySeq'
+            : (format === 'sog4seq' ? 'batch.stepShort.exportSog4Seq' : 'batch.stepShort.encodeSog4');
         return {
-            prepare: createStep('Prepare Queue Item'),
-            load: createStep('Load Source'),
-            encode: createStep(encodeLabel),
-            download: createStep('Download Output')
+            prepare: createStep('batch.step.prepare', 'batch.stepShort.prepare'),
+            load: createStep('batch.step.load', 'batch.stepShort.load'),
+            encode: createStep(encodeKey, encodeShortKey),
+            download: createStep('batch.step.download', 'batch.stepShort.download')
         };
     }
 
@@ -296,8 +321,10 @@ class BatchConvertApp {
                 file,
                 status: 'queued',
                 overallPct: 0,
-                summary: `${file.name} queued`,
-                logs: [`Queued ${file.name} (${formatBytes(file.size)})`],
+                summary: t('batch.summary.queued', { name: file.name }),
+                summaryKey: 'batch.summary.queued',
+                summaryVars: { name: file.name },
+                logs: [t('batch.log.queued', { name: file.name, size: formatBytes(file.size) })],
                 steps: this.createSteps()
             });
         }
@@ -397,17 +424,18 @@ class BatchConvertApp {
     private async convertTask(task: BatchTask, baseFrameOffset: number = 0, sequenceIndex: number = 0) {
         let parsed: any = null;
         try {
+            this.clearTaskSummaryKey(task);
             task.status = 'preparing';
             this.setStep(task, 'prepare', {
                 state: 'active',
                 pct: 15,
-                detail: 'Preparing loader and encoder',
-                childLabel: 'Queue Preparation',
+                detail: t('batch.detail.preparing'),
+                childLabel: t('batch.step.queuePreparation'),
                 childPct: 15,
                 grandchildLabel: `${task.file.name} • ${formatBytes(task.file.size)}`,
                 grandchildPct: 15
             });
-            this.pushLog(task, 'Preparing conversion runtime');
+            this.pushLog(task, t('batch.log.preparingRuntime'));
             this.requestRender();
 
             const inputKind = getInputKind(task.file);
@@ -416,10 +444,10 @@ class BatchConvertApp {
             this.setStep(task, 'prepare', {
                 state: 'done',
                 pct: 100,
-                detail: 'Queue item ready',
-                childLabel: 'Queue Preparation',
+                detail: t('batch.detail.ready'),
+                childLabel: t('batch.step.queuePreparation'),
                 childPct: 100,
-                grandchildLabel: `Waiting for ${loaderLabel} decode`,
+                grandchildLabel: t('batch.detail.waitingDecode', { loader: loaderLabel }),
                 grandchildPct: 100
             });
 
@@ -432,13 +460,13 @@ class BatchConvertApp {
                             state: pct >= 100 ? 'done' : 'active',
                             pct,
                             detail: meta?.detail || message,
-                            childLabel: meta?.stageLabel || 'Load PLY4',
+                            childLabel: meta?.stageLabel || t('batch.step.loadPly4'),
                             childPct: meta?.stagePct ?? pct,
                             grandchildLabel: meta?.substepLabel || meta?.detail || message,
                             grandchildPct: meta?.substepPct ?? meta?.stagePct ?? pct
                         });
                         task.summary = message;
-                        if (meta?.detail) this.pushProgressLog(task, 'load', pct, `Load • ${meta.detail}`);
+                        if (meta?.detail) this.pushProgressLog(task, 'load', pct, `${t('batch.stepShort.load')} • ${meta.detail}`);
                         this.requestRender();
                     });
                 }
@@ -449,13 +477,13 @@ class BatchConvertApp {
                         state: pct >= 100 ? 'done' : 'active',
                         pct,
                         detail: message,
-                        childLabel: 'Load SOG',
+                        childLabel: t('batch.step.loadSog'),
                         childPct: pct,
                         grandchildLabel: message,
                         grandchildPct: pct
                     });
                     task.summary = message;
-                    this.pushProgressLog(task, 'load', pct, `Load • ${message}`);
+                    this.pushProgressLog(task, 'load', pct, `${t('batch.stepShort.load')} • ${message}`);
                     this.requestRender();
                 });
             };
@@ -463,7 +491,7 @@ class BatchConvertApp {
                 parsed = await loadOnce();
             } catch (loadError: any) {
                 // #WDD-gpt 2026-04-20 - 第二个文件偶发加载失败：增加一次让步后重试
-                this.pushLog(task, `Load retry • ${loadError?.message || String(loadError)}`);
+                this.pushLog(task, `${t('batch.retry')} • ${loadError?.message || String(loadError)}`);
                 await this.yieldToBrowser();
                 await new Promise((resolve) => setTimeout(resolve, 120));
                 parsed = await loadOnce();
@@ -473,14 +501,17 @@ class BatchConvertApp {
             const frameCount = Number(parsed?.frames || 1);
             task.pointCount = pointCount;
             task.frameCount = frameCount;
-            this.pushLog(task, `Loaded ${pointCount.toLocaleString()} splats across ${frameCount.toLocaleString()} frame(s)`);
+            this.pushLog(task, t('batch.log.loaded', {
+                splats: pointCount.toLocaleString(),
+                frames: frameCount.toLocaleString()
+            }));
             this.setStep(task, 'load', {
                 state: 'done',
                 pct: 100,
-                detail: `${loaderLabel} decode completed`,
-                childLabel: `Load ${loaderLabel}`,
+                detail: t('batch.detail.decodeCompleted', { loader: loaderLabel }),
+                childLabel: `${t('batch.stepShort.load')} ${loaderLabel}`,
                 childPct: 100,
-                grandchildLabel: `${pointCount.toLocaleString()} splats ready`,
+                grandchildLabel: t('batch.detail.splatsReady', { count: pointCount.toLocaleString() }),
                 grandchildPct: 100
             });
 
@@ -499,13 +530,13 @@ class BatchConvertApp {
                             state: pct >= 100 ? 'done' : 'active',
                             pct,
                             detail: msg,
-                            childLabel: 'Export Static PLY',
+                            childLabel: t('batch.step.exportStaticPly'),
                             childPct: pct,
                             grandchildLabel: msg,
                             grandchildPct: pct
                         });
                         task.summary = msg;
-                        this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
+                        this.pushProgressLog(task, 'encode', pct, `${t('batch.stepShort.encodeSog4')} • ${msg}`);
                         this.requestRender();
                     });
                     outputName = `${baseName}.ply`;
@@ -517,17 +548,17 @@ class BatchConvertApp {
                             state: pct >= 100 ? 'done' : 'active',
                             pct,
                             detail: msg,
-                            childLabel: 'Export PLY Sequence',
+                            childLabel: t('batch.step.exportPlySeq'),
                             childPct: pct,
                             grandchildLabel: msg,
                             grandchildPct: pct
                         });
                         task.summary = msg;
-                        this.pushProgressLog(task, 'encode', pct, `Encode • ${msg}`);
+                        this.pushProgressLog(task, 'encode', pct, `${t('batch.stepShort.exportPlySeq')} • ${msg}`);
                         this.requestRender();
                     });
 
-                    task.summary = 'Packing into ZIP limit...';
+                    this.setTaskSummary(task, 'batch.summary.packingZip');
                     this.render();
 
                     const zip = new JSZip();
@@ -546,13 +577,13 @@ class BatchConvertApp {
                         this.setStep(task, 'encode', {
                             state: 'active',
                             pct: meta.percent,
-                            detail: `Zipping... ${meta.percent.toFixed(0)}%`,
-                            childLabel: 'Compress ZIP',
+                            detail: t('batch.detail.zipping', { pct: meta.percent.toFixed(0) }),
+                            childLabel: t('batch.step.compressZip'),
                             childPct: meta.percent,
-                            grandchildLabel: 'Archive',
+                            grandchildLabel: t('batch.step.archive'),
                             grandchildPct: meta.percent
                         });
-                        this.pushProgressLog(task, 'encode', meta.percent, `Encode • ZIP ${meta.percent.toFixed(0)}%`);
+                        this.pushProgressLog(task, 'encode', meta.percent, `${t('batch.stepShort.encodeSog4')} • ZIP ${meta.percent.toFixed(0)}%`);
                         this.requestRender();
                     });
 
@@ -565,7 +596,7 @@ class BatchConvertApp {
                     task.status = 'done';
                     this.setStep(task, 'encode', { state: 'done', pct: 100 });
                     this.setStep(task, 'download', { state: 'done', pct: 100 });
-                    task.summary = `Completed • ${totalFrames} frames saved`;
+                    this.setTaskSummary(task, 'batch.summary.completedFrames', { count: totalFrames.toLocaleString() });
                     this.requestRender();
                     return;
                 }
@@ -576,8 +607,8 @@ class BatchConvertApp {
                     this.setStep(task, 'encode', {
                         state: 'active',
                         pct: 20,
-                        detail: 'Copying static SOG segment',
-                        childLabel: 'Export SOG4 Sequence',
+                        detail: t('batch.detail.copyingStaticSegment'),
+                        childLabel: t('batch.step.exportSog4Seq'),
                         childPct: 20,
                         grandchildLabel: sequenceName,
                         grandchildPct: 20
@@ -586,8 +617,8 @@ class BatchConvertApp {
                     this.setStep(task, 'encode', {
                         state: 'done',
                         pct: 100,
-                        detail: 'Static SOG segment ready',
-                        childLabel: 'Export SOG4 Sequence',
+                        detail: t('batch.detail.staticSegmentReady'),
+                        childLabel: t('batch.step.exportSog4Seq'),
                         childPct: 100,
                         grandchildLabel: sequenceName,
                         grandchildPct: 100
@@ -609,13 +640,13 @@ class BatchConvertApp {
                                 state: pct >= 100 ? 'done' : 'active',
                                 pct,
                                 detail,
-                                childLabel: 'Export SOG4 Sequence',
+                                childLabel: t('batch.step.exportSog4Seq'),
                                 childPct: meta?.stagePct ?? pct,
                                 grandchildLabel: `${sequenceName} • ${detail}`,
                                 grandchildPct: meta?.stagePct ?? pct
                             });
                             task.summary = detail;
-                            this.pushProgressLog(task, 'encode', pct, `Encode • ${sequenceName} • ${detail}`);
+                            this.pushProgressLog(task, 'encode', pct, `${t('batch.stepShort.encodeSog4')} • ${sequenceName} • ${detail}`);
                             this.requestRender();
                         }
                     });
@@ -628,20 +659,20 @@ class BatchConvertApp {
                     this.setStep(task, 'encode', {
                         state: 'active',
                         pct: 20,
-                        detail: 'Copying static SOG payload',
-                        childLabel: 'Copy Static SOG',
+                        detail: t('batch.detail.copyingStaticSog'),
+                        childLabel: t('batch.step.copyStaticSog'),
                         childPct: 20,
-                        grandchildLabel: 'No re-encode required',
+                        grandchildLabel: t('batch.step.noReencode'),
                         grandchildPct: 20
                     });
                     buffer = await task.file.arrayBuffer();
                     this.setStep(task, 'encode', {
                         state: 'done',
                         pct: 100,
-                        detail: 'Static SOG copied',
-                        childLabel: 'Copy Static SOG',
+                        detail: t('batch.detail.staticSogCopied'),
+                        childLabel: t('batch.step.copyStaticSog'),
                         childPct: 100,
-                        grandchildLabel: 'Ready as SOG4',
+                        grandchildLabel: t('batch.step.readyAsSog4'),
                         grandchildPct: 100
                     });
                     outputName = `saved_${task.file.name.replace(/\.[^/.]+$/, '')}.sog4`;
@@ -669,7 +700,7 @@ class BatchConvertApp {
                                 grandchildPct: meta?.stagePct ?? pct
                             });
                             task.summary = detail;
-                            this.pushProgressLog(task, 'encode', pct, `Encode • ${meta?.stageLabel || message} • ${detail}`);
+                            this.pushProgressLog(task, 'encode', pct, `${t('batch.stepShort.encodeSog4')} • ${meta?.stageLabel || message} • ${detail}`);
                             this.requestRender();
                         }
                     });
@@ -688,37 +719,38 @@ class BatchConvertApp {
             this.setStep(task, 'download', {
                 state: 'active',
                 pct: 35,
-                detail: 'Preparing browser download',
-                childLabel: 'Create Download Blob',
+                detail: t('batch.detail.preparingDownload'),
+                childLabel: t('batch.step.createDownloadBlob'),
                 childPct: 60,
                 grandchildLabel: outputName,
                 grandchildPct: 35
             });
-            this.pushLog(task, `Output ready • ${outputName} • ${formatBytes(blob.size)}`);
+            this.pushLog(task, t('batch.log.outputReady', { name: outputName, size: formatBytes(blob.size) }));
 
             if (this.autoDownloadToggle.checked && task.outputUrl) {
                 this.triggerDownload(task.outputUrl, outputName);
-                this.pushLog(task, 'Auto download triggered');
+                this.pushLog(task, t('batch.log.autoDownload'));
             }
 
             this.setStep(task, 'download', {
                 state: 'done',
                 pct: 100,
-                detail: this.autoDownloadToggle.checked ? 'Download triggered' : 'Download ready',
-                childLabel: 'Finalize Output',
+                detail: this.autoDownloadToggle.checked ? t('batch.detail.downloadTriggered') : t('batch.detail.downloadReady'),
+                childLabel: t('batch.step.finalizeOutput'),
                 childPct: 100,
                 grandchildLabel: formatBytes(blob.size),
                 grandchildPct: 100
             });
 
             task.status = 'done';
-            task.summary = `Completed • ${formatBytes(blob.size)}`;
+            this.setTaskSummary(task, 'batch.summary.completedSize', { size: formatBytes(blob.size) });
             this.requestRender();
         } catch (error: any) {
             this.stopEncodeHeartbeat(task);
             const message = error?.message || String(error);
             task.status = 'error';
             task.error = message;
+            this.clearTaskSummaryKey(task);
             task.summary = message;
             const activeKey = STEP_ORDER.find((key) => task.steps[key].state === 'active') || 'prepare';
             this.setStep(task, activeKey, {
@@ -812,8 +844,8 @@ class BatchConvertApp {
                             <circle cx="66" cy="50" r="6" fill="#38BDF8"/>
                         </svg>
                     </div>
-                    <div class="text-sm font-semibold">No files queued yet.</div>
-                    <div class="text-[11px] ui-text-secondary mt-2">Drop some <code>.ply4</code>, <code>.sog</code>, or <code>.sog4</code> files to begin.</div>
+                    <div class="text-sm font-semibold">${escapeHtml(t('batch.emptyTitle'))}</div>
+                    <div class="text-[11px] ui-text-secondary mt-2">${t('batch.emptyBody')}</div>
                 </div>
             `;
             return;
@@ -829,10 +861,10 @@ class BatchConvertApp {
     private renderTask(task: BatchTask) {
         const actions: string[] = [];
         if (task.outputUrl && task.outputName) {
-            actions.push(`<button class="batch-action-btn" data-action="download" data-task-id="${escapeHtml(task.id)}">Download</button>`);
+            actions.push(`<button class="batch-action-btn" data-action="download" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t('batch.download'))}</button>`);
         }
         if (task.status === 'error' && !this.isConverting) {
-            actions.push(`<button class="batch-action-btn" data-action="retry" data-task-id="${escapeHtml(task.id)}">Retry</button>`);
+            actions.push(`<button class="batch-action-btn" data-action="retry" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t('batch.retry'))}</button>`);
         }
 
         const chipClass = task.status === 'done'
@@ -845,9 +877,9 @@ class BatchConvertApp {
 
         const metadata: string[] = [];
         metadata.push(formatBytes(task.file.size));
-        if (task.pointCount) metadata.push(`${task.pointCount.toLocaleString()} splats`);
-        if (task.frameCount) metadata.push(`${task.frameCount.toLocaleString()} frames`);
-        if (task.outputSize) metadata.push(`out ${formatBytes(task.outputSize)}`);
+        if (task.pointCount) metadata.push(t('batch.meta.splats', { count: task.pointCount.toLocaleString() }));
+        if (task.frameCount) metadata.push(t('batch.meta.frames', { count: task.frameCount.toLocaleString() }));
+        if (task.outputSize) metadata.push(t('batch.meta.out', { size: formatBytes(task.outputSize) }));
 
         return `
             <article class="batch-task">
@@ -857,14 +889,14 @@ class BatchConvertApp {
                         <div class="text-[11px] ui-text-secondary mt-1">${escapeHtml(metadata.join(' • '))}</div>
                     </div>
                     <div class="flex flex-col items-end gap-2">
-                        <span class="${chipClass}">${escapeHtml(task.status)}</span>
+                        <span class="${chipClass}">${escapeHtml(t(`batch.status.${task.status}`))}</span>
                         <span class="text-[11px] ui-text-secondary">${Math.round(task.overallPct)}%</span>
                     </div>
                 </div>
 
                 <div class="mt-3">
                     <div class="flex items-center justify-between gap-3 text-[11px] ui-text-secondary mb-2">
-                        <span>${escapeHtml(task.summary)}</span>
+                        <span>${escapeHtml(task.summaryKey ? t(task.summaryKey, task.summaryVars) : task.summary)}</span>
                         <span>${Math.round(task.overallPct)}%</span>
                     </div>
                     <div class="batch-progress-track">
@@ -903,7 +935,7 @@ class BatchConvertApp {
         return `
             <section class="${cls}">
                 <div class="batch-step-row text-[10px]">
-                    <span class="font-semibold">${escapeHtml(step.label.split(' ')[0])}</span>
+                    <span class="font-semibold">${escapeHtml(t(step.shortKey))}</span>
                     <span class="ui-text-secondary">${Math.round(step.pct)}%</span>
                 </div>
                 <div class="batch-progress-track mt-2">
@@ -919,7 +951,7 @@ class BatchConvertApp {
 
     private getActiveStepLabel(task: BatchTask): string {
         const step = this.getActiveStep(task);
-        return step.childLabel || step.label;
+        return step.childLabel || t(step.labelKey);
     }
 
     private getActiveStepDetail(task: BatchTask): string {
@@ -936,9 +968,9 @@ class BatchConvertApp {
         return `
             <article class="batch-task batch-overflow-card">
                 <div>
-                    <div class="text-[10px] tracking-[0.18em] uppercase ui-text-secondary">More In Queue</div>
+                    <div class="text-[10px] tracking-[0.18em] uppercase ui-text-secondary">${escapeHtml(t('batch.moreInQueue'))}</div>
                     <div class="batch-overflow-count mt-3">+${hiddenCount}</div>
-                    <div class="text-[11px] ui-text-secondary mt-3">Additional tasks are folded to keep the dashboard on one screen.</div>
+                    <div class="text-[11px] ui-text-secondary mt-3">${escapeHtml(t('batch.overflowNote'))}</div>
                 </div>
             </article>
         `;

@@ -564,7 +564,7 @@ body.theme-light .fps-item:not(.active):hover {
 }
 
 .right-panel-tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .left-panel-tab,
@@ -593,6 +593,169 @@ body.theme-light .fps-item:not(.active):hover {
 .left-panel-tab.active,
 .right-panel-tab.active {
     box-shadow: inset 0 -2px 0 var(--text-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* #WDD-gpt 2026-06-13 - 右侧文件信息面板使用紧凑键值布局，适配 220px 侧栏宽度 */
+.file-info-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.file-info-overview {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.file-info-metric,
+.file-info-chart {
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+}
+
+.file-info-metric {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 7px 6px;
+}
+
+.file-info-metric-label {
+    color: var(--text-secondary);
+    font-size: 6.5px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    line-height: 1.1;
+    opacity: 0.68;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.file-info-metric-value {
+    color: var(--text-highlight);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.1;
+    margin-top: 5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-info-metric-meta {
+    color: var(--text-secondary);
+    font-size: 7px;
+    font-weight: 700;
+    line-height: 1;
+    margin-top: 4px;
+    opacity: 0.72;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-info-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px;
+}
+
+.file-info-chart-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.file-info-chart-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.file-info-chart-head {
+    align-items: center;
+    color: var(--text-secondary);
+    display: flex;
+    font-size: 7px;
+    font-weight: 800;
+    justify-content: space-between;
+    line-height: 1.15;
+}
+
+.file-info-chart-head span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.file-info-chart-head span:last-child {
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    margin-left: 6px;
+}
+
+.file-info-chart-track {
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 999px;
+    height: 5px;
+    overflow: hidden;
+}
+
+.file-info-chart-fill {
+    background: linear-gradient(90deg, var(--text-highlight), rgba(16, 185, 129, 0.52));
+    border-radius: inherit;
+    height: 100%;
+    min-width: 2px;
+}
+
+.file-info-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.file-info-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.file-info-row {
+    display: grid;
+    grid-template-columns: minmax(64px, 0.75fr) minmax(0, 1.25fr);
+    gap: 6px;
+    align-items: start;
+    padding: 6px 7px;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    background: var(--card-bg);
+}
+
+.file-info-label {
+    color: var(--text-secondary);
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    line-height: 1.25;
+    text-transform: uppercase;
+    opacity: 0.72;
+}
+
+.file-info-value {
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    text-align: right;
 }
 
 .smart-panel-label {
@@ -1311,6 +1474,55 @@ select.ui-input option {
     gap: 12px !important;
     padding: 12px !important;
     border-radius: 16px !important;
+}
+
+/* #WDD-gpt 2026-06-13 - 简化控制条补充内存/显存摘要，保持窄条内高密度可读 */
+.simple-memory-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(54px, 1fr));
+    gap: 6px;
+    min-width: 126px;
+}
+
+.simple-memory-card {
+    align-items: center;
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    height: 40px;
+    justify-content: center;
+    line-height: 1;
+    padding: 4px 6px;
+}
+
+.simple-memory-label {
+    color: var(--text-secondary);
+    font-size: 7px;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+    opacity: 0.7;
+}
+
+.simple-memory-value {
+    color: var(--text-highlight);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 9px;
+    font-weight: 800;
+    margin-top: 4px;
+    max-width: 58px;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.simple-memory-card.has-tooltip::before {
+    line-height: 1.35;
+    max-width: 260px;
+    text-align: left;
+    white-space: pre-line;
 }
 
 #simplified-panel.hidden-panel {

@@ -2,11 +2,65 @@
 import * as pc from 'playcanvas';
 import {
     ICON_BRUSH, ICON_POLY, ICON_RECT, ICON_INVERT, ICON_CLEAR,
-    ICON_CENTER, ICON_ELLIPSE, ICON_UNDO, ICON_REDO,
+    ICON_CENTER, ICON_RINGS, ICON_UNDO, ICON_REDO,
     ICON_BRUSH_ALLTIME, ICON_RECT_ALLTIME, ICON_POLY_ALLTIME, ICON_HELP
 } from './selection-tool-icons';
 import { SelectionToolHelp } from './selection-tool-help';
+import { applyI18n, t } from '../i18n';
 
+type OutlineScaleProps = {
+    scale0?: Float32Array | null;
+    scale1?: Float32Array | null;
+    scale2?: Float32Array | null;
+    rot0?: Float32Array | null;
+    rot1?: Float32Array | null;
+    rot2?: Float32Array | null;
+    rot3?: Float32Array | null;
+    opacity?: Float32Array | null;
+    lifeTexData?: Float32Array | null;
+    totalFrames?: number;
+    rotationSemantic?: 'wxyz' | 'xyzw';
+};
+
+type ScreenOutlineEllipse = {
+    cx: number;
+    cy: number;
+    ax: number;
+    ay: number;
+    bx: number;
+    by: number;
+    maxRadius: number;
+};
+
+type RingsOutlineCache = {
+    positions: Float32Array;
+    time: number;
+    width: number;
+    height: number;
+    cellSize: number;
+    cols: number;
+    rows: number;
+    cameraKey: string;
+    modelKey: string;
+    count: number;
+    valid: Uint8Array;
+    buckets: number[][];
+    visit: Uint32Array;
+    visitToken: number;
+    cx: Float32Array;
+    cy: Float32Array;
+    ax: Float32Array;
+    ay: Float32Array;
+    bx: Float32Array;
+    by: Float32Array;
+    maxRadius: Float32Array;
+};
+
+const OUTLINE_HIT_SCALE = 2.0;
+const OUTLINE_MIN_RADIUS_PX = 2;
+const OUTLINE_MAX_RADIUS_PX = 1024;
+const OUTLINE_SAMPLE_STEPS = 48;
+const RINGS_CACHE_CELL_SIZE = 64;
 
 // Export class
 export class SelectionTool {
@@ -28,8 +82,11 @@ export class SelectionTool {
 
     // Tools
     currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' = 'none';
-    selectionMode: 'center' | 'ellipse' = 'center';
+    // #WDD-gpt 2026-06-13 - 对齐 SuperSplat：Centers 只看中心点，Rings 按屏幕 footprint/轮廓命中
+    selectionMode: 'centers' | 'rings' = 'centers';
     brushRadius = 50; // pixels
+    // #WDD-gpt 2026-06-13 - Rings 模式缓存当前视角 footprint，避免笔刷拖动时重复投影所有高斯
+    private ringsOutlineCache: RingsOutlineCache | null = null;
 
     // State
     isSelecting = false;
@@ -200,11 +257,11 @@ export class SelectionTool {
         }
 
         if (targets.length === 0) {
-            alert('No normal-hidden, undeleted points were found in the current frame.');
+            alert(t('selection.noHiddenFound'));
             return;
         }
 
-        const ok = confirm(`Delete ${targets.length.toLocaleString()} normal-hidden points in the current frame?\n\nThese points will be marked as deleted and filtered during export.`);
+        const ok = confirm(t('selection.confirmDeleteHidden', { count: targets.length.toLocaleString() }));
         if (!ok) return;
 
         const before = this.captureGlobalSelectionState();
@@ -662,7 +719,7 @@ export class SelectionTool {
                     <svg class="w-5 h-5 text-amber-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" stroke-linecap="round"/>
                     </svg>
-                    <span class="text-sm font-bold text-white">All-Time Selection</span>
+                    <span class="text-sm font-bold text-white" data-i18n="selection.allTimeProgress">All-Time Selection</span>
                 </div>
                 <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden">
                     <div id="alltime-progress-bar" class="h-full bg-amber-400 rounded-full transition-all duration-200" style="width: 0%"></div>
@@ -671,6 +728,7 @@ export class SelectionTool {
             </div>
         `;
         document.body.appendChild(el);
+        applyI18n(el);
         this.allTimeProgressEl = el;
     }
 
@@ -708,60 +766,60 @@ export class SelectionTool {
             <div id="selection-toolbar-inner" class="flex flex-col gap-1.5 w-[160px] shrink-0">
                 
                 <!-- #WDD-gpt 2026-06-13 - 当前/全时段改为同一段控件，减少左侧栏重复工具组 -->
-                <div id="selection-alltime-tools" class="selection-panel-group glass-blue p-1 rounded-md flex flex-row pointer-events-auto shadow-sm" aria-label="Selection time scope">
-                    <button id="scope-current" class="selection-scope-btn active flex-1 py-1.5 text-[9px] rounded font-bold transition-all shadow-sm">Current</button>
-                    <button id="scope-alltime" class="selection-scope-btn flex-1 py-1.5 text-[9px] rounded font-bold transition-all">All-Time</button>
+                <div id="selection-alltime-tools" class="selection-panel-group glass-blue p-1 rounded-md flex flex-row pointer-events-auto shadow-sm" aria-label="Selection time scope" data-i18n-aria-label="selection.scopeAria">
+                    <button id="scope-current" class="selection-scope-btn active flex-1 py-1.5 text-[9px] rounded font-bold transition-all shadow-sm" data-i18n="selection.current">Current</button>
+                    <button id="scope-alltime" class="selection-scope-btn flex-1 py-1.5 text-[9px] rounded font-bold transition-all" data-i18n="selection.allTime">All-Time</button>
                 </div>
 
                 <div id="selection-current-tools" class="selection-panel-group glass-blue p-1.5 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
-                    <div class="selection-group-label">Tools</div>
+                    <div class="selection-group-label" data-i18n="selection.tools">Tools</div>
                     <div class="grid grid-cols-3 gap-1.5">
-                    <button id="tool-brush" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Brush" data-tip="Brush">
+                    <button id="tool-brush" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Brush" data-tip="Brush" data-i18n-aria-label="selection.brush" data-i18n-data-tip="selection.brush">
                         ${ICON_BRUSH}
                     </button>
-                    <button id="tool-rect" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Rect" data-tip="Rect">
+                    <button id="tool-rect" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Rect" data-tip="Rect" data-i18n-aria-label="selection.rect" data-i18n-data-tip="selection.rect">
                         ${ICON_RECT}
                     </button>
-                    <button id="tool-poly" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Polygon" data-tip="Poly">
+                    <button id="tool-poly" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Polygon" data-tip="Poly" data-i18n-aria-label="selection.polygon" data-i18n-data-tip="selection.polygon">
                         ${ICON_POLY}
                     </button>
                     </div>
                 </div>
 
                 <div id="selection-mode-tools" class="selection-panel-group glass-blue p-1 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
-                    <div class="selection-group-label">Hit Mode</div>
+                    <div class="selection-group-label" data-i18n="selection.hitMode">Hit Mode</div>
                     <div class="selection-compact-segment">
-                    <button id="select-mode-center" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Center Mode" data-tip="Center">
+                    <button id="select-mode-centers" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Centers Mode" data-tip="Centers" data-i18n-aria-label="selection.centersMode" data-i18n-data-tip="selection.centers">
                         ${ICON_CENTER}
                     </button>
-                    <button id="select-mode-ellipse" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Ellipse Mode" data-tip="Ellipse">
-                        ${ICON_ELLIPSE}
+                    <button id="select-mode-rings" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Rings Mode" data-tip="Rings" data-i18n-aria-label="selection.ringsMode" data-i18n-data-tip="selection.rings">
+                        ${ICON_RINGS}
                     </button>
                     </div>
                 </div>
 
                 <div id="selection-action-tools" class="selection-panel-group glass-blue p-1.5 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
-                    <div class="selection-group-label">Edit</div>
+                    <div class="selection-group-label" data-i18n="selection.edit">Edit</div>
                     <div id="selection-operation-tools" class="grid grid-cols-[1fr_1fr_1px_1fr] gap-1.5 items-center">
-                    <button id="tool-invert" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert" data-tip="Invert">
+                    <button id="tool-invert" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert" data-tip="Invert" data-i18n-aria-label="selection.invert" data-i18n-data-tip="selection.invert">
                         ${ICON_INVERT}
                     </button>
-                    <button id="tool-clear" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear" data-tip="Clear">
+                    <button id="tool-clear" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear" data-tip="Clear" data-i18n-aria-label="selection.clear" data-i18n-data-tip="selection.clear">
                         ${ICON_CLEAR}
                     </button>
                     <div class="w-px h-5 bg-white/10 justify-self-center"></div>
-                    <button id="action-delete" class="selection-icon-btn p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete">
+                    <button id="action-delete" class="selection-icon-btn p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete" data-i18n-aria-label="selection.delete" data-i18n-data-tip="selection.delete">
                         <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
                     </div>
                     <!-- #WDD-gpt 2026-06-13 - Delete Hidden 属于 Edit 面板操作，不再放在 Smart 面板内部 -->
                     <button id="action-delete-hidden"
                         class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 text-pink-400 border border-pink-500/25 hover:bg-pink-500/15 has-tooltip"
-                        aria-label="Delete Hidden Points" data-tip="Delete normal hidden points">
+                        aria-label="Delete Hidden Points" data-tip="Delete normal hidden points" data-i18n-aria-label="selection.deleteHiddenAria" data-i18n-data-tip="selection.deleteHiddenTip">
                         <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current" aria-hidden="true">
                             <path d="M12 6.5c2.76 0 5 2.24 5 5 0 .66-.13 1.29-.36 1.87l3.18 3.18C21.17 15.35 22.23 13.78 23 11.5 21.27 6.89 16.89 4 12 4c-1.4 0-2.74.24-3.98.68l2.35 2.35c.52-.34 1.13-.53 1.63-.53zM2.28 3 1 4.27l2.42 2.42C2.37 7.85 1.55 9.43 1 11.5 2.73 16.11 7.11 19 12 19c1.56 0 3.04-.3 4.38-.84L19.73 21 21 19.73 2.28 3zM7.53 10.8l1.55 1.55c.3 1.35 1.37 2.42 2.72 2.72l1.55 1.55c-.43.15-.88.23-1.35.23-2.76 0-5-2.24-5-5 0-.47.08-.92.23-1.35z" />
                         </svg>
-                        <span class="text-[8px] font-bold tracking-tight uppercase">Delete Hidden</span>
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="selection.deleteHidden">Delete Hidden</span>
                     </button>
                 </div>
                 
@@ -771,7 +829,7 @@ export class SelectionTool {
             
             <!-- Brush Settings (Hidden by default, shown on right) -->
             <div id="brush-settings" class="glass-blue p-3 rounded-lg pointer-events-auto hidden transition-all flex-col gap-2 items-center shadow-sm">
-                <span class="text-[10px] uppercase font-bold ui-text-dim text-center whitespace-nowrap">Brush Size</span>
+                <span class="text-[10px] uppercase font-bold ui-text-dim text-center whitespace-nowrap" data-i18n="selection.brushSize">Brush Size</span>
                 <div class="h-32 w-8 flex items-center justify-center relative">
                     <!-- Standard slider rotated -90deg -->
                     <input type="range" id="brush-size" min="10" max="200" value="50" class="absolute w-32 h-2 -rotate-90 origin-center cursor-pointer"/>
@@ -793,14 +851,14 @@ export class SelectionTool {
         topRight.className = 'selection-topbar-actions flex flex-row gap-1.5 pointer-events-auto transition-all duration-500';
         topRight.innerHTML = `
             <div class="flex flex-row gap-1 items-center justify-center">
-                <button id="action-undo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Undo" data-tip="Undo (Ctrl+Z)">
+                <button id="action-undo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Undo" data-tip="Undo (Ctrl+Z)" data-i18n-aria-label="selection.undo" data-i18n-data-tip="selection.undoTip">
                     ${ICON_UNDO}
                 </button>
-                <button id="action-redo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Redo" data-tip="Redo (Ctrl+Y)">
+                <button id="action-redo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Redo" data-tip="Redo (Ctrl+Y)" data-i18n-aria-label="selection.redo" data-i18n-data-tip="selection.redoTip">
                     ${ICON_REDO}
                 </button>
                 <div class="w-px h-5 bg-white/10 mx-0.5"></div>
-                <button id="action-help" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Shortcuts Help">
+                <button id="action-help" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Shortcuts Help" data-i18n-aria-label="selection.help" data-i18n-data-tip="selection.helpTip">
                     ${ICON_HELP}
                 </button>
             </div>
@@ -812,6 +870,8 @@ export class SelectionTool {
             topRight.classList.add('fixed', 'right-6', 'top-6', 'z-20');
             document.body.appendChild(topRight);
         }
+        applyI18n(div);
+        applyI18n(topRight);
 
         // Create Brush Cursor Overlay
         const overlay = document.createElement('div');
@@ -872,8 +932,8 @@ export class SelectionTool {
         get('tool-rect')?.addEventListener('click', () => this.setTool(this.isAllTimeMode ? 'rect-alltime' : 'rect'));
         get('tool-poly')?.addEventListener('click', () => this.setTool(this.isAllTimeMode ? 'poly-alltime' : 'poly'));
 
-        get('select-mode-center')?.addEventListener('click', () => this.setSelectionMode('center'));
-        get('select-mode-ellipse')?.addEventListener('click', () => this.setSelectionMode('ellipse'));
+        get('select-mode-centers')?.addEventListener('click', () => this.setSelectionMode('centers'));
+        get('select-mode-rings')?.addEventListener('click', () => this.setSelectionMode('rings'));
         get('tool-invert')?.addEventListener('click', () => {
             const positions = this.getCachedPositions();
             if (positions) {
@@ -908,7 +968,7 @@ export class SelectionTool {
         });
         
         // Initialize selection mode UI
-        this.setSelectionMode('center');
+        this.setSelectionMode('centers');
         this.refreshLazyModeVisibility();
     }
 
@@ -1003,6 +1063,7 @@ export class SelectionTool {
     }
 
     setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none', force = false) {
+        this.clearRingsOutlineCache();
         if (tool !== 'none' && this.renderAllSelectionDisabled) {
             tool = 'none';
         }
@@ -1090,13 +1151,14 @@ export class SelectionTool {
         document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
     }
 
-    setSelectionMode(mode: 'center' | 'ellipse') {
+    setSelectionMode(mode: 'centers' | 'rings') {
+        if (this.selectionMode !== mode) this.clearRingsOutlineCache();
         this.selectionMode = mode;
         
         // UI Feedback
         const get = (id: string) => document.getElementById(id);
-        get('select-mode-center')?.classList.toggle('active', mode === 'center');
-        get('select-mode-ellipse')?.classList.toggle('active', mode === 'ellipse');
+        get('select-mode-centers')?.classList.toggle('active', mode === 'centers');
+        get('select-mode-rings')?.classList.toggle('active', mode === 'rings');
         
         console.log(`[Selection] Mode: ${mode}`);
     }
@@ -1235,6 +1297,7 @@ export class SelectionTool {
         if ((e.target as HTMLElement).closest('.glass-blue')) return;
         if ((e.target as HTMLElement).closest('[style*="border-amber-500"]')) return;
 
+        this.clearRingsOutlineCache();
         this.isSelecting = true;
         this.startPos.set(e.clientX, e.clientY);
         this.currentPos.set(e.clientX, e.clientY);
@@ -1294,7 +1357,7 @@ export class SelectionTool {
         if (this.currentTool === 'brush' || this.currentTool === 'brush-alltime') {
             if (this.isAllTimeTool()) {
                 this.brushPath.push({x: e.clientX, y: e.clientY});
-                if (this.selectionMode === 'ellipse') {
+                if (this.selectionMode === 'rings') {
                     void this.performBrushEllipseAllTimePath(this.brushPath);
                 } else {
                     void this.performBrushAllTimePath(this.brushPath);
@@ -1360,6 +1423,446 @@ export class SelectionTool {
         this.polyLine.setAttribute('fill', tone.fill);
         this.polyLine.setAttribute('stroke', tone.stroke);
         this.polyCursorLine.setAttribute('stroke', tone.stroke);
+    }
+
+    private readFloatProp(source: any, name: string): Float32Array | null {
+        if (source?.[name] instanceof Float32Array) return source[name] as Float32Array;
+        const props = source?.plyData?.elements?.[0]?.properties || [];
+        const hit = props.find((p: any) => p?.name === name);
+        return (hit?.storage as Float32Array | null) || null;
+    }
+
+    private getActiveOutlineScaleProps(): OutlineScaleProps {
+        const parsed = this.viewer?.lastParsedData || {};
+        const splatData = (this.viewer?.splatEntity?.gsplat as any)?.asset?.resource?.splatData
+            || (this.viewer?.splatEntity?.gsplat as any)?.instance?.splatData
+            || (this.viewer?.splatEntity?.gsplat as any)?.splatData
+            || null;
+        const readSplatProp = (name: string) => typeof splatData?.getProp === 'function'
+            ? (splatData.getProp(name) as Float32Array | null) || null
+            : null;
+        return {
+            scale0: this.readFloatProp(parsed, 'scale_0') || readSplatProp('scale_0'),
+            scale1: this.readFloatProp(parsed, 'scale_1') || readSplatProp('scale_1'),
+            scale2: this.readFloatProp(parsed, 'scale_2') || readSplatProp('scale_2'),
+            rot0: this.readFloatProp(parsed, 'rot_0') || readSplatProp('rot_0'),
+            rot1: this.readFloatProp(parsed, 'rot_1') || readSplatProp('rot_1'),
+            rot2: this.readFloatProp(parsed, 'rot_2') || readSplatProp('rot_2'),
+            rot3: this.readFloatProp(parsed, 'rot_3') || readSplatProp('rot_3'),
+            opacity: this.readFloatProp(parsed, 'opacity') || readSplatProp('opacity'),
+            lifeTexData: this.viewer?.lifeTexData || null,
+            totalFrames: this.viewer?.duration ?? 1,
+            rotationSemantic: parsed?.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz'
+        };
+    }
+
+    private getOutlineLocalAxes(splatIdx: number, scaleProps?: OutlineScaleProps | null): Array<[number, number, number]> | null {
+        const s0 = scaleProps?.scale0;
+        const s1 = scaleProps?.scale1;
+        const s2 = scaleProps?.scale2;
+        if (!s0 || !s1 || !s2 || splatIdx < 0 || splatIdx >= s0.length || splatIdx >= s1.length || splatIdx >= s2.length) {
+            return null;
+        }
+        const scales = [s0[splatIdx], s1[splatIdx], s2[splatIdx]].map((value) => {
+            if (!Number.isFinite(value)) return 0;
+            return Math.exp(Math.max(-20, Math.min(10, value)));
+        });
+        if (scales[0] <= 0 || scales[1] <= 0 || scales[2] <= 0) return null;
+
+        const r0 = scaleProps?.rot0;
+        const r1 = scaleProps?.rot1;
+        const r2 = scaleProps?.rot2;
+        const r3 = scaleProps?.rot3;
+        if (!r0 || !r1 || !r2 || !r3 || splatIdx >= r0.length || splatIdx >= r1.length || splatIdx >= r2.length || splatIdx >= r3.length) {
+            return [[scales[0], 0, 0], [0, scales[1], 0], [0, 0, scales[2]]];
+        }
+
+        const semantic = scaleProps?.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz';
+        let qx = semantic === 'xyzw' ? r0[splatIdx] : r1[splatIdx];
+        let qy = semantic === 'xyzw' ? r1[splatIdx] : r2[splatIdx];
+        let qz = semantic === 'xyzw' ? r2[splatIdx] : r3[splatIdx];
+        let qw = semantic === 'xyzw' ? r3[splatIdx] : r0[splatIdx];
+        const qLen = Math.hypot(qx, qy, qz, qw);
+        if (!Number.isFinite(qLen) || qLen <= 1e-6) {
+            return [[scales[0], 0, 0], [0, scales[1], 0], [0, 0, scales[2]]];
+        }
+        qx /= qLen;
+        qy /= qLen;
+        qz /= qLen;
+        qw /= qLen;
+
+        const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
+        const xx = qx * x2, xy = qx * y2, xz = qx * z2;
+        const yy = qy * y2, yz = qy * z2, zz = qz * z2;
+        const wx = qw * x2, wy = qw * y2, wz = qw * z2;
+        return [
+            [(1 - (yy + zz)) * scales[0], (xy + wz) * scales[0], (xz - wy) * scales[0]],
+            [(xy - wz) * scales[1], (1 - (xx + zz)) * scales[1], (yz + wx) * scales[1]],
+            [(xz + wy) * scales[2], (yz - wx) * scales[2], (1 - (xx + yy)) * scales[2]]
+        ];
+    }
+
+    private getOutlineFinalScale(splatIdx: number, scaleProps: OutlineScaleProps | null | undefined, time: number): number {
+        const opacityRaw = scaleProps?.opacity && splatIdx >= 0 && splatIdx < scaleProps.opacity.length
+            ? scaleProps.opacity[splatIdx]
+            : 20;
+        let activeAlpha = Number.isFinite(opacityRaw)
+            ? 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, opacityRaw))))
+            : 1.0;
+
+        const lifeTexData = scaleProps?.lifeTexData;
+        const idx = splatIdx * 4;
+        if (lifeTexData && idx + 2 < lifeTexData.length) {
+            const mu = lifeTexData[idx + 0];
+            const w = lifeTexData[idx + 1];
+            const k = lifeTexData[idx + 2];
+            const totalFrames = Math.max(1, Math.ceil(scaleProps?.totalFrames ?? this.viewer?.duration ?? 1));
+            const segmentMax = Math.max(0, totalFrames - 1);
+            if (time < 0 || time > segmentMax) return 0;
+            const lifeStart = mu - w;
+            const lifeEnd = mu + w;
+            if (lifeEnd <= 0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return 0;
+            const left = 1.0 / (1.0 + Math.exp(-k * (time - lifeStart)));
+            const right = 1.0 / (1.0 + Math.exp(k * (time - lifeEnd)));
+            activeAlpha *= left * right;
+        }
+
+        if (activeAlpha < 0.01) return 0;
+        return Math.min(1.0, Math.sqrt(Math.max(0, -Math.log(1.0 / 255.0 / activeAlpha))) / 2.0);
+    }
+
+    private getFallbackOutlineScreenRadius(screenZ: number): number {
+        const base = Math.max(OUTLINE_MIN_RADIUS_PX, Math.min(15, 100 / (screenZ + 5)));
+        return Math.min(OUTLINE_MAX_RADIUS_PX, base * OUTLINE_HIT_SCALE);
+    }
+
+    private getOutlineScreenEllipse(
+        splatIdx: number,
+        localPos: pc.Vec3,
+        worldPos: pc.Vec3,
+        modelMat: pc.Mat4,
+        camera: pc.CameraComponent,
+        scaleProps: OutlineScaleProps | null | undefined,
+        time: number,
+        tempLocal: pc.Vec3,
+        tempWorld: pc.Vec3,
+        tempScreen: pc.Vec3
+    ): ScreenOutlineEllipse | null {
+        camera.worldToScreen(worldPos, tempScreen);
+        const cx = tempScreen.x;
+        const cy = tempScreen.y;
+        const cz = tempScreen.z;
+        if (cz <= 0) return null;
+        const localAxes = this.getOutlineLocalAxes(splatIdx, scaleProps);
+        if (!localAxes) {
+            const radius = this.getFallbackOutlineScreenRadius(cz);
+            return { cx, cy, ax: radius, ay: 0, bx: 0, by: radius, maxRadius: radius };
+        }
+        const finalScale = this.getOutlineFinalScale(splatIdx, scaleProps, time);
+        if (finalScale <= 0) return null;
+
+        let cov00 = 0;
+        let cov01 = 0;
+        let cov11 = 0;
+        const projectAxis = (axis: [number, number, number]) => {
+            tempLocal.set(localPos.x + axis[0], localPos.y + axis[1], localPos.z + axis[2]);
+            modelMat.transformPoint(tempLocal, tempWorld);
+            camera.worldToScreen(tempWorld, tempScreen);
+            const sx = tempScreen.x - cx;
+            const sy = tempScreen.y - cy;
+            if (!Number.isFinite(sx) || !Number.isFinite(sy)) return;
+            cov00 += sx * sx;
+            cov01 += sx * sy;
+            cov11 += sy * sy;
+        };
+
+        for (const axis of localAxes) projectAxis(axis);
+
+        cov00 += 0.3;
+        cov11 += 0.3;
+        const mid = 0.5 * (cov00 + cov11);
+        const spread = Math.hypot((cov00 - cov11) * 0.5, cov01);
+        const lambda1 = Math.max(0.1, mid + spread);
+        const lambda2 = Math.max(0.1, mid - spread);
+        let vx = cov01;
+        let vy = lambda1 - cov00;
+        const vLen = Math.hypot(vx, vy);
+        if (!Number.isFinite(vLen) || vLen <= 1e-6) {
+            vx = 1;
+            vy = 0;
+        } else {
+            vx /= vLen;
+            vy /= vLen;
+        }
+        const axis1 = Math.min(Math.sqrt(2.0 * lambda1), OUTLINE_MAX_RADIUS_PX) * finalScale * OUTLINE_HIT_SCALE;
+        const axis2 = Math.min(Math.sqrt(2.0 * lambda2), OUTLINE_MAX_RADIUS_PX) * finalScale * OUTLINE_HIT_SCALE;
+        const ax = vx * axis1;
+        const ay = vy * axis1;
+        const bx = vy * axis2;
+        const by = -vx * axis2;
+        const maxRadius = Math.max(OUTLINE_MIN_RADIUS_PX, Math.min(OUTLINE_MAX_RADIUS_PX, Math.max(axis1, axis2)));
+        return { cx, cy, ax, ay, bx, by, maxRadius };
+    }
+
+    private clearRingsOutlineCache() {
+        this.ringsOutlineCache = null;
+    }
+
+    private getMat4CacheKey(mat: pc.Mat4 | null | undefined): string {
+        const data = (mat as any)?.data as Float32Array | number[] | undefined;
+        if (!data) return '';
+        let key = '';
+        for (let i = 0; i < 16; i++) {
+            key += `${Math.round((Number(data[i]) || 0) * 10000)},`;
+        }
+        return key;
+    }
+
+    private getRingsOutlineCache(): RingsOutlineCache | null {
+        const positions = this.getCachedPositions();
+        const camera = this.viewer.camera?.camera as pc.CameraComponent | null | undefined;
+        const entity = this.viewer.splatEntity as pc.Entity | null | undefined;
+        if (!positions || !camera || !entity) return null;
+
+        const width = this.app.graphicsDevice.width;
+        const height = this.app.graphicsDevice.height;
+        const time = this.getCurrentTime();
+        const cameraKey = this.getMat4CacheKey(this.viewer.camera?.getWorldTransform?.());
+        const modelMat = entity.getWorldTransform();
+        const modelKey = this.getMat4CacheKey(modelMat);
+        const count = Math.floor(positions.length / 3);
+        const cellSize = RINGS_CACHE_CELL_SIZE;
+        const cols = Math.max(1, Math.ceil(width / cellSize));
+        const rows = Math.max(1, Math.ceil(height / cellSize));
+        const cached = this.ringsOutlineCache;
+        if (
+            cached &&
+            cached.positions === positions &&
+            cached.time === time &&
+            cached.width === width &&
+            cached.height === height &&
+            cached.cellSize === cellSize &&
+            cached.cols === cols &&
+            cached.rows === rows &&
+            cached.cameraKey === cameraKey &&
+            cached.modelKey === modelKey &&
+            cached.count === count
+        ) {
+            return cached;
+        }
+
+        const next: RingsOutlineCache = {
+            positions,
+            time,
+            width,
+            height,
+            cellSize,
+            cols,
+            rows,
+            cameraKey,
+            modelKey,
+            count,
+            valid: new Uint8Array(count),
+            buckets: Array.from({ length: cols * rows }, () => [] as number[]),
+            visit: new Uint32Array(count),
+            visitToken: 0,
+            cx: new Float32Array(count),
+            cy: new Float32Array(count),
+            ax: new Float32Array(count),
+            ay: new Float32Array(count),
+            bx: new Float32Array(count),
+            by: new Float32Array(count),
+            maxRadius: new Float32Array(count)
+        };
+        const scaleProps = this.getActiveOutlineScaleProps();
+        const localPos = new pc.Vec3();
+        const worldPos = new pc.Vec3();
+        const tempLocal = new pc.Vec3();
+        const tempWorld = new pc.Vec3();
+        const tempScreen = new pc.Vec3();
+
+        // #WDD-gpt 2026-06-13 - 预计算当前帧可见高斯的屏幕 footprint，后续 brush move 只做轻量相交测试
+        for (let i = 0; i < count; i++) {
+            if (!this.isVisibleAtTime(i, time)) continue;
+            localPos.set(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
+            modelMat.transformPoint(localPos, worldPos);
+            const outline = this.getOutlineScreenEllipse(i, localPos, worldPos, modelMat, camera, scaleProps, time, tempLocal, tempWorld, tempScreen);
+            if (!outline) continue;
+            next.valid[i] = 1;
+            next.cx[i] = outline.cx;
+            next.cy[i] = outline.cy;
+            next.ax[i] = outline.ax;
+            next.ay[i] = outline.ay;
+            next.bx[i] = outline.bx;
+            next.by[i] = outline.by;
+            next.maxRadius[i] = outline.maxRadius;
+
+            const minCellX = Math.max(0, Math.floor((outline.cx - outline.maxRadius) / cellSize));
+            const maxCellX = Math.min(cols - 1, Math.floor((outline.cx + outline.maxRadius) / cellSize));
+            const minCellY = Math.max(0, Math.floor((outline.cy - outline.maxRadius) / cellSize));
+            const maxCellY = Math.min(rows - 1, Math.floor((outline.cy + outline.maxRadius) / cellSize));
+            for (let gy = minCellY; gy <= maxCellY; gy++) {
+                const rowOffset = gy * cols;
+                for (let gx = minCellX; gx <= maxCellX; gx++) {
+                    next.buckets[rowOffset + gx].push(i);
+                }
+            }
+        }
+
+        this.ringsOutlineCache = next;
+        return next;
+    }
+
+    private visitRingsCandidates(cache: RingsOutlineCache, minX: number, minY: number, maxX: number, maxY: number, visitor: (index: number) => void) {
+        if (maxX < 0 || maxY < 0 || minX > cache.width || minY > cache.height) return;
+        const minCellX = Math.max(0, Math.floor(minX / cache.cellSize));
+        const maxCellX = Math.min(cache.cols - 1, Math.floor(maxX / cache.cellSize));
+        const minCellY = Math.max(0, Math.floor(minY / cache.cellSize));
+        const maxCellY = Math.min(cache.rows - 1, Math.floor(maxY / cache.cellSize));
+        if (minCellX > maxCellX || minCellY > maxCellY) return;
+
+        cache.visitToken++;
+        if (cache.visitToken >= 0xffffffff) {
+            cache.visit.fill(0);
+            cache.visitToken = 1;
+        }
+        const token = cache.visitToken;
+        for (let gy = minCellY; gy <= maxCellY; gy++) {
+            const rowOffset = gy * cache.cols;
+            for (let gx = minCellX; gx <= maxCellX; gx++) {
+                const bucket = cache.buckets[rowOffset + gx];
+                for (let bi = 0; bi < bucket.length; bi++) {
+                    const index = bucket[bi];
+                    if (cache.visit[index] === token) continue;
+                    cache.visit[index] = token;
+                    visitor(index);
+                }
+            }
+        }
+    }
+
+    private getCachedRingEllipse(cache: RingsOutlineCache, index: number): ScreenOutlineEllipse {
+        return {
+            cx: cache.cx[index],
+            cy: cache.cy[index],
+            ax: cache.ax[index],
+            ay: cache.ay[index],
+            bx: cache.bx[index],
+            by: cache.by[index],
+            maxRadius: cache.maxRadius[index]
+        };
+    }
+
+    private getOutlineBoundaryPoint(ellipse: ScreenOutlineEllipse, step: number, total = OUTLINE_SAMPLE_STEPS): { x: number; y: number } {
+        const tAngle = (Math.PI * 2 * step) / total;
+        const c = Math.cos(tAngle);
+        const s = Math.sin(tAngle);
+        return {
+            x: ellipse.cx + ellipse.ax * c + ellipse.bx * s,
+            y: ellipse.cy + ellipse.ay * c + ellipse.by * s
+        };
+    }
+
+    private pointInOutlineEllipse(ellipse: ScreenOutlineEllipse, x: number, y: number): boolean {
+        const det = ellipse.ax * ellipse.by - ellipse.ay * ellipse.bx;
+        const dx = x - ellipse.cx;
+        const dy = y - ellipse.cy;
+        if (Math.abs(det) <= 1e-6) {
+            return dx * dx + dy * dy <= ellipse.maxRadius * ellipse.maxRadius;
+        }
+        const qx = (dx * ellipse.by - dy * ellipse.bx) / det;
+        const qy = (-dx * ellipse.ay + dy * ellipse.ax) / det;
+        return qx * qx + qy * qy <= 1.0;
+    }
+
+    private outlineBoundaryIntersectsBrush(ellipse: ScreenOutlineEllipse, cx: number, cy: number, radius: number): boolean {
+        const centerDx = ellipse.cx - cx;
+        const centerDy = ellipse.cy - cy;
+        if (centerDx * centerDx + centerDy * centerDy > (ellipse.maxRadius + radius) * (ellipse.maxRadius + radius)) return false;
+
+        const det = ellipse.ax * ellipse.by - ellipse.ay * ellipse.bx;
+        const dx = cx - ellipse.cx;
+        const dy = cy - ellipse.cy;
+        let ux = 1;
+        let uy = 0;
+        if (Math.abs(det) > 1e-6) {
+            const qx = (dx * ellipse.by - dy * ellipse.bx) / det;
+            const qy = (-dx * ellipse.ay + dy * ellipse.ax) / det;
+            const qLen = Math.hypot(qx, qy);
+            if (Number.isFinite(qLen) && qLen > 1e-6) {
+                ux = qx / qLen;
+                uy = qy / qLen;
+            } else {
+                const aLen = Math.hypot(ellipse.ax, ellipse.ay);
+                const bLen = Math.hypot(ellipse.bx, ellipse.by);
+                ux = aLen <= bLen ? 1 : 0;
+                uy = aLen <= bLen ? 0 : 1;
+            }
+        }
+        const bx = ellipse.cx + ellipse.ax * ux + ellipse.bx * uy;
+        const by = ellipse.cy + ellipse.ay * ux + ellipse.by * uy;
+        const bdx = bx - cx;
+        const bdy = by - cy;
+        return bdx * bdx + bdy * bdy <= radius * radius;
+    }
+
+    private outlineFootprintIntersectsBrush(ellipse: ScreenOutlineEllipse, cx: number, cy: number, radius: number): boolean {
+        if (this.pointInOutlineEllipse(ellipse, cx, cy)) return true;
+        const centerDx = ellipse.cx - cx;
+        const centerDy = ellipse.cy - cy;
+        if (centerDx * centerDx + centerDy * centerDy <= radius * radius) return true;
+        return this.outlineBoundaryIntersectsBrush(ellipse, cx, cy, radius);
+    }
+
+    private pointInRect(x: number, y: number, minX: number, minY: number, maxX: number, maxY: number): boolean {
+        return x >= minX && x <= maxX && y >= minY && y <= maxY;
+    }
+
+    private segmentsIntersect(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }, d: { x: number; y: number }): boolean {
+        const orient = (p: { x: number; y: number }, q: { x: number; y: number }, r: { x: number; y: number }) =>
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+        const onSegment = (p: { x: number; y: number }, q: { x: number; y: number }, r: { x: number; y: number }) =>
+            Math.min(p.x, r.x) - 1e-6 <= q.x && q.x <= Math.max(p.x, r.x) + 1e-6 &&
+            Math.min(p.y, r.y) - 1e-6 <= q.y && q.y <= Math.max(p.y, r.y) + 1e-6;
+        const o1 = orient(a, b, c);
+        const o2 = orient(a, b, d);
+        const o3 = orient(c, d, a);
+        const o4 = orient(c, d, b);
+        if (Math.abs(o1) < 1e-6 && onSegment(a, c, b)) return true;
+        if (Math.abs(o2) < 1e-6 && onSegment(a, d, b)) return true;
+        if (Math.abs(o3) < 1e-6 && onSegment(c, a, d)) return true;
+        if (Math.abs(o4) < 1e-6 && onSegment(c, b, d)) return true;
+        return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0);
+    }
+
+    private outlineBoundaryIntersectsRect(ellipse: ScreenOutlineEllipse, minX: number, minY: number, maxX: number, maxY: number): boolean {
+        if (ellipse.cx + ellipse.maxRadius < minX || ellipse.cx - ellipse.maxRadius > maxX || ellipse.cy + ellipse.maxRadius < minY || ellipse.cy - ellipse.maxRadius > maxY) return false;
+        const rectEdges = [
+            [{ x: minX, y: minY }, { x: maxX, y: minY }],
+            [{ x: maxX, y: minY }, { x: maxX, y: maxY }],
+            [{ x: maxX, y: maxY }, { x: minX, y: maxY }],
+            [{ x: minX, y: maxY }, { x: minX, y: minY }]
+        ];
+        let prev = this.getOutlineBoundaryPoint(ellipse, OUTLINE_SAMPLE_STEPS - 1);
+        for (let i = 0; i < OUTLINE_SAMPLE_STEPS; i++) {
+            const cur = this.getOutlineBoundaryPoint(ellipse, i);
+            if (this.pointInRect(cur.x, cur.y, minX, minY, maxX, maxY)) return true;
+            for (const [a, b] of rectEdges) {
+                if (this.segmentsIntersect(prev, cur, a, b)) return true;
+            }
+            prev = cur;
+        }
+        return false;
+    }
+
+    private outlineFootprintIntersectsRect(ellipse: ScreenOutlineEllipse, minX: number, minY: number, maxX: number, maxY: number): boolean {
+        if (ellipse.cx + ellipse.maxRadius < minX || ellipse.cx - ellipse.maxRadius > maxX || ellipse.cy + ellipse.maxRadius < minY || ellipse.cy - ellipse.maxRadius > maxY) return false;
+        if (this.pointInRect(ellipse.cx, ellipse.cy, minX, minY, maxX, maxY)) return true;
+        if (this.pointInOutlineEllipse(ellipse, minX, minY)) return true;
+        if (this.pointInOutlineEllipse(ellipse, maxX, minY)) return true;
+        if (this.pointInOutlineEllipse(ellipse, maxX, maxY)) return true;
+        if (this.pointInOutlineEllipse(ellipse, minX, maxY)) return true;
+        return this.outlineBoundaryIntersectsRect(ellipse, minX, minY, maxX, maxY);
     }
 
     // #WDD 2026-04-18: Check if a point is visible at a specific time
@@ -1556,6 +2059,15 @@ export class SelectionTool {
             lifeTexData,
             trajectoryData: runtime.trajectoryData || parsed?.trajectory || null,
             originalIndices: runtime.originalIndices || parsed?.original_index || readProp('original_index'),
+            scale0: runtime.scale0 || parsed?.scale_0 || readProp('scale_0'),
+            scale1: runtime.scale1 || parsed?.scale_1 || readProp('scale_1'),
+            scale2: runtime.scale2 || parsed?.scale_2 || readProp('scale_2'),
+            rot0: runtime.rot0 || parsed?.rot_0 || readProp('rot_0'),
+            rot1: runtime.rot1 || parsed?.rot_1 || readProp('rot_1'),
+            rot2: runtime.rot2 || parsed?.rot_2 || readProp('rot_2'),
+            rot3: runtime.rot3 || parsed?.rot_3 || readProp('rot_3'),
+            opacity: runtime.opacity || parsed?.opacity || readProp('opacity'),
+            rotationSemantic: runtime.rotationSemantic || (parsed?.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz'),
             posArrays: runtime.posArrays || (cachedPositions && x && y && z ? {
                 x: x as Float32Array,
                 y: y as Float32Array,
@@ -1644,7 +2156,7 @@ export class SelectionTool {
     }
 
     performBrush(cx: number, cy: number) {
-        if (this.selectionMode === 'ellipse') {
+        if (this.selectionMode === 'rings') {
             this.performBrushEllipse(cx, cy);
             return;
         }
@@ -1717,7 +2229,7 @@ export class SelectionTool {
     }
 
     performRect(x1: number, y1: number, x2: number, y2: number) {
-        if (this.selectionMode === 'ellipse') {
+        if (this.selectionMode === 'rings') {
             this.performRectEllipse(x1, y1, x2, y2);
             return;
         }
@@ -1826,88 +2338,59 @@ export class SelectionTool {
         }
     }
 
-    // ===== ELLIPSE SELECTION METHODS =====
+    // ===== RINGS SELECTION METHODS =====
     
-    // Simple ellipse-brush intersection using screen-space approximation
+    // #WDD-gpt 2026-06-13 - Rings 模式按屏幕可见 footprint 命中，当前实现仍使用 CPU 椭圆近似
     performBrushEllipse(cx: number, cy: number) {
-        const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
-
-        const camera = this.viewer.camera?.camera;
-        if (!camera) return;
-
+        const cache = this.getRingsOutlineCache();
+        if (!cache || !this.selectionData || !this.allTimeSelectionData) return;
+        const selectionData = this.selectionData;
+        const allTimeSelectionData = this.allTimeSelectionData;
         const r = this.brushRadius;
         const rSq = r * r;
-        
         let changed = false;
-        const numSplats = positions.length / 3;
-        const screen = new pc.Vec3();
-        
-        const modelMat = this.viewer.splatEntity.getWorldTransform();
-        const localPos = new pc.Vec3();
-        const worldPos = new pc.Vec3();
 
-        for (let i = 0; i < numSplats; i++) {
-            localPos.set(
-                positions[i * 3 + 0],
-                positions[i * 3 + 1],
-                positions[i * 3 + 2]
-            );
+        this.visitRingsCandidates(cache, cx - r, cy - r, cx + r, cy + r, (i) => {
+            if (!cache.valid[i]) return;
+            const idx = i * 4;
+            if (selectionData[idx + 1] > 0) return;
 
-            modelMat.transformPoint(localPos, worldPos);
-            camera.worldToScreen(worldPos, screen);
+            const max = cache.maxRadius[i] + r;
+            const dx = cache.cx[i] - cx;
+            const dy = cache.cy[i] - cy;
+            if (dx * dx + dy * dy > max * max) return;
 
-            // screen.z > 0 means in front of camera
-            if (screen.z <= 0) continue;
-
-            // For ellipse mode: check if brush intersects with splat's ellipse boundary
-            // Estimate screen-space ellipse radius based on z-depth
-            // Use smaller radius so brush must be closer to center to select
-            const pixelSize = Math.max(2, Math.min(15, 100 / (screen.z + 5))); 
-            const totalRadius = r + pixelSize;
-            const totalRSq = totalRadius * totalRadius;
-            
-            const dx = screen.x - cx;
-            const dy = screen.y - cy;
-            
-            if (dx * dx + dy * dy <= totalRSq) {
-                const idx = i * 4;
-                if (this.selectionData[idx + 1] > 0) continue;
-
-                // #WDD 2026-04-10: Only update current selection if visible at current time
-                if (this.isVisibleAtCurrentTime(i)) {
-                    // #WDD-gpt 2026-06-13 - 普通 ellipse brush 只同步当前帧可见命中，避免隐藏点进入删除候选
-                    this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
-                    if (this.isSubtracting) {
-                        if (this.selectionData[idx] > 0) {
-                            this.selectionData[idx] = 0;
-                            changed = true;
-                        }
-                    } else {
-                        if (this.selectionData[idx] === 0) {
-                            this.selectionData[idx] = 255;
-                            changed = true;
-                        }
+            if (dx * dx + dy * dy <= rSq || this.outlineFootprintIntersectsBrush(this.getCachedRingEllipse(cache, i), cx, cy, r)) {
+                // #WDD-gpt 2026-06-13 - 普通 rings brush 只同步当前帧可见命中，避免隐藏点进入删除候选
+                allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
+                if (this.isSubtracting) {
+                    if (selectionData[idx] > 0) {
+                        selectionData[idx] = 0;
+                        changed = true;
                     }
-                    if (!this.isAllTimeTool()) this.selectionScope = 'current';
+                } else {
+                    if (selectionData[idx] === 0) {
+                        selectionData[idx] = 255;
+                        changed = true;
+                    }
                 }
+                if (!this.isAllTimeTool()) this.selectionScope = 'current';
             }
-        }
+        });
         
         if (changed) this.updateTexture();
     }
 
-    // Simple ellipse-rect intersection
+    // #WDD-gpt 2026-06-13 - Rings 模式矩形命中使用屏幕 footprint 与矩形相交
     performRectEllipse(x1: number, y1: number, x2: number, y2: number) {
         if (this.isAllTimeTool()) {
             void this.performRectEllipseAllTime(x1, y1, x2, y2);
             return;
         }
-        const positions = this.getCachedPositions();
-        if (!positions || !this.selectionData || !this.allTimeSelectionData) return;
-
-        const camera = this.viewer.camera?.camera;
-        if (!camera) return;
+        const cache = this.getRingsOutlineCache();
+        if (!cache || !this.selectionData || !this.allTimeSelectionData) return;
+        const selectionData = this.selectionData;
+        const allTimeSelectionData = this.allTimeSelectionData;
 
         const minX = Math.min(x1, x2);
         const maxX = Math.max(x1, x2);
@@ -1915,56 +2398,31 @@ export class SelectionTool {
         const maxY = Math.max(y1, y2);
         
         let changed = false;
-        const numSplats = positions.length / 3;
-        const screen = new pc.Vec3();
-        
-        const modelMat = this.viewer.splatEntity.getWorldTransform();
-        const localPos = new pc.Vec3();
-        const worldPos = new pc.Vec3();
+        this.visitRingsCandidates(cache, minX, minY, maxX, maxY, (i) => {
+            if (!cache.valid[i]) return;
+            const radius = cache.maxRadius[i];
+            if (cache.cx[i] + radius < minX || cache.cx[i] - radius > maxX || cache.cy[i] + radius < minY || cache.cy[i] - radius > maxY) return;
 
-        for (let i = 0; i < numSplats; i++) {
-            localPos.set(
-                positions[i * 3 + 0],
-                positions[i * 3 + 1],
-                positions[i * 3 + 2]
-            );
-
-            modelMat.transformPoint(localPos, worldPos);
-            camera.worldToScreen(worldPos, screen);
-
-            if (screen.z <= 0) continue;
-
-            // Estimate screen-space ellipse radius based on z-depth
-            const pixelSize = Math.max(2, Math.min(15, 100 / (screen.z + 5)));
-            
-            // Check if splat circle intersects with selection rect
-            if (screen.x >= minX - pixelSize && 
-                screen.x <= maxX + pixelSize &&
-                screen.y >= minY - pixelSize && 
-                screen.y <= maxY + pixelSize) {
-                
+            if (this.outlineFootprintIntersectsRect(this.getCachedRingEllipse(cache, i), minX, minY, maxX, maxY)) {
                 const idx = i * 4;
-                if (this.selectionData[idx + 1] > 0) continue;
+                if (selectionData[idx + 1] > 0) return;
 
-                // #WDD 2026-04-10: Only update current selection if visible at current time
-                if (this.isVisibleAtCurrentTime(i)) {
-                    // #WDD-gpt 2026-06-13 - 普通 ellipse rect 只同步当前帧可见命中，避免隐藏点进入删除候选
-                    this.allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
-                    if (this.isSubtracting) {
-                        if (this.selectionData[idx] > 0) {
-                            this.selectionData[idx] = 0;
-                            changed = true;
-                        }
-                    } else {
-                        if (this.selectionData[idx] === 0) {
-                            this.selectionData[idx] = 255;
-                            changed = true;
-                        }
+                // #WDD-gpt 2026-06-13 - 普通 rings rect 只同步当前帧可见命中，避免隐藏点进入删除候选
+                allTimeSelectionData[idx] = this.isSubtracting ? 0 : 255;
+                if (this.isSubtracting) {
+                    if (selectionData[idx] > 0) {
+                        selectionData[idx] = 0;
+                        changed = true;
                     }
-                    if (!this.isAllTimeTool()) this.selectionScope = 'current';
+                } else {
+                    if (selectionData[idx] === 0) {
+                        selectionData[idx] = 255;
+                        changed = true;
+                    }
                 }
+                if (!this.isAllTimeTool()) this.selectionScope = 'current';
             }
-        }
+        });
         
         if (changed) this.updateTexture();
     }
@@ -1978,7 +2436,17 @@ export class SelectionTool {
 
     // Generic all-time selection: check all frames for points that are visible and in selection area
     // Now async to allow progress UI updates during the long-running operation
-    private async selectAllTimePoints(checkScreen: (screenX: number, screenY: number, screenZ: number, splatIdx: number) => boolean): Promise<boolean> {
+    private async selectAllTimePoints(checkScreen: (
+        screenX: number,
+        screenY: number,
+        screenZ: number,
+        splatIdx: number,
+        localPos: pc.Vec3,
+        worldPos: pc.Vec3,
+        modelMat: pc.Mat4,
+        runtime: any,
+        time: number
+    ) => boolean): Promise<boolean> {
         const camera = this.viewer.camera?.camera;
         if (!camera) return false;
         const before = this.captureGlobalSelectionState();
@@ -1994,6 +2462,7 @@ export class SelectionTool {
                 : sequenceElements;
         }
         const hasSequence = Array.isArray(sequenceElements) && sequenceElements.length > 0;
+        const activeScaleProps = this.getActiveOutlineScaleProps();
         const targets = hasSequence ? sequenceElements : [{
             entity: this.viewer.splatEntity,
             runtime: {
@@ -2004,6 +2473,15 @@ export class SelectionTool {
                 lifeTexData: this.viewer.lifeTexData,
                 trajectoryData: this.viewer.trajectoryData,
                 originalIndices: this.viewer.originalIndices,
+                scale0: activeScaleProps.scale0,
+                scale1: activeScaleProps.scale1,
+                scale2: activeScaleProps.scale2,
+                rot0: activeScaleProps.rot0,
+                rot1: activeScaleProps.rot1,
+                rot2: activeScaleProps.rot2,
+                rot3: activeScaleProps.rot3,
+                opacity: activeScaleProps.opacity,
+                rotationSemantic: activeScaleProps.rotationSemantic,
                 posArrays: this.viewer.posArrays,
                 cachedPositions: this.getCachedPositions(),
                 selectionData: this.selectionData,
@@ -2082,7 +2560,7 @@ export class SelectionTool {
                     modelMat.transformPoint(localPos, worldPos);
                     camera.worldToScreen(worldPos, screen);
 
-                    if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i)) {
+                    if (screen.z > 0 && checkScreen(screen.x, screen.y, screen.z, i, localPos, worldPos, modelMat, rt, t)) {
                         found[i] = 1;
                         if (isCurrentFrame) currentFound[i] = 1;
                     }
@@ -2170,28 +2648,32 @@ export class SelectionTool {
     }
 
     async performBrushEllipseAllTime(cx: number, cy: number) {
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
         const r = this.brushRadius;
-        const rSq = r * r;
-        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
-            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
-            const totalRadius = r + pixelSize;
-            const totalRSq = totalRadius * totalRadius;
-            const dx = sx - cx;
-            const dy = sy - cy;
-            return dx * dx + dy * dy <= totalRSq;
+        const tempLocal = new pc.Vec3();
+        const tempWorld = new pc.Vec3();
+        const tempScreen = new pc.Vec3();
+        const changed = await this.selectAllTimePoints((sx, sy, _sz, i, localPos, worldPos, modelMat, rt, time) => {
+            const outline = this.getOutlineScreenEllipse(i, localPos, worldPos, modelMat, camera, rt, time, tempLocal, tempWorld, tempScreen);
+            return !!outline && this.outlineFootprintIntersectsBrush(outline, cx, cy, r);
         });
         if (changed) this.updateTexture();
     }
 
     async performRectEllipseAllTime(x1: number, y1: number, x2: number, y2: number) {
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
         const minX = Math.min(x1, x2);
         const maxX = Math.max(x1, x2);
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
-        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
-            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
-            return sx >= minX - pixelSize && sx <= maxX + pixelSize &&
-                   sy >= minY - pixelSize && sy <= maxY + pixelSize;
+        const tempLocal = new pc.Vec3();
+        const tempWorld = new pc.Vec3();
+        const tempScreen = new pc.Vec3();
+        const changed = await this.selectAllTimePoints((sx, sy, _sz, i, localPos, worldPos, modelMat, rt, time) => {
+            const outline = this.getOutlineScreenEllipse(i, localPos, worldPos, modelMat, camera, rt, time, tempLocal, tempWorld, tempScreen);
+            return !!outline && this.outlineFootprintIntersectsRect(outline, minX, minY, maxX, maxY);
         });
         if (changed) this.updateTexture();
     }
@@ -2233,6 +2715,8 @@ export class SelectionTool {
 
     async performBrushEllipseAllTimePath(path: Array<{x: number, y: number}>) {
         if (path.length === 0) return;
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
 
         // Simplify path: remove points that are too close to each other
         const simplified: Array<{x: number, y: number}> = [];
@@ -2252,15 +2736,15 @@ export class SelectionTool {
 
         const r = this.brushRadius;
         const circles = simplified.map(p => ({x: p.x, y: p.y}));
+        const tempLocal = new pc.Vec3();
+        const tempWorld = new pc.Vec3();
+        const tempScreen = new pc.Vec3();
 
-        const changed = await this.selectAllTimePoints((sx, sy, sz) => {
-            const pixelSize = Math.max(2, Math.min(15, 100 / (sz + 5)));
+        const changed = await this.selectAllTimePoints((sx, sy, _sz, i, localPos, worldPos, modelMat, rt, time) => {
+            const outline = this.getOutlineScreenEllipse(i, localPos, worldPos, modelMat, camera, rt, time, tempLocal, tempWorld, tempScreen);
+            if (!outline) return false;
             for (const c of circles) {
-                const totalRadius = r + pixelSize;
-                const totalRSq = totalRadius * totalRadius;
-                const dx = sx - c.x;
-                const dy = sy - c.y;
-                if (dx * dx + dy * dy <= totalRSq) return true;
+                if (this.outlineFootprintIntersectsBrush(outline, c.x, c.y, r)) return true;
             }
             return false;
         });
@@ -2291,11 +2775,17 @@ export class SelectionTool {
     async performPolygon(pts: Array<{x: number, y: number}>) {
         if (pts.length < 3) return;
         
+        const camera = this.viewer.camera?.camera;
+        if (!camera) return;
         const isAllTime = this.isAllTimeTool();
         const minX = Math.min(...pts.map(p => p.x));
         const maxX = Math.max(...pts.map(p => p.x));
         const minY = Math.min(...pts.map(p => p.y));
         const maxY = Math.max(...pts.map(p => p.y));
+        const activeScaleProps = this.getActiveOutlineScaleProps();
+        const tempLocal = new pc.Vec3();
+        const tempWorld = new pc.Vec3();
+        const tempScreen = new pc.Vec3();
         
         const pointInPoly = (x: number, y: number) => {
             let inside = false;
@@ -2308,18 +2798,51 @@ export class SelectionTool {
             return inside;
         };
 
-        const checkInPoly = (sx: number, sy: number, sz: number) => {
-            let padding = 0;
-            if (this.selectionMode === 'ellipse') {
-                padding = Math.max(2, Math.min(15, 100 / (sz + 5)));
+        const outlineFootprintIntersectsPoly = (ellipse: ScreenOutlineEllipse) => {
+            if (ellipse.cx + ellipse.maxRadius < minX || ellipse.cx - ellipse.maxRadius > maxX || ellipse.cy + ellipse.maxRadius < minY || ellipse.cy - ellipse.maxRadius > maxY) return false;
+            if (pointInPoly(ellipse.cx, ellipse.cy)) return true;
+            for (const pt of pts) {
+                if (this.pointInOutlineEllipse(ellipse, pt.x, pt.y)) return true;
             }
-            if (sx < minX - padding || sx > maxX + padding || sy < minY - padding || sy > maxY + padding) return false;
-            return pointInPoly(sx, sy);
+            let prev = this.getOutlineBoundaryPoint(ellipse, OUTLINE_SAMPLE_STEPS - 1);
+            for (let i = 0; i < OUTLINE_SAMPLE_STEPS; i++) {
+                const cur = this.getOutlineBoundaryPoint(ellipse, i);
+                if (pointInPoly(cur.x, cur.y)) return true;
+                for (let p = 0, q = pts.length - 1; p < pts.length; q = p++) {
+                    if (this.segmentsIntersect(prev, cur, pts[q], pts[p])) {
+                        return true;
+                    }
+                }
+                prev = cur;
+            }
+            return false;
+        };
+
+        const checkInPoly = (
+            sx: number,
+            sy: number,
+            sz: number,
+            splatIdx: number,
+            localPos: pc.Vec3,
+            worldPos: pc.Vec3,
+            modelMat: pc.Mat4,
+            scaleProps: OutlineScaleProps | null | undefined,
+            time: number
+        ) => {
+            if (this.selectionMode !== 'rings') {
+                if (sx < minX || sx > maxX || sy < minY || sy > maxY) return false;
+                return pointInPoly(sx, sy);
+            }
+            const outline = this.getOutlineScreenEllipse(splatIdx, localPos, worldPos, modelMat, camera, scaleProps, time, tempLocal, tempWorld, tempScreen);
+            if (!outline) return false;
+            if (sx < minX - outline.maxRadius || sx > maxX + outline.maxRadius || sy < minY - outline.maxRadius || sy > maxY + outline.maxRadius) return false;
+            if (sz <= 0) return false;
+            return outlineFootprintIntersectsPoly(outline);
         };
 
         // #WDD 2026-04-20: For all-time tool, use selectAllTimePoints helper which iterates through all frames
         if (isAllTime) {
-            const changed = await this.selectAllTimePoints((sx, sy, sz) => checkInPoly(sx, sy, sz));
+            const changed = await this.selectAllTimePoints((sx, sy, sz, i, localPos, worldPos, modelMat, rt, time) => checkInPoly(sx, sy, sz, i, localPos, worldPos, modelMat, rt, time));
             if (changed) this.updateTexture();
             return;
         }
@@ -2327,9 +2850,6 @@ export class SelectionTool {
         // Standard tool: only check current frame
         const positions = this.getCachedPositions();
         if (!positions || !this.selectionData) return;
-
-        const camera = this.viewer.camera?.camera;
-        if (!camera) return;
 
         let changed = false;
         const numSplats = positions.length / 3;
@@ -2346,7 +2866,7 @@ export class SelectionTool {
             modelMat.transformPoint(localPos, worldPos);
             camera.worldToScreen(worldPos, screen);
 
-            if (screen.z > 0 && checkInPoly(screen.x, screen.y, screen.z)) {
+            if (screen.z > 0 && checkInPoly(screen.x, screen.y, screen.z, i, localPos, worldPos, modelMat, activeScaleProps, currentTime)) {
                 const idx = i * 4;
                 if (this.selectionData[idx + 1] > 0) continue; // Skip deleted
                 // #WDD-gpt 2026-06-13 - 普通 poly 与 brush/rect 一致，只维护当前帧可见选择

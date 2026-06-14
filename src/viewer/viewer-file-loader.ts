@@ -224,6 +224,7 @@ export class ViewerFileLoader {
 
         // Update filename for caching
         v.currentFileName = file.name;
+        v.currentFileSize = file.size;
         v.currentTransformCacheKey = file.name;
 
         if (!options.keepSog4Sequence) {

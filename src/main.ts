@@ -32,6 +32,8 @@ import type { CameraPreset, SequenceFrameData, SplatSequence, SplatSequenceEleme
 import { ViewerExportManager } from './viewer/viewer-export-manager';
 import { ViewerTimelineManager } from './viewer/viewer-timeline-manager';
 import { ViewerSceneManager } from './viewer/viewer-scene-manager';
+import { ViewerFileInfoPanel } from './viewer/viewer-file-info-panel';
+import { applyI18n, bindLanguageToggle } from './i18n';
 
 export class Viewer {
     app: pc.Application;
@@ -41,6 +43,7 @@ export class Viewer {
     duration = 1.0;
     fps = 30; // Default playback fps
     currentFileName: string | null = null;
+    currentFileSize: number | null = null;
     private currentTransformCacheKey: string | null = null;
     private sourceModelTransform: ModelTransform | null = null;
     private modelTransformEdited = false;
@@ -73,6 +76,7 @@ export class Viewer {
     // #WDD 2026-04-11 Performance Monitor
     private performanceMonitor: PerformanceMonitor;
     private performancePanel: PerformancePanel;
+    private simpleMemorySummaryTimer: number | null = null;
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
@@ -825,6 +829,137 @@ export class Viewer {
         activate('panel-common');
     }
 
+    private bindSimpleMemorySummary() {
+        const memValue = document.getElementById('simple-memory-value');
+        const gpuValue = document.getElementById('simple-gpu-memory-value');
+        const memCard = document.getElementById('simple-memory-card');
+        const gpuCard = document.getElementById('simple-gpu-memory-card');
+        if (!memValue || !gpuValue || !memCard || !gpuCard) return;
+        if (this.simpleMemorySummaryTimer !== null) return;
+
+        // #WDD-gpt 2026-06-13 - 简化面板显示内存/显存摘要，详情放入多行 tooltip
+        const update = () => {
+            const stats = this.getSimpleMemoryStats();
+            memValue.textContent = stats.memoryShort;
+            gpuValue.textContent = stats.gpuShort;
+            memCard.setAttribute('data-tip', stats.memoryDetail);
+            memCard.setAttribute('title', stats.memoryDetail);
+            gpuCard.setAttribute('data-tip', stats.gpuDetail);
+            gpuCard.setAttribute('title', stats.gpuDetail);
+        };
+
+        update();
+        this.simpleMemorySummaryTimer = window.setInterval(update, 1000);
+    }
+
+    private getSimpleMemoryStats() {
+        const metrics = this.performanceMonitor.getCurrentMetrics();
+        const device = this.performanceMonitor.getDeviceCapability();
+        const modelCpuBytes = this.estimateModelCpuBytes();
+        const textureBytes = this.estimateModelTextureBytes();
+        const sourceBytes = this.getByteLength(this.lastParsedData?.sogBuffer || this.lastParsedData?.plyBuffer);
+        const jsHeapBytes = typeof metrics?.memoryUsage === 'number' ? metrics.memoryUsage * 1024 * 1024 : 0;
+        const gpuBytes = typeof metrics?.gpuMemory === 'number' ? metrics.gpuMemory : 0;
+        const browserTextureBytes = typeof metrics?.textureMemory === 'number' ? metrics.textureMemory : 0;
+        const memoryShortBytes = jsHeapBytes || modelCpuBytes + sourceBytes;
+        const gpuShortBytes = gpuBytes || textureBytes || browserTextureBytes;
+
+        const memoryDetail = [
+            `JS Heap: ${jsHeapBytes ? this.formatCompactBytes(jsHeapBytes) : 'unavailable'}`,
+            `Model CPU: ${this.formatCompactBytes(modelCpuBytes)}`,
+            `Source Buffer: ${this.formatCompactBytes(sourceBytes)}`,
+            `Points: ${this.getLoadedPointCount().toLocaleString()}`
+        ].join('\n');
+
+        const gpuDetail = [
+            `WebGL Total: ${gpuBytes ? this.formatCompactBytes(gpuBytes) : 'unavailable'}`,
+            `WebGL Textures: ${browserTextureBytes ? this.formatCompactBytes(browserTextureBytes) : 'unavailable'}`,
+            `Model Texture Est: ${this.formatCompactBytes(textureBytes)}`,
+            `GPU: ${device.gpuRenderer || 'unknown'}`,
+            `Max Texture: ${device.maxTextureSize.toLocaleString()}`
+        ].join('\n');
+
+        return {
+            memoryShort: memoryShortBytes ? this.formatCompactBytes(memoryShortBytes) : '--',
+            gpuShort: gpuShortBytes ? this.formatCompactBytes(gpuShortBytes) : '--',
+            memoryDetail,
+            gpuDetail
+        };
+    }
+
+    private estimateModelCpuBytes() {
+        const parsed = this.lastParsedData || {};
+        const values = [
+            this.cachedPositions,
+            this.originalIndices,
+            parsed.trajectory,
+            parsed.rotTrajectory,
+            parsed.dcTrajectory,
+            parsed.lifetime_mu,
+            parsed.lifetime_w,
+            parsed.lifetime_k
+        ];
+        const props = parsed?.plyData?.elements?.[0]?.properties;
+        if (Array.isArray(props)) {
+            props.forEach((prop: any) => values.push(prop?.storage));
+        }
+        return this.sumUniqueByteLengths(values);
+    }
+
+    private estimateModelTextureBytes() {
+        const parsed = this.lastParsedData || {};
+        return this.sumUniqueByteLengths([
+            this.lifeTexData,
+            this.scalesTexData,
+            this.trajectoryData || parsed.trajectory,
+            this.rotTrajectoryData || parsed.rotTrajectory,
+            (this as any).dcTrajectoryData || parsed.dcTrajectory,
+            this.selectionTool?.selectionTexture ? this.selectionTool?.selectionData : null,
+            this.selectionTool?.selectionTexture ? this.selectionTool?.allTimeSelectionData : null
+        ]);
+    }
+
+    private sumUniqueByteLengths(values: any[]) {
+        const seen = new Set<ArrayBufferLike>();
+        let total = 0;
+        for (const value of values) {
+            if (!value) continue;
+            const buffer = value.buffer as ArrayBufferLike | undefined;
+            if (buffer) {
+                if (seen.has(buffer)) continue;
+                seen.add(buffer);
+            }
+            total += this.getByteLength(value);
+        }
+        return total;
+    }
+
+    private getByteLength(value: any): number {
+        if (!value) return 0;
+        if (typeof value.byteLength === 'number' && Number.isFinite(value.byteLength)) return value.byteLength;
+        if (value.buffer && typeof value.buffer.byteLength === 'number' && Number.isFinite(value.buffer.byteLength)) return value.buffer.byteLength;
+        return 0;
+    }
+
+    private getLoadedPointCount() {
+        const splatData = (this.splatEntity?.gsplat as any)?.asset?.resource?.splatData
+            || (this.splatEntity?.gsplat as any)?.instance?.splatData
+            || null;
+        return Number(splatData?.numSplats || this.lastParsedData?.count || Math.floor((this.cachedPositions?.length || 0) / 3) || 0);
+    }
+
+    private formatCompactBytes(bytes: number) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '--';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let value = bytes;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return `${value.toFixed(unit === 0 ? 0 : value >= 10 ? 1 : 2)}${units[unit]}`;
+    }
+
     private setupScene() { return this.sceneManager.setupScene(); }
     private initGrid() { return this.sceneManager.initGrid(); }
     private initAxes() { return this.sceneManager.initAxes(); }
@@ -1036,6 +1171,7 @@ export class Viewer {
         const simpleNext = document.getElementById('simple-next');
         const simplePlay = document.getElementById('simple-play-pause');
         const simpleToggleUI = document.getElementById('simple-toggle-ui');
+        this.bindSimpleMemorySummary();
 
         simplePrev?.addEventListener('click', () => {
             if (this.presetManager.cameraPresets.length === 0) return;
@@ -2570,6 +2706,7 @@ export class Viewer {
         this.totalFrames = assets.length;
         this.currentTime = 0;
         this.playbackTime = 0;
+        this.fileInfoPanel.refresh();
 
         const preloadAll = this.shouldPreloadAllSequenceFrames(assets.length);
         if (preloadAll) {
@@ -2712,6 +2849,7 @@ export class Viewer {
     private async loadPlySequence(files: File[]): Promise<void> {
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
+        this.currentFileSize = files.reduce((sum, file) => sum + file.size, 0);
         progress(0, 'PREPARING', `Parsing ${files.length} PLY frames`);
         let succeeded = false;
         try {
@@ -2899,6 +3037,7 @@ export class Viewer {
     private async loadSog4Sequence(files: File[]): Promise<void> {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
+        this.currentFileSize = totalSize;
         
         const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
         
@@ -2975,6 +3114,7 @@ export class Viewer {
             }
             this.refreshExportButtons();
             this.updateTransformUIFromEntity();
+            this.fileInfoPanel.refresh();
 
             // #WDD 2026-05-16: Do not auto-play or hide UI on SOG4 sequence load
 
@@ -3003,6 +3143,7 @@ export class Viewer {
     private async loadPly4Sequence(files: File[]): Promise<void> {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
+        this.currentFileSize = totalSize;
 
         const useSegmentedMode = this.shouldUseSegmentedPly4Mode(totalSize);
         const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
@@ -3093,6 +3234,7 @@ export class Viewer {
             this.refreshExportButtons();
             this.selectionTool?.refreshLazyModeVisibility?.();
             this.updateTransformUIFromEntity();
+            this.fileInfoPanel.refresh();
 
             // #WDD 2026-05-16: Do not auto-play or hide UI on PLY4 sequence load
 
@@ -3697,6 +3839,7 @@ export class Viewer {
         this.syncTimelineUI(this.currentTime, Math.max(0, Math.ceil(this.sog4SequenceTotalFrames || this.duration) - 1));
         this.fileLoader.updateStats(segment.asset);
         this.updateTransformUIFromEntity();
+        this.fileInfoPanel.refresh();
         if (this.ply4SequenceLoadMode === 'segmented') {
             this.showLazySegmentProgress(100, `PLY4 Lazy ${index + 1}/${this.sog4SequenceSegments.length}`, `Ready ${segment.name}`);
             this.hideLazySegmentProgress(700);
@@ -3707,6 +3850,7 @@ export class Viewer {
     private async loadSogSequence(files: File[]): Promise<void> {
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
+        this.currentFileSize = files.reduce((sum, file) => sum + file.size, 0);
         progress(0, 'PREPARING', `Parsing ${files.length} SOG frames`);
         let succeeded = false;
         const loader = new TrueSplatsLoader(this.app);
@@ -4324,6 +4468,7 @@ export class Viewer {
 
             setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
             this.fileLoader.updateStats(asset);
+            this.fileInfoPanel.refresh();
         }
 
         const hasPly4TransformMeta = !!(parsed?.meta && (
@@ -5302,6 +5447,7 @@ export class Viewer {
     private presetManager = new ViewerPresetManager(this);
     private faceTrackingManager = new ViewerFaceTrackingManager(this);
     private fileLoader = new ViewerFileLoader(this);
+    private fileInfoPanel = new ViewerFileInfoPanel(this);
 
     public async exportPlySequence() {
         return this.exportManager.exportPlySequence();
@@ -5329,7 +5475,10 @@ declare global {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+    applyI18n();
+    bindLanguageToggle(document.getElementById('language-toggle'));
     const viewer = new Viewer();
+    applyI18n();
     app = viewer.app;
     window.exportPlySequence = () => viewer.exportPlySequence();
     window.testSog4Delete = async (url: string, deleteRatio: number = 0.5) => {

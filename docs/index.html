@@ -7,10 +7,11 @@
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-xPuxZotC.ico" />
 
-  <script type="module" crossorigin src="./assets/index-CMzj4270.js"></script>
+  <script type="module" crossorigin src="./assets/index-B3s7YtSh.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/sog4-loader-BZ0rWGTW.js">
-  <link rel="modulepreload" crossorigin href="./assets/skybox-manager-9-jRqhNm.js">
-  <link rel="stylesheet" crossorigin href="./assets/style-CfIKFfrR.css">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-BugeL31a.js">
+  <link rel="modulepreload" crossorigin href="./assets/skybox-manager-BQH7Fh0F.js">
+  <link rel="stylesheet" crossorigin href="./assets/i18n-BrvUls5l.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -38,17 +39,21 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.19.2</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.19.4</span>
+                <button id="language-toggle"
+                    class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
+                    type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
+                    aria-label="Switch Language" data-i18n-aria-label="language.tip">中文</button>
                 <!-- #WDD-gpt 2026-05-16 - 显示 PLY4 序列当前读取模式，避免用户不清楚是否进入 lazy 分段缓冲 -->
                 <span id="sequence-load-mode-badge"
                     class="hidden text-[8px] font-extrabold tracking-tight uppercase px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-400/20"
-                    title="Current sequence loading mode">PLY4 FULL</span>
+                    title="Current sequence loading mode" data-i18n-title="sequence.loadingMode">PLY4 FULL</span>
                 <div class="h-3 w-px ui-border mx-1"></div>
 
                 <div class="relative">
                     <button id="toggle-samples" class="flex items-center gap-1.5 group p-1">
                         <span
-                            class="text-[9px] font-extrabold tracking-widest uppercase ui-text-secondary opacity-60 group-hover:opacity-100 transition-opacity">Samples</span>
+                            class="text-[9px] font-extrabold tracking-widest uppercase ui-text-secondary opacity-60 group-hover:opacity-100 transition-opacity" data-i18n="brand.samples">Samples</span>
                         <svg viewBox="0 0 24 24"
                             class="w-3 h-3 fill-current ui-text-secondary opacity-40 group-hover:opacity-100 transition-all group-[.open]:rotate-180">
                             <path d="M7 10l5 5 5-5z" />
@@ -69,18 +74,18 @@
     <aside id="left-tools-panel"
         class="fixed left-6 top-28 z-20 w-[160px] max-w-[calc(100vw-3rem)] pointer-events-auto transition-all duration-500 text-[9px] overflow-visible flex flex-col gap-1.5">
         <div class="left-panel-tabs" role="tablist" aria-label="Left tool panels">
-            <button class="left-panel-tab active" type="button" data-left-panel-tab="smart" aria-label="Smart">Smart</button>
-            <button class="left-panel-tab" type="button" data-left-panel-tab="edit" aria-label="Edit">Edit</button>
+            <button class="left-panel-tab active" type="button" data-left-panel-tab="smart" aria-label="Smart" data-i18n="left.smart" data-i18n-aria-label="left.smart">Smart</button>
+            <button class="left-panel-tab" type="button" data-left-panel-tab="edit" aria-label="Edit" data-i18n="left.edit" data-i18n-aria-label="left.edit">Edit</button>
         </div>
 
         <!-- #WDD-gpt 2026-05-15 - 新增左侧智能选择工具面板，用于地面检测和场景归零 -->
         <section id="smart-selection-panel"
             class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1.5 overflow-x-hidden" data-left-panel="smart">
             <div class="smart-panel-section">
-                <div class="smart-panel-label">Analyze</div>
+                <div class="smart-panel-label" data-i18n="smart.analyze">Analyze</div>
                 <button id="smart-align-run"
                     class="ui-btn h-7 w-full rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
-                    aria-label="Auto Analyze And Align" data-tip="Auto Align">
+                    aria-label="Auto Analyze And Align" data-tip="Auto Align" data-i18n-aria-label="smart.autoAlignAria" data-i18n-data-tip="smart.autoAlign">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                         stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M12 3v18"></path>
@@ -88,23 +93,23 @@
                         <path d="M7 7l10 10"></path>
                         <path d="M17 7L7 17"></path>
                     </svg>
-                    <span class="text-[8px] font-bold tracking-tight uppercase">Auto Align</span>
+                    <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.autoAlign">Auto Align</span>
                 </button>
 
                 <div class="smart-panel-divider" aria-hidden="true"></div>
 
-                <div class="smart-panel-label">Stats</div>
+                <div class="smart-panel-label" data-i18n="smart.stats">Stats</div>
                 <div class="grid grid-cols-3 gap-1">
                     <div class="panel-stat smart-align-stat">
-                        <span class="panel-stat-label">PLANE</span>
+                        <span class="panel-stat-label" data-i18n="smart.plane">PLANE</span>
                         <span id="smart-align-plane-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
                     <div class="panel-stat smart-align-stat">
-                        <span class="panel-stat-label">S / D</span>
+                        <span class="panel-stat-label" data-i18n="smart.staticDynamic">S / D</span>
                         <span id="smart-align-static-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
                     <div class="panel-stat smart-align-stat">
-                        <span class="panel-stat-label">CENTER</span>
+                        <span class="panel-stat-label" data-i18n="smart.center">CENTER</span>
                         <span id="smart-align-center-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
                 </div>
@@ -112,11 +117,11 @@
                 <div class="smart-panel-divider" aria-hidden="true"></div>
 
                 <!-- #WDD-gpt 2026-05-16 - 智能选择改为可调圆柱选择区域，避免自动分类漏选身体点 -->
-                <div class="smart-panel-label">Cylinder</div>
+                <div class="smart-panel-label" data-i18n="smart.cylinder">Cylinder</div>
                 <button id="smart-cylinder-toggle"
                     class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-secondary"
-                    aria-label="Toggle Cylinder Region">
-                    <span class="text-[8px] font-bold tracking-tight uppercase">Show Cylinder</span>
+                    aria-label="Toggle Cylinder Region" data-i18n-aria-label="smart.toggleCylinder">
+                    <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.showCylinder">Show Cylinder</span>
                 </button>
 
                 <div id="smart-cylinder-controls" class="smart-cylinder-controls hidden">
@@ -142,15 +147,15 @@
                                 class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                         <div class="flex items-center gap-1 ui-input px-1 py-0.5 col-span-2">
-                            <span class="text-[8px] opacity-60 w-8 ui-text-highlight font-bold">GROUND</span>
+                            <span class="text-[8px] opacity-60 w-8 ui-text-highlight font-bold" data-i18n="smart.ground">GROUND</span>
                             <input id="smart-cylinder-ground" type="number" step="0.01" value="0.08"
                                 class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
                     <button id="smart-cylinder-select"
                         class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight"
-                        aria-label="Select In Cylinder">
-                        <span class="text-[8px] font-bold tracking-tight uppercase">Select In Cylinder</span>
+                        aria-label="Select In Cylinder" data-i18n-aria-label="smart.selectInCylinder">
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.selectInCylinder">Select In Cylinder</span>
                     </button>
                 </div>
             </div>
@@ -170,23 +175,23 @@
                     <path d="M7 12h10"></path>
                     <path d="M10 17h4"></path>
                 </svg>
-                <span>Batch</span>
+                <span data-i18n="top.batch">Batch</span>
             </a>
             <!-- Main Controls Row -->
             <div class="grid grid-cols-3 gap-0.5">
-                <button id="toggle-ui" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Toggle UI" data-tip="Toggle UI">
+                <button id="toggle-ui" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Toggle UI" data-tip="Toggle UI" data-i18n-aria-label="top.toggleUi" data-i18n-data-tip="top.toggleUi">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                     </svg>
                 </button>
-                <button id="reset-cam" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Reset Camera" data-tip="Reset Cam">
+                <button id="reset-cam" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Reset Camera" data-tip="Reset Cam" data-i18n-aria-label="top.resetCamera" data-i18n-data-tip="top.resetCamera">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
                     </svg>
                 </button>
-                <button id="open-file" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Open File" data-tip="Open File">
+                <button id="open-file" class="ui-btn p-1 rounded-md flex justify-center has-tooltip" aria-label="Open File" data-tip="Open File" data-i18n-aria-label="top.openFile" data-i18n-data-tip="top.openFile">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path
                             d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" />
@@ -197,7 +202,7 @@
             <div id="export-button-row" class="grid grid-cols-2 gap-0.5">
                 <button id="btn-export-sog"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
-                    aria-label="Export SOG4" data-tip="Export SOG4">
+                    aria-label="Export SOG4" data-tip="Export SOG4" data-i18n-aria-label="top.exportSog4" data-i18n-data-tip="top.exportSog4">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
@@ -205,7 +210,7 @@
                 </button>
                 <button id="btn-export-ply4"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
-                    aria-label="Export PLY4" data-tip="Export PLY4">
+                    aria-label="Export PLY4" data-tip="Export PLY4" data-i18n-aria-label="top.exportPly4" data-i18n-data-tip="top.exportPly4">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
@@ -213,7 +218,7 @@
                 </button>
                 <button id="btn-export-ply4-sequence"
                     class="hidden ui-btn col-span-2 px-1 py-1 rounded-md flex items-center justify-center bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20"
-                    aria-label="Export PLY4 Sequence" data-tip="Export PLY4 Seq">
+                    aria-label="Export PLY4 Sequence" data-tip="Export PLY4 Seq" data-i18n-aria-label="top.exportPly4Seq" data-i18n-data-tip="top.exportPly4Seq">
                     <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM4 19h16v2H4z" />
                     </svg>
@@ -226,11 +231,13 @@
         <aside id="sidebar"
             class="w-[220px] max-w-[calc(100vw-3rem)] flex flex-col gap-1 pointer-events-auto transition-all duration-500 text-[9px]">
             <div class="right-panel-tabs sidebar-tabs">
-                <button class="right-panel-tab active sidebar-tab"
+                <button class="right-panel-tab active sidebar-tab" data-i18n="tabs.common"
                     data-panel-target="panel-common">COMMON</button>
-                <button class="right-panel-tab sidebar-tab"
+                <button class="right-panel-tab sidebar-tab" data-i18n="tabs.presets"
                     data-panel-target="panel-presets">PRESETS</button>
-                <button class="right-panel-tab sidebar-tab"
+                <button class="right-panel-tab sidebar-tab" data-i18n="tabs.info"
+                    data-panel-target="panel-info">INFO</button>
+                <button class="right-panel-tab sidebar-tab" data-i18n="tabs.special"
                     data-panel-target="panel-special">SPECIAL</button>
             </div>
 
@@ -238,14 +245,14 @@
                 class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view">
                 <div class="panel-header">
                     <div>
-                        <div class="panel-title">COMMON</div>
+                        <div class="panel-title" data-i18n="tabs.common">COMMON</div>
 
                     </div>
                 </div>
 
                 <div class="space-y-1.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">POSITION</span>
+                        <span class="panel-label" data-i18n="panel.position">POSITION</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1.5 font-mono">
                         <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
@@ -268,7 +275,7 @@
 
                 <div class="space-y-1.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">ROTATION</span>
+                        <span class="panel-label" data-i18n="panel.rotation">ROTATION</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1.5 font-mono">
                         <div class="flex items-center gap-1.5 ui-input px-1.5 py-1">
@@ -291,7 +298,7 @@
 
                 <div class="space-y-1.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">SCALE</span>
+                        <span class="panel-label" data-i18n="panel.scale">SCALE</span>
                     </div>
                     <div class="flex items-center gap-1.5 ui-input px-1.5 py-1 font-mono">
                         <span class="text-[9px] opacity-60 w-2.5 ui-text-highlight font-bold">S</span>
@@ -304,25 +311,40 @@
 
                 <div class="space-y-1">
                     <div class="panel-label-row">
-                        <span class="panel-label">VIEWS</span>
+                        <span class="panel-label" data-i18n="panel.views">VIEWS</span>
                     </div>
                     <div class="grid grid-cols-3 gap-1">
                         <button id="view-top" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
-                            aria-label="Top View" data-tip="Top">
-                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
-                                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                            aria-label="Top View" data-tip="Top" data-i18n-aria-label="view.top" data-i18n-data-tip="view.top">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 9 5.5 5.6 12 2.2l6.5 3.4L12 9z" fill="currentColor" fill-opacity="0.72" stroke="none" />
+                                <path d="M5.5 5.6v7L12 16l6.5-3.4v-7" opacity="0.5" />
+                                <path d="M12 9v7" opacity="0.5" />
+                                <path d="M12 21v-3.7" />
+                                <path d="m9.8 19 2.2-2.2 2.2 2.2" />
                             </svg>
                         </button>
                         <button id="view-front" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
-                            aria-label="Front View" data-tip="Front">
-                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
-                                <path d="M2 7v10l10 5V12L2 7z" />
+                            aria-label="Front View" data-tip="Front" data-i18n-aria-label="view.front" data-i18n-data-tip="view.front">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M5.5 7.6 12 11l6.5-3.4L12 4.2 5.5 7.6z" opacity="0.5" />
+                                <path d="M5.5 7.6v7L12 18l6.5-3.4v-7" opacity="0.5" />
+                                <path d="M5.5 7.6v7L12 18v-7L5.5 7.6z" fill="currentColor" fill-opacity="0.72" stroke="none" />
+                                <path d="M21.5 12h-3.7" />
+                                <path d="m19.5 9.8-2.2 2.2 2.2 2.2" />
                             </svg>
                         </button>
                         <button id="view-side" class="h-7 flex items-center justify-center ui-btn rounded-md has-tooltip"
-                            aria-label="Side View" data-tip="Side">
-                            <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
-                                <path d="M22 7v10l-10 5V12l10-5z" />
+                            aria-label="Side View" data-tip="Side" data-i18n-aria-label="view.side" data-i18n-data-tip="view.side">
+                            <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M5.5 7.6 12 11l6.5-3.4L12 4.2 5.5 7.6z" opacity="0.5" />
+                                <path d="M5.5 7.6v7L12 18l6.5-3.4v-7" opacity="0.5" />
+                                <path d="M18.5 7.6v7L12 18v-7l6.5-3.4z" fill="currentColor" fill-opacity="0.72" stroke="none" />
+                                <path d="M2.5 12h3.7" />
+                                <path d="m4.5 9.8 2.2 2.2-2.2 2.2" />
                             </svg>
                         </button>
                     </div>
@@ -330,11 +352,11 @@
 
                 <div class="space-y-1">
                     <div class="panel-label-row">
-                        <span class="panel-label">SCENE</span>
+                        <span class="panel-label" data-i18n="panel.scene">SCENE</span>
                     </div>
                     <div class="grid grid-cols-4 gap-1">
                         <button id="toggle-grid" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
-                            aria-label="Toggle Grid" data-tip="Grid">
+                            aria-label="Toggle Grid" data-tip="Grid" data-i18n-aria-label="scene.grid" data-i18n-data-tip="scene.grid">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -342,14 +364,14 @@
                             </svg>
                         </button>
                         <button id="toggle-axes" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
-                            aria-label="Toggle Axes" data-tip="Axes">
+                            aria-label="Toggle Axes" data-tip="Axes" data-i18n-aria-label="scene.axes" data-i18n-data-tip="scene.axes">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <path d="M12 12L3 17M12 12L21 17M12 12V3" />
                             </svg>
                         </button>
                         <button id="toggle-theme" class="h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
-                            aria-label="Toggle Theme" data-tip="Theme">
+                            aria-label="Toggle Theme" data-tip="Theme" data-i18n-aria-label="scene.theme" data-i18n-data-tip="scene.theme">
                             <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="2.5">
                                 <path
@@ -358,7 +380,7 @@
                         </button>
                         <button id="toggle-transition-effect"
                             class="h-7 flex items-center justify-center rounded-md ui-btn ui-text-highlight has-tooltip"
-                            aria-label="Toggle FX" data-tip="FX">
+                            aria-label="Toggle FX" data-tip="FX" data-i18n-aria-label="scene.fx" data-i18n-data-tip="scene.fx">
                             <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
                                 <circle cx="12" cy="12" r="3" />
                                 <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
@@ -369,17 +391,17 @@
 
                 <div class="space-y-1">
                     <div class="panel-label-row">
-                        <span class="panel-label">RENDER</span>
+                        <span class="panel-label" data-i18n="panel.render">RENDER</span>
                     </div>
                     <div class="grid grid-cols-4 gap-1">
                         <button id="render-mode-normal"
-                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">NORMAL</button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.normal">NORMAL</button>
                         <button id="render-mode-center"
-                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">CENTER</button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.center">CENTER</button>
                         <button id="render-mode-outline"
-                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">OUTLINE</button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.outline">OUTLINE</button>
                         <button id="render-mode-all-points"
-                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none">ALL</button>
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.all">ALL</button>
                     </div>
                 </div>
 
@@ -387,11 +409,11 @@
 
                 <div class="grid grid-cols-2 gap-1.5 pt-1">
                     <div class="panel-stat py-1">
-                        <span class="panel-stat-label">FPS</span>
+                        <span class="panel-stat-label" data-i18n="panel.fps">FPS</span>
                         <span id="fps-display" class="panel-stat-value font-mono tabular-nums text-[11px]">--</span>
                     </div>
                     <div class="panel-stat py-1">
-                        <span class="panel-stat-label">SPLATS</span>
+                        <span class="panel-stat-label" data-i18n="panel.splats">SPLATS</span>
                         <span id="splat-count" class="panel-stat-value font-mono tabular-nums text-[10px]">--</span>
                     </div>
                 </div>
@@ -401,20 +423,20 @@
                 class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
-                        <div class="panel-title">PRESETS</div>
+                        <div class="panel-title" data-i18n="tabs.presets">PRESETS</div>
 
                     </div>
                     <div class="flex gap-1.5">
                         <button id="add-preset"
                             class="ui-btn p-1 rounded-lg flex items-center justify-center has-tooltip"
-                            aria-label="Save Camera" data-tip="Save">
+                            aria-label="Save Camera" data-tip="Save" data-i18n-aria-label="preset.save" data-i18n-data-tip="preset.save">
                             <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
                             </svg>
                         </button>
                         <button id="clear-presets"
                             class="ui-btn p-1 rounded-lg flex items-center justify-center has-tooltip"
-                            aria-label="Clear All" data-tip="Clear">
+                            aria-label="Clear All" data-tip="Clear" data-i18n-aria-label="preset.clearAll" data-i18n-data-tip="preset.clear">
                             <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                                 <path
                                     d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
@@ -430,64 +452,74 @@
                 </div>
             </section>
 
+            <section id="panel-info"
+                class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view hidden">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title" data-i18n="tabs.info">INFO</div>
+                    </div>
+                </div>
+                <div id="file-info-content" class="file-info-content"></div>
+            </section>
+
             <section id="panel-special"
                 class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1 sidebar-panel-view hidden">
                 <div class="panel-header">
                     <div>
-                        <div class="panel-title">SPECIAL</div>
+                        <div class="panel-title" data-i18n="tabs.special">SPECIAL</div>
                     </div>
                 </div>
 
                 <div class="space-y-1.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">AR</span>
+                        <span class="panel-label" data-i18n="panel.ar">AR</span>
                     </div>
                     <div class="panel-select-row">
                         <button id="start-ar"
                             class="ui-btn w-10 h-8 rounded-lg flex items-center justify-center has-tooltip"
-                            aria-label="Start AR" data-tip="AR">
+                            aria-label="Start AR" data-tip="AR" data-i18n-aria-label="panel.ar" data-i18n-data-tip="panel.ar">
                             <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                                 <path
                                     d="M3 5c0-1.1.9-2 2-2h4v2H5v4H3V5zm0 14c0 1.1.9 2 2 2h4v-2H5v-4H3v4zm16 2c1.1 0 2-.9 2-2v-4h-2v4h-4v2h4zm0-16v4h-2V5h-4V3h4c1.1 0 2 .9 2 2z" />
                             </svg>
                         </button>
                         <select id="ar-camera-select" class="ui-input flex-1 h-8 text-[11px] cursor-pointer">
-                            <option value="" disabled selected>AR Camera</option>
+                            <option value="" disabled selected data-i18n="special.arCamera">AR Camera</option>
                         </select>
                     </div>
                 </div>
 
                 <div class="space-y-1.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">FACE TRACKING</span>
+                        <span class="panel-label" data-i18n="panel.faceTracking">FACE TRACKING</span>
                     </div>
                     <div class="panel-select-row">
                         <button id="start-face-tracking"
                             class="ui-btn w-10 h-8 rounded-lg flex items-center justify-center has-tooltip"
-                            aria-label="Start Face Tracking" data-tip="Face">
+                            aria-label="Start Face Tracking" data-tip="Face" data-i18n-aria-label="panel.faceTracking" data-i18n-data-tip="panel.faceTracking">
                             <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                                 <path
                                     d="M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21 2.37-1.47 5.72-4.17 7.74z" />
                             </svg>
                         </button>
                         <select id="face-tracking-camera-select" class="ui-input flex-1 h-8 text-[11px] cursor-pointer">
-                            <option value="" disabled selected>Face Camera</option>
+                            <option value="" disabled selected data-i18n="special.faceCamera">Face Camera</option>
                         </select>
                     </div>
                 </div>
 
                 <div class="space-y-2.5">
                     <div class="panel-label-row">
-                        <span class="panel-label">POST PROCESS</span>
+                        <span class="panel-label" data-i18n="panel.postProcess">POST PROCESS</span>
                     </div>
                     <div class="flex items-center justify-between pl-1">
                         <button id="reset-pp"
                             class="ui-btn px-2 py-1 rounded-lg text-[9px] font-bold tracking-tight uppercase"
-                            aria-label="Reset Post" data-tip="Reset PP">RESET</button>
+                            aria-label="Reset Post" data-tip="Reset PP" data-i18n-aria-label="special.resetPost" data-i18n-data-tip="special.resetPost" data-i18n="special.resetPost">RESET</button>
                     </div>
                     <div class="flex flex-col gap-1.5 pl-1">
                         <div class="flex justify-between">
-                            <span class="text-[9px] uppercase opacity-70 font-bold">Exposure</span>
+                            <span class="text-[9px] uppercase opacity-70 font-bold" data-i18n="panel.exposure">Exposure</span>
                             <span id="val-exposure" class="text-[10px] ui-text-highlight">1.0</span>
                         </div>
                         <input type="range" id="pp-exposure" min="0" max="5" step="0.1" value="1.0"
@@ -495,7 +527,7 @@
                     </div>
                     <div class="flex flex-col gap-1.5 pl-1">
                         <div class="flex justify-between">
-                            <span class="text-[9px] uppercase opacity-70 font-bold">Brightness</span>
+                            <span class="text-[9px] uppercase opacity-70 font-bold" data-i18n="panel.brightness">Brightness</span>
                             <span id="val-brightness" class="text-[10px] ui-text-highlight">0.0</span>
                         </div>
                         <input type="range" id="pp-brightness" min="-1" max="1" step="0.05" value="0.0"
@@ -539,20 +571,20 @@
             class="glass-blue px-4 py-0.5 rounded-lg flex items-center gap-3 pointer-events-auto shadow-2xl">
             <div class="flex items-center gap-1.5">
                 <button id="step-frame-back" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
-                    aria-label="Previous Frame" data-tip="Prev Frame">
+                    aria-label="Previous Frame" data-tip="Prev Frame" data-i18n-aria-label="timeline.prevFrame" data-i18n-data-tip="timeline.prevFrame">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                         <path d="M15 6l-6 6 6 6V6zM7 6h2v12H7z" />
                     </svg>
                 </button>
                 <button id="play-pause"
                     class="w-8 h-8 flex items-center justify-center rounded-md ui-btn ui-text-highlight has-tooltip"
-                    aria-label="Play/Pause" data-tip="Play">
+                    aria-label="Play/Pause" data-tip="Play" data-i18n-aria-label="timeline.play" data-i18n-data-tip="timeline.play">
                     <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                         <path d="M8 5v14l11-7z" />
                     </svg>
                 </button>
                 <button id="step-frame-forward" class="w-7 h-7 flex items-center justify-center rounded-md ui-btn has-tooltip"
-                    aria-label="Next Frame" data-tip="Next Frame">
+                    aria-label="Next Frame" data-tip="Next Frame" data-i18n-aria-label="timeline.nextFrame" data-i18n-data-tip="timeline.nextFrame">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current">
                         <path d="M9 6l6 6-6 6V6zM15 6h2v12h-2z" />
                     </svg>
@@ -563,12 +595,12 @@
                     <div class="flex items-center gap-1">
                         <button id="loop-set-start"
                             class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
-                            aria-label="Set Start" data-tip="Loop Start">A</button>
+                            aria-label="Set Start" data-tip="Loop Start" data-i18n-aria-label="timeline.loopStart" data-i18n-data-tip="timeline.loopStart">A</button>
                         <button id="loop-set-end" class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
-                            aria-label="Set End" data-tip="Loop End">B</button>
+                            aria-label="Set End" data-tip="Loop End" data-i18n-aria-label="timeline.loopEnd" data-i18n-data-tip="timeline.loopEnd">B</button>
                         <button id="timeline-loop-toggle"
                             class="ui-btn px-1.5 py-0.5 rounded-sm text-[8px] font-bold uppercase has-tooltip"
-                            aria-label="Loop" data-tip="Loop">LOOP</button>
+                            aria-label="Loop" data-tip="Loop" data-i18n-aria-label="timeline.loop" data-i18n-data-tip="timeline.loop" data-i18n="timeline.loop">LOOP</button>
                     </div>
                     <div id="timeline-loop-label" class="text-[8px] font-mono uppercase ui-text-secondary opacity-50">
                         All</div>
@@ -682,20 +714,20 @@
     <!-- Simplified Control Panel (Floating Bottom Center) - Hidden by default -->
     <div id="simplified-panel" class="glass-blue hidden-panel transition-all duration-500">
         <button id="simple-prev" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Previous Camera" data-tip="Prev Cam">
+            aria-label="Previous Camera" data-tip="Prev Cam" data-i18n-aria-label="timeline.prevCam" data-i18n-data-tip="timeline.prevCam">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
             </svg>
         </button>
         <button id="simple-play-pause"
             class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg ui-text-highlight has-tooltip"
-            aria-label="Play/Pause" data-tip="Play">
+            aria-label="Play/Pause" data-tip="Play" data-i18n-aria-label="timeline.play" data-i18n-data-tip="timeline.play">
             <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current">
                 <path d="M8 5v14l11-7z" />
             </svg>
         </button>
         <button id="simple-next" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Next Camera" data-tip="Next Cam">
+            aria-label="Next Camera" data-tip="Next Cam" data-i18n-aria-label="timeline.nextCam" data-i18n-data-tip="timeline.nextCam">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
             </svg>
@@ -703,15 +735,28 @@
         <!-- Skybox Selector #WDD 2026-01-21 -->
         <select id="skybox-select"
             class="bg-gray-800/50 text-[10px] text-white/70 focus:outline-none cursor-pointer max-w-[100px] hover:text-white transition-colors p-1.5 rounded-lg border border-white/10 h-10">
-            <option value="none">No Sky</option>
+            <option value="none" data-i18n="timeline.noSky">No Sky</option>
             <!-- Options populated by JS -->
         </select>
 
+        <div id="simple-memory-summary" class="simple-memory-summary" aria-label="Memory summary"
+            data-i18n-aria-label="simple.memorySummary">
+            <div id="simple-memory-card" class="simple-memory-card has-tooltip" data-tip="Memory details"
+                data-i18n-data-tip="simple.memoryDetails">
+                <span class="simple-memory-label" data-i18n="simple.memory">MEM</span>
+                <span id="simple-memory-value" class="simple-memory-value">--</span>
+            </div>
+            <div id="simple-gpu-memory-card" class="simple-memory-card has-tooltip" data-tip="GPU memory details"
+                data-i18n-data-tip="simple.gpuMemoryDetails">
+                <span class="simple-memory-label" data-i18n="simple.gpuMemory">GPU</span>
+                <span id="simple-gpu-memory-value" class="simple-memory-value">--</span>
+            </div>
+        </div>
 
         <!-- Tiny separator -->
         <div class="w-px h-6 ui-border mx-1"></div>
         <button id="simple-toggle-ui" class="ui-btn w-10 h-10 flex items-center justify-center rounded-lg has-tooltip"
-            aria-label="Restore UI" data-tip="Show UI">
+            aria-label="Restore UI" data-tip="Show UI" data-i18n-aria-label="timeline.showUi" data-i18n-data-tip="timeline.showUi">
             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current">
                 <path
                     d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
@@ -723,7 +768,7 @@
     <div id="text-edit-panel"
         class="fixed bottom-32 right-8 glass-blue rounded-xl p-4 z-50 flex flex-col gap-3 shadow-2xl transition-all duration-300 opacity-0 pointer-events-none scale-95 border border-white/10 w-72">
         <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold uppercase tracking-widest ui-text-primary">Edit Annotation</span>
+            <span class="text-[10px] font-bold uppercase tracking-widest ui-text-primary" data-i18n="text.editAnnotation">Edit Annotation</span>
             <button id="close-text-edit" class="p-1 hover:ui-text-highlight transition-colors">
                 <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current">
                     <path
@@ -734,7 +779,7 @@
         <div class="h-px ui-border"></div>
         <div class="flex flex-col gap-2">
             <textarea id="text-edit-content" rows="2" class="ui-input w-full bg-black/20 text-xs resize-none"
-                placeholder="Enter text..."></textarea>
+                placeholder="Enter text..." data-i18n-placeholder="text.placeholder"></textarea>
 
             <div class="flex gap-2">
                 <button id="text-bold" class="ui-btn flex-1 py-1 rounded text-[10px] font-bold">B</button>
@@ -743,7 +788,7 @@
 
             <div class="grid grid-cols-2 gap-2">
                 <div class="flex flex-col gap-1">
-                    <span class="text-[8px] uppercase opacity-50 font-bold">Size</span>
+                    <span class="text-[8px] uppercase opacity-50 font-bold" data-i18n="text.size">Size</span>
                     <select id="text-edit-size" class="ui-input text-xs">
                         <option value="12">12px</option>
                         <option value="14">14px</option>
@@ -759,12 +804,12 @@
                     </select>
                 </div>
                 <div class="flex flex-col gap-1">
-                    <span class="text-[8px] uppercase opacity-50 font-bold">Color</span>
+                    <span class="text-[8px] uppercase opacity-50 font-bold" data-i18n="text.color">Color</span>
                     <input type="color" id="text-edit-color" class="ui-input h-8 p-0 cursor-pointer" value="#ffffff">
                 </div>
             </div>
             <div class="flex flex-col gap-1">
-                <span class="text-[8px] uppercase opacity-50 font-bold">Font Family</span>
+                <span class="text-[8px] uppercase opacity-50 font-bold" data-i18n="text.fontFamily">Font Family</span>
                 <select id="text-edit-font" class="ui-input text-xs">
                     <option value="'Inter', sans-serif">Inter</option>
                     <option value="'PingFang SC', 'Microsoft YaHei', sans-serif">System Sans</option>

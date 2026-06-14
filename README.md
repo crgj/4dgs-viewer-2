@@ -125,6 +125,19 @@
 
 ### 2026-06-13
 
+#### UI 中英文切换
+- 顶部品牌栏新增语言切换按钮，可在 English / 中文之间切换。
+- 主界面、左侧选择工具、智能面板、Help 弹窗和批量转换页接入统一 i18n 文案系统。
+- 主查看器与 `batch-convert.html` 共用浏览器 `localStorage` 中的语言状态。
+- UI / Help 文案集中维护在 `src/i18n.ts`，新增界面文案应优先通过 `data-i18n` 或 `t(key)` 引用。
+
+#### 右侧信息面板
+- 右侧切换面板新增 `Info` tab，使用独立 `ViewerFileInfoPanel` UI 类渲染当前文件/序列信息。
+- 信息面板显示文件名、大小、格式、来源模式、高斯点数量、帧数、关键帧/stride、生命周期统计、包围盒和主要数组内存占用。
+- 信息面板顶部用指标卡和条形图可视化当前帧位置、当前帧实际渲染高斯点数、隐藏点数、关键帧和内存占用。
+- 大型数组按采样统计，避免加载超大点云后切换面板造成 UI 卡顿。
+- 简化控制条同步显示 `MEM / GPU` 摘要；悬停可查看 JS Heap、模型 CPU 数据、WebGL 显存、纹理估算和 GPU 信息。
+
 #### Render ALL 调试点云
 - `RENDER` 面板新增 `ALL` 模式，使用独立 `DebugAllGaussianPoints` entity 绘制点云，不改主 GSplat shader。
 - `ALL` 模式显示当前激活模型/段中所有未删除点，忽略生命周期和 opacity，便于检查数据中存在但 normal 模式不可见的点。
@@ -227,6 +240,7 @@
 - 可选中所有时间帧内可见的高斯点，而不仅限于当前帧。
 - 反选操作同样支持全时段范围。
 - 笔刷路径采用简化算法，优化大规模全时段选择的性能。
+- 命中方式提供 `Centers / Rings` 两种模式：`Centers` 只判断高斯中心投影，`Rings` 按屏幕可见 footprint/轮廓与选择区域相交判断。
 
 #### PLY4 加载进度细化
 - `PLY4Loader` 新增 `PLY4LoadProgressMeta` 类型。
@@ -374,7 +388,7 @@ npm run build
 
 #### 左侧选择栏布局
 - 顶部 `Current / All-Time` 是范围切换，不再为全时段单独提供一套工具按钮。
-- 中部按顺序分为 `Tools`、`Hit Mode` 和 `Edit` 三组。
+- 中部按顺序分为 `Tools`、`Hit Mode` 和 `Edit` 三组；`Hit Mode` 使用 `Centers / Rings`，对齐 SuperSplat 的中心点选择与轮廓 footprint 选择语义。
 - `Edit` 组集中放置反选、清空和删除；删除前的撤销 / 重做按钮移动到顶部品牌栏右侧。
 - 左侧工具区顶部提供面板级 `Smart / Edit` 两个 tab：`Smart` 集中自动对齐、统计和圆柱选择；`Edit` 放置普通选择、删除和 `Delete Hidden` 等操作。
 

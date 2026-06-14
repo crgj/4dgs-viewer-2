@@ -1,0 +1,62 @@
+[
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/01-home.png",
+    "caption": "01 统一中英文界面：顶部语言按钮、Samples、本地 SOG4 样例入口都接入统一文案。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/02-samples.png",
+    "caption": "02 Samples 面板：从本地样例快速加载 SOG4，不需要手动拖拽文件。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/03-loaded.png",
+    "caption": "03 加载完成：右侧保留紧凑 COMMON / PRESETS / INFO / SPECIAL 切换，底部时间轴显示当前帧。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/04-info-panel.png",
+    "caption": "04 新增 INFO 面板：显示文件名、大小、格式、点数、帧数、生命周期、包围盒和内存/显存估算。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/05-render-all.png",
+    "caption": "05 Render ALL 调试：显示所有未删除点，青色代表 normal 可见，粉色代表 normal 隐藏。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/06-edit-tab.png",
+    "caption": "06 左侧 Edit 面板：Render ALL 下普通选择禁用，仅保留 Delete Hidden 用于清理 normal 模式不可见点。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/07-rings-mode.png",
+    "caption": "07 选择命中方式：Centers 只看中心点，Rings 按当前屏幕可见高斯 footprint/轮廓命中。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/08-rings-selected.png",
+    "caption": "08 Rings 选择提速：当前视角 footprint 建缓存和屏幕网格，笔刷拖动只检查附近候选点。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/09-alltime.png",
+    "caption": "09 Current / All-Time 合并为范围切换：同一组笔刷、方框、折线可切换当前帧或全时段选择。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/10-help.png",
+    "caption": "10 Help 也接入中英文：选择工具、命中方式、Render ALL、All-Time 的说明集中维护。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/11-language.png",
+    "caption": "11 语言状态保存在浏览器 localStorage：主页面与批处理页面共享中文/英文状态。",
+    "duration": 3.2
+  },
+  {
+    "file": "/home/crgj/wdd/work/@AtWork/4dgs-viewer-2/artifacts/feature-demo-2026-06-13/screens/12-batch.png",
+    "caption": "12 批处理页面同步中英文：批量 SOG4 转换和 PLY 序列导出入口共用同一套语言状态。",
+    "duration": 3.2
+  }
+]
