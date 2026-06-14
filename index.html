@@ -35,7 +35,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.19.2</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.19.3</span>
                 <!-- #WDD-gpt 2026-05-16 - 显示 PLY4 序列当前读取模式，避免用户不清楚是否进入 lazy 分段缓冲 -->
                 <span id="sequence-load-mode-badge"
                     class="hidden text-[8px] font-extrabold tracking-tight uppercase px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-400/20"
@@ -62,11 +62,19 @@
         </div>
     </header>
 
-    <!-- #WDD-gpt 2026-05-15 - 新增左侧智能选择工具面板，用于地面检测和场景归零 -->
-    <aside id="smart-selection-panel"
-        class="fixed left-6 top-28 z-20 w-[160px] max-w-[calc(100vw-3rem)] pointer-events-auto transition-all duration-500 text-[9px] overflow-x-hidden">
-        <section class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1.5 overflow-x-hidden">
-            <div class="flex flex-row items-center justify-center">
+    <!-- #WDD-gpt 2026-06-13 - 左侧工具改为面板级 Smart/Edit tab，避免切换嵌在 Smart 卡片内部 -->
+    <aside id="left-tools-panel"
+        class="fixed left-6 top-28 z-20 w-[160px] max-w-[calc(100vw-3rem)] pointer-events-auto transition-all duration-500 text-[9px] overflow-visible flex flex-col gap-1.5">
+        <div class="left-panel-tabs" role="tablist" aria-label="Left tool panels">
+            <button class="left-panel-tab active" type="button" data-left-panel-tab="smart" aria-label="Smart">Smart</button>
+            <button class="left-panel-tab" type="button" data-left-panel-tab="edit" aria-label="Edit">Edit</button>
+        </div>
+
+        <!-- #WDD-gpt 2026-05-15 - 新增左侧智能选择工具面板，用于地面检测和场景归零 -->
+        <section id="smart-selection-panel"
+            class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1.5 overflow-x-hidden" data-left-panel="smart">
+            <div class="smart-panel-section">
+                <div class="smart-panel-label">Analyze</div>
                 <button id="smart-align-run"
                     class="ui-btn h-7 w-full rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
                     aria-label="Auto Analyze And Align" data-tip="Auto Align">
@@ -79,64 +87,71 @@
                     </svg>
                     <span class="text-[8px] font-bold tracking-tight uppercase">Auto Align</span>
                 </button>
-            </div>
 
-            <div class="grid grid-cols-3 gap-1">
-                <div class="panel-stat smart-align-stat">
-                    <span class="panel-stat-label">PLANE</span>
-                    <span id="smart-align-plane-stat" class="panel-stat-value font-mono tabular-nums">--</span>
-                </div>
-                <div class="panel-stat smart-align-stat">
-                    <span class="panel-stat-label">S / D</span>
-                    <span id="smart-align-static-stat" class="panel-stat-value font-mono tabular-nums">--</span>
-                </div>
-                <div class="panel-stat smart-align-stat">
-                    <span class="panel-stat-label">CENTER</span>
-                    <span id="smart-align-center-stat" class="panel-stat-value font-mono tabular-nums">--</span>
-                </div>
-            </div>
+                <div class="smart-panel-divider" aria-hidden="true"></div>
 
-            <!-- #WDD-gpt 2026-05-16 - 智能选择改为可调圆柱选择区域，避免自动分类漏选身体点 -->
-            <button id="smart-cylinder-toggle"
-                class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-secondary"
-                aria-label="Toggle Cylinder Region">
-                <span class="text-[8px] font-bold tracking-tight uppercase">Show Cylinder</span>
-            </button>
-
-            <div id="smart-cylinder-controls" class="smart-cylinder-controls hidden">
-                <div class="grid grid-cols-2 gap-1">
-                    <div class="flex items-center gap-1 ui-input px-1 py-0.5">
-                        <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">R</span>
-                        <input id="smart-cylinder-radius" type="number" step="0.01" value="1.00"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                <div class="smart-panel-label">Stats</div>
+                <div class="grid grid-cols-3 gap-1">
+                    <div class="panel-stat smart-align-stat">
+                        <span class="panel-stat-label">PLANE</span>
+                        <span id="smart-align-plane-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
-                    <div class="flex items-center gap-1 ui-input px-1 py-0.5">
-                        <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">H</span>
-                        <input id="smart-cylinder-height" type="number" step="0.01" value="2.00"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                    <div class="panel-stat smart-align-stat">
+                        <span class="panel-stat-label">S / D</span>
+                        <span id="smart-align-static-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
-                    <div class="flex items-center gap-1 ui-input px-1 py-0.5">
-                        <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">X</span>
-                        <input id="smart-cylinder-x" type="number" step="0.01" value="0.00"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
-                    </div>
-                    <div class="flex items-center gap-1 ui-input px-1 py-0.5">
-                        <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">Z</span>
-                        <input id="smart-cylinder-z" type="number" step="0.01" value="0.00"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
-                    </div>
-                    <div class="flex items-center gap-1 ui-input px-1 py-0.5 col-span-2">
-                        <span class="text-[8px] opacity-60 w-8 ui-text-highlight font-bold">GROUND</span>
-                        <input id="smart-cylinder-ground" type="number" step="0.01" value="0.08"
-                            class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                    <div class="panel-stat smart-align-stat">
+                        <span class="panel-stat-label">CENTER</span>
+                        <span id="smart-align-center-stat" class="panel-stat-value font-mono tabular-nums">--</span>
                     </div>
                 </div>
-                <button id="smart-cylinder-select"
-                    class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight"
-                    aria-label="Select In Cylinder">
-                    <span class="text-[8px] font-bold tracking-tight uppercase">Select In Cylinder</span>
+
+                <div class="smart-panel-divider" aria-hidden="true"></div>
+
+                <!-- #WDD-gpt 2026-05-16 - 智能选择改为可调圆柱选择区域，避免自动分类漏选身体点 -->
+                <div class="smart-panel-label">Cylinder</div>
+                <button id="smart-cylinder-toggle"
+                    class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-secondary"
+                    aria-label="Toggle Cylinder Region">
+                    <span class="text-[8px] font-bold tracking-tight uppercase">Show Cylinder</span>
                 </button>
+
+                <div id="smart-cylinder-controls" class="smart-cylinder-controls hidden">
+                    <div class="grid grid-cols-2 gap-1">
+                        <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                            <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">R</span>
+                            <input id="smart-cylinder-radius" type="number" step="0.01" value="1.00"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                            <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">H</span>
+                            <input id="smart-cylinder-height" type="number" step="0.01" value="2.00"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                            <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">X</span>
+                            <input id="smart-cylinder-x" type="number" step="0.01" value="0.00"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                            <span class="text-[8px] opacity-60 w-3 ui-text-highlight font-bold">Z</span>
+                            <input id="smart-cylinder-z" type="number" step="0.01" value="0.00"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                        <div class="flex items-center gap-1 ui-input px-1 py-0.5 col-span-2">
+                            <span class="text-[8px] opacity-60 w-8 ui-text-highlight font-bold">GROUND</span>
+                            <input id="smart-cylinder-ground" type="number" step="0.01" value="0.08"
+                                class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
+                        </div>
+                    </div>
+                    <button id="smart-cylinder-select"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight"
+                        aria-label="Select In Cylinder">
+                        <span class="text-[8px] font-bold tracking-tight uppercase">Select In Cylinder</span>
+                    </button>
+                </div>
             </div>
+
         </section>
     </aside>
 
@@ -207,12 +222,12 @@
 
         <aside id="sidebar"
             class="w-[220px] max-w-[calc(100vw-3rem)] flex flex-col gap-1 pointer-events-auto transition-all duration-500 text-[9px]">
-            <div class="glass-blue rounded-md p-0.5 grid grid-cols-3 gap-0.5 sidebar-tabs">
-                <button class="ui-btn active min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+            <div class="right-panel-tabs sidebar-tabs">
+                <button class="right-panel-tab active sidebar-tab"
                     data-panel-target="panel-common">COMMON</button>
-                <button class="ui-btn min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+                <button class="right-panel-tab sidebar-tab"
                     data-panel-target="panel-presets">PRESETS</button>
-                <button class="ui-btn min-w-0 px-0.5 py-1.5 rounded-md sidebar-tab"
+                <button class="right-panel-tab sidebar-tab"
                     data-panel-target="panel-special">SPECIAL</button>
             </div>
 

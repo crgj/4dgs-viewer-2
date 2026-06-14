@@ -609,10 +609,33 @@ export class Viewer {
     private setSelectionToolbarForRenderAll(active: boolean) {
         const toolbar = document.getElementById('selection-toolbar');
         if (!toolbar) return;
+        const showLeftPanelTab = (tabName: string) => {
+            // #WDD-gpt 2026-06-13 - Render ALL 需要切到左侧面板级 Edit tab 才能显示 Delete Hidden
+            document.querySelectorAll<HTMLElement>('[data-left-panel-tab]').forEach((tab) => {
+                const isActive = tab.dataset.leftPanelTab === tabName;
+                tab.classList.toggle('active', isActive);
+                tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+            document.querySelectorAll<HTMLElement>('[data-left-panel]').forEach((panel) => {
+                const isActive = panel.dataset.leftPanel === tabName;
+                panel.classList.toggle('hidden', !isActive);
+                panel.style.display = isActive ? (tabName === 'edit' ? 'flex' : '') : 'none';
+                panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+            });
+        };
+        const setEditPanelDisabled = (disabled: boolean) => {
+            // #WDD-gpt 2026-06-13 - Render ALL 下保留 Edit 面板结构，但除 Delete Hidden 外禁用所有编辑按钮
+            toolbar.classList.toggle('selection-render-all-locked', disabled);
+            this.selectionTool?.setRenderAllSelectionDisabled?.(disabled);
+            toolbar.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+                const allowed = button.id === 'action-delete-hidden';
+                button.disabled = disabled && !allowed;
+                button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+            });
+        };
 
         if (!active) {
-            toolbar.classList.remove('hidden');
-            for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-operation-tools', 'selection-mode-tools', 'selection-delete-tools']) {
+            for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-action-tools', 'selection-operation-tools', 'selection-mode-tools', 'selection-delete-tools']) {
                 const group = document.getElementById(id);
                 if (!group) continue;
                 group.classList.remove('hidden');
@@ -622,28 +645,34 @@ export class Viewer {
             document.getElementById('action-delete')?.classList.remove('hidden');
             document.getElementById('action-delete-hidden')?.classList.remove('hidden');
             document.getElementById('action-help')?.classList.remove('hidden');
+            setEditPanelDisabled(false);
             this.selectionTool?.refreshLazyModeVisibility?.();
+            const activeTab = document.querySelector<HTMLElement>('[data-left-panel-tab].active')?.dataset.leftPanelTab || 'smart';
+            showLeftPanelTab(activeTab);
             return;
         }
 
+        showLeftPanelTab('edit');
         toolbar.classList.remove('hidden');
+        toolbar.style.display = 'flex';
         const deleteTools = document.getElementById('selection-delete-tools');
         if (deleteTools) {
-            // #WDD-gpt 2026-06-13 - render ALL 隐藏选择工具，但保留 Delete Hidden 入口用于清理 normal 不可见点
+            // #WDD-gpt 2026-06-13 - 兼容旧容器 ID，Render ALL 的清理入口现在在 Edit 面板内
             deleteTools.classList.remove('hidden');
             deleteTools.style.display = '';
             deleteTools.setAttribute('aria-hidden', 'false');
         }
-        for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-operation-tools', 'selection-mode-tools']) {
+        for (const id of ['selection-current-tools', 'selection-alltime-tools', 'selection-action-tools', 'selection-operation-tools', 'selection-mode-tools']) {
             const group = document.getElementById(id);
             if (!group) continue;
-            group.classList.add('hidden');
-            group.style.display = 'none';
-            group.setAttribute('aria-hidden', 'true');
+            group.classList.remove('hidden');
+            group.style.display = '';
+            group.setAttribute('aria-hidden', 'false');
         }
-        document.getElementById('action-delete')?.classList.add('hidden');
+        document.getElementById('action-delete')?.classList.remove('hidden');
         document.getElementById('action-delete-hidden')?.classList.remove('hidden');
         document.getElementById('action-help')?.classList.add('hidden');
+        setEditPanelDisabled(true);
         if (this.selectionTool?.currentTool !== 'none') this.selectionTool.setTool('none');
     }
 
@@ -1269,6 +1298,8 @@ export class Viewer {
             'time-controls',
             'header-brand',
             'selection-toolbar',
+            'selection-top-right-toolbar',
+            'left-tools-panel',
             'smart-selection-panel',
             'text-edit-panel',
             'simplified-panel',
@@ -1821,6 +1852,8 @@ export class Viewer {
         const sidebar = document.getElementById('sidebar');
         const playbar = document.getElementById('playbar-container');
         const selectionToolbar = document.getElementById('selection-toolbar');
+        const selectionTopbar = document.getElementById('selection-top-right-toolbar');
+        const leftToolsPanel = document.getElementById('left-tools-panel');
         const smartSelectionPanel = document.getElementById('smart-selection-panel');
         const controlPanel = document.getElementById('control-panel');
         const simplifiedPanel = document.getElementById('simplified-panel');
@@ -1832,6 +1865,8 @@ export class Viewer {
             sidebar?.classList.add('sidebar-hidden');
             playbar?.classList.add('bottom-bar-hidden');
             selectionToolbar?.classList.add('tools-hidden');
+            selectionTopbar?.classList.add('tools-hidden');
+            leftToolsPanel?.classList.add('tools-hidden');
             smartSelectionPanel?.classList.add('tools-hidden');
             controlPanel?.classList.add('panel-hidden');
             simplifiedPanel?.classList.remove('hidden-panel');
@@ -1839,6 +1874,8 @@ export class Viewer {
             sidebar?.classList.remove('sidebar-hidden');
             playbar?.classList.remove('bottom-bar-hidden');
             selectionToolbar?.classList.remove('tools-hidden');
+            selectionTopbar?.classList.remove('tools-hidden');
+            leftToolsPanel?.classList.remove('tools-hidden');
             smartSelectionPanel?.classList.remove('tools-hidden');
             controlPanel?.classList.remove('panel-hidden');
             simplifiedPanel?.classList.add('hidden-panel');
@@ -2773,12 +2810,12 @@ export class Viewer {
                             <span>Segments</span>
                             <strong>${segmentCount}</strong>
                         </div>
-                        <p>当前 PLY4 序列超过 4.0 GB，系统将自动使用 Lazy 分段缓冲模式。</p>
+                        <p>The current PLY4 sequence is larger than 4.0 GB. Lazy segmented buffering will be used automatically.</p>
                         <ul>
-                            <li>只读取 header 建立完整时间轴。</li>
-                            <li>当前显示段才会解码并上传 GPU。</li>
-                            <li>选择和删除状态会按段保存。</li>
-                            <li>切换到未缓存段时会暂停播放并显示读取进度。</li>
+                            <li>Headers are read first to build the full timeline.</li>
+                            <li>Only the visible segment is decoded and uploaded to the GPU.</li>
+                            <li>Selection and deletion state is saved per segment.</li>
+                            <li>Playback pauses when switching to an uncached segment and shows loading progress.</li>
                         </ul>
                     </div>
                     <div class="ply4-lazy-mode-actions">
@@ -2866,7 +2903,7 @@ export class Viewer {
         const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
         
         if (totalSize > maxLimitBytes) {
-           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 SOG4 序列分段总体积达到了 ${this.formatImportBudget(totalSize)}，已超出当前设置的 10GB 处理预算 (${this.formatImportBudget(maxLimitBytes)})。\n\n建议做法: 请减少选中的序列分段分批次处理，或使用更大显存/内存并开启 64-bit 浏览器。`);
+           alert(`[Memory Preflight Blocked]\n\nLoading was aborted.\n\nThe selected SOG4 sequence totals ${this.formatImportBudget(totalSize)}, exceeding the current 10GB processing budget (${this.formatImportBudget(maxLimitBytes)}).\n\nRecommended action: select fewer sequence segments and process them in batches, or use a machine with more GPU/system memory and a 64-bit browser.`);
            return;
         }
 
@@ -2971,7 +3008,7 @@ export class Viewer {
         const maxLimitBytes = this.getAdaptiveSequenceImportBudgetBytes();
 
         if (!useSegmentedMode && totalSize > maxLimitBytes) {
-           alert(`[内存预检拦截]\n\n读取已中止！\n\n您导入的 PLY4 序列分段总体积达到了 ${this.formatImportBudget(totalSize)}，已超出当前设置的 10GB 处理预算 (${this.formatImportBudget(maxLimitBytes)})。\n\n即使通过预检，超大 PLY4 仍可能被浏览器单次 ArrayBuffer 或 GPU driver 限制拦截。\n\n建议做法: 请减少选中的序列分段分批次处理，或使用更大显存/内存并开启 64-bit 浏览器。`);
+           alert(`[Memory Preflight Blocked]\n\nLoading was aborted.\n\nThe selected PLY4 sequence totals ${this.formatImportBudget(totalSize)}, exceeding the current 10GB processing budget (${this.formatImportBudget(maxLimitBytes)}).\n\nEven after preflight, very large PLY4 files can still hit browser ArrayBuffer or GPU driver limits.\n\nRecommended action: select fewer sequence segments and process them in batches, or use a machine with more GPU/system memory and a 64-bit browser.`);
            return;
         }
         if (useSegmentedMode) {

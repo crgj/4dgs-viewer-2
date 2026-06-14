@@ -334,11 +334,22 @@ body.theme-light .fps-item:not(.active):hover {
     box-shadow: 0 0 15px var(--accent-glow);
 }
 
-/* All-Time tool buttons: yellow hover */
+/* #WDD-gpt 2026-06-13 - All-Time 选择按钮使用主黄色，避免 active 时回到主绿色 */
+.ui-btn.alltime-tool {
+    color: #fbbf24 !important;
+}
+
 .ui-btn.alltime-tool:hover {
     color: #fde047 !important;
     border-color: #fbbf24 !important;
     box-shadow: 0 0 12px rgba(251, 191, 36, 0.5) !important;
+}
+
+.ui-btn.alltime-tool.active {
+    background: #fbbf24 !important;
+    border-color: #fbbf24 !important;
+    color: #111827 !important;
+    box-shadow: 0 0 15px rgba(251, 191, 36, 0.45) !important;
 }
 
 .ui-playbar {
@@ -385,15 +396,14 @@ body.theme-light .fps-item:not(.active):hover {
     border-radius: 4px;
 }
 
-.sidebar-tabs .ui-btn {
+.sidebar-tabs .right-panel-tab {
     font-size: var(--font-sm);
-    font-weight: 700;
+    font-weight: 900;
     letter-spacing: 0.05em;
     text-transform: uppercase;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 10px 4px !important;
 }
 
 .panel-header {
@@ -521,6 +531,198 @@ body.theme-light .fps-item:not(.active):hover {
 .smart-align-stat .panel-stat-value {
     font-size: 8px;
     line-height: 1.25;
+}
+
+/* #WDD-gpt 2026-06-13 - 智能面板按功能区分组，用细分隔线减少控件堆叠感 */
+.smart-panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+/* #WDD-gpt 2026-06-13 - tab 面板自身设置 display:flex，必须显式覆盖 hidden 才能真正切换 */
+.smart-panel-section.hidden {
+    display: none;
+}
+
+.left-panel-tabs,
+.right-panel-tabs {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    overflow: hidden;
+    border: 1px solid rgba(16, 185, 129, 0.24);
+    border-radius: 0.5rem;
+    background: rgba(4, 14, 24, 0.82);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(14px);
+}
+
+.left-panel-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.right-panel-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.left-panel-tab,
+.right-panel-tab {
+    align-items: center;
+    display: inline-flex;
+    height: 29px;
+    justify-content: center;
+    position: relative;
+    color: rgba(203, 213, 225, 0.72);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+    border-radius: 0.375rem;
+    transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.left-panel-tab:hover,
+.left-panel-tab.active,
+.right-panel-tab:hover,
+.right-panel-tab.active {
+    color: var(--text-primary);
+    background: rgba(16, 185, 129, 0.13);
+}
+
+.left-panel-tab.active,
+.right-panel-tab.active {
+    box-shadow: inset 0 -2px 0 var(--text-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.smart-panel-label {
+    color: var(--text-dim);
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.smart-panel-divider {
+    height: 1px;
+    margin: 1px 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+}
+
+/* #WDD-gpt 2026-06-13 - 左侧选择栏改为范围/工具/命中/编辑四段，降低控件扫描成本 */
+.selection-panel-group {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* #WDD-gpt 2026-06-13 - Current/All-Time 是 Edit 内的二级范围切换，视觉上弱于 Smart/Edit 主 tab */
+#selection-alltime-tools {
+    background: rgba(255, 255, 255, 0.035);
+    border-color: rgba(255, 255, 255, 0.055);
+    box-shadow: none;
+}
+
+/* #WDD-gpt 2026-06-13 - Render ALL 下 Edit 面板锁定普通编辑动作，仅允许 Delete Hidden */
+.selection-render-all-locked .selection-panel-group {
+    border-color: rgba(255, 255, 255, 0.045);
+}
+
+.selection-render-all-locked button:disabled {
+    cursor: not-allowed;
+    filter: grayscale(0.7);
+    opacity: 0.32;
+    pointer-events: none;
+}
+
+.selection-render-all-locked #action-delete-hidden {
+    opacity: 1;
+}
+
+/* #WDD-gpt 2026-06-13 - Brush 设置面板移到选择工具区域外，避免显示时挤压左侧工具宽度 */
+#brush-settings {
+    left: calc(100% + 0.5rem);
+    position: absolute;
+    top: 2.55rem;
+}
+
+.selection-group-label {
+    color: var(--text-dim);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+/* #WDD-gpt 2026-06-13 - 统一选择工具图标按钮盒模型，确保 SVG 在框内水平垂直居中 */
+.selection-icon-btn {
+    align-items: center;
+    aspect-ratio: 1 / 1;
+    display: inline-flex;
+    justify-content: center;
+    line-height: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+.selection-icon-btn svg {
+    display: block;
+    flex: 0 0 auto;
+}
+
+/* #WDD-gpt 2026-06-13 - Hit Mode 改成紧凑分段按钮，避免两个图标按钮占用过大高度 */
+.selection-compact-segment {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+}
+
+.selection-hit-mode-btn {
+    align-items: center;
+    border-radius: 0;
+    display: inline-flex;
+    height: 24px;
+    justify-content: center;
+    line-height: 1;
+    min-width: 0;
+    padding: 0;
+}
+
+.selection-hit-mode-btn svg {
+    display: block;
+    flex: 0 0 auto;
+    height: 13px;
+    width: 13px;
+}
+
+.selection-scope-btn {
+    align-items: center;
+    color: rgba(203, 213, 225, 0.62);
+    display: inline-flex;
+    font-size: 8px;
+    height: 20px;
+    justify-content: center;
+    line-height: 1;
+}
+
+.selection-scope-btn.active {
+    color: rgba(241, 245, 249, 0.9);
+    background: rgba(255, 255, 255, 0.095);
+    box-shadow: none;
+}
+
+#scope-alltime.selection-scope-btn.active {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.105);
+}
+
+.selection-topbar-actions {
+    padding-left: 0.25rem;
 }
 
 /* #WDD-gpt 2026-05-16 - 可调圆柱选择区域的紧凑控制样式 */
@@ -1118,7 +1320,7 @@ select.ui-input option {
 }
 
 .tools-hidden {
-    transform: translateY(-50%) translateX(-220%);
+    transform: translateX(-220%);
     opacity: 0;
     pointer-events: none;
 }

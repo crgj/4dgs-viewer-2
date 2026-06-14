@@ -21,6 +21,11 @@ export class SelectionTool {
     // #WDD-gpt 2026-05-16 - 记录当前选区语义；圆柱选择写入的是 all-time 选区，反选/删除必须按全时段处理
     private selectionScope: 'current' | 'alltime' = 'current';
 
+    // #WDD-gpt 2026-06-13 - 记录当前/全时段范围开关，用同一套工具按钮派生具体选择工具
+    isAllTimeMode = false;
+    // #WDD-gpt 2026-06-13 - Render ALL 下禁用普通选择工具，避免快捷键绕过灰掉的按钮
+    private renderAllSelectionDisabled = false;
+
     // Tools
     currentTool: 'none' | 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' = 'none';
     selectionMode: 'center' | 'ellipse' = 'center';
@@ -134,6 +139,7 @@ export class SelectionTool {
     }
 
     deleteSelected() {
+        if (this.renderAllSelectionDisabled) return;
         const before = this.captureGlobalSelectionState();
         const targets = this.getGlobalSelectionTargets();
         let deletedTotal = 0;
@@ -194,11 +200,11 @@ export class SelectionTool {
         }
 
         if (targets.length === 0) {
-            alert('当前帧没有检测到 normal 模式下不可见且尚未删除的点。');
+            alert('No normal-hidden, undeleted points were found in the current frame.');
             return;
         }
 
-        const ok = confirm(`确认删除当前帧 normal 模式下不可见的 ${targets.length.toLocaleString()} 个点吗？\n\n这些点会被标记为 deleted，导出时也会被过滤。`);
+        const ok = confirm(`Delete ${targets.length.toLocaleString()} normal-hidden points in the current frame?\n\nThese points will be marked as deleted and filtered during export.`);
         if (!ok) return;
 
         const before = this.captureGlobalSelectionState();
@@ -682,117 +688,6 @@ export class SelectionTool {
         this.allTimeProgressEl?.classList.add('hidden');
     }
 
-    /* ORIGINAL createHelpModal MOVED to selection-tool-help.ts
-    createHelpModal() {
-        const modal = document.createElement('div');
-        modal.id = 'help-modal';
-        modal.className = 'fixed inset-0 z-50 hidden flex items-center justify-center bg-black/60 backdrop-blur-sm';
-        modal.innerHTML = `
-            <div class="glass-blue p-6 rounded-xl max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto shadow-2xl border border-white/10">
-                <div class="flex justify-between items-center mb-4 pb-3 border-b border-white/10">
-                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                        <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current text-yellow-400"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>
-                        使用帮助
-                    </h2>
-                    <button id="help-close" class="p-1 hover:bg-white/10 rounded-lg transition-colors">
-                        <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current text-gray-400 hover:text-white"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                    </button>
-                </div>
-                
-                <div class="space-y-4 text-sm">
-                    <!-- 选择工具 -->
-                    <div>
-                        <h3 class="text-xs uppercase font-bold text-emerald-400 mb-2 tracking-wider">选择工具</h3>
-                        <ul class="space-y-1.5 text-gray-200">
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">1</kbd>
-                                <span>切换<strong>笔刷选择</strong>工具（再按关闭）</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">2</kbd>
-                                <span>切换<strong>矩形选择</strong>工具（再按关闭）</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">3</kbd>
-                                <span>切换<strong>全时段笔刷</strong>工具（选中所有帧可见点）</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">4</kbd>
-                                <span>切换<strong>全时段矩形</strong>工具（选中所有帧可见点）</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Alt</kbd>
-                                <span>按住进入<strong>减选模式</strong>（从选区移除）</span>
-                            </li>
-                        </ul>
-                    </div>
-
-                    <!-- 选择模式 -->
-                    <div>
-                        <h3 class="text-xs uppercase font-bold text-blue-400 mb-2 tracking-wider">选择模式</h3>
-                        <ul class="space-y-1.5 text-gray-200">
-                            <li class="flex items-center gap-2">
-                                <span class="w-2 h-2 rounded-full bg-blue-400"></span>
-                                <span><strong>中心模式</strong> - 仅选择中心点在选区内的点</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <span class="w-2 h-2 rounded-full bg-purple-400"></span>
-                                <span><strong>椭圆模式</strong> - 考虑点的屏幕空间大小</span>
-                            </li>
-                        </ul>
-                    </div>
-
-                    <!-- 删除操作 -->
-                    <div>
-                        <h3 class="text-xs uppercase font-bold text-red-400 mb-2 tracking-wider">删除操作</h3>
-                        <ul class="space-y-1.5 text-gray-200">
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Delete</kbd>
-                                <span>删除当前<strong>选中的点</strong></span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Z</kbd>
-                                <span><strong>撤销</strong>删除（最多30步）</span>
-                            </li>
-                            <li class="flex items-center gap-2">
-                                <kbd class="px-2 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Y</kbd>
-                                <span>或 <kbd class="px-1.5 py-0.5 bg-white/10 rounded text-xs font-mono">Ctrl+Shift+Z</kbd> <strong>重做</strong>删除</span>
-                            </li>
-                        </ul>
-                    </div>
-
-                    <!-- 时间感知选择 -->
-                    <div class="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
-                        <h3 class="text-xs uppercase font-bold text-yellow-400 mb-1 tracking-wider">💡 提示</h3>
-                        <p class="text-gray-300 text-xs leading-relaxed">
-                            选择工具现在是<strong>时间感知</strong>的！只会选择当前时刻可见的点。
-                            播放动画时，当前时刻会自动更新。
-                        </p>
-                        <p class="text-gray-300 text-xs leading-relaxed mt-1">
-                            <strong>全时段选择</strong>（<kbd class="px-1 py-0.5 bg-white/5 rounded text-xs">3</kbd> / <kbd class="px-1 py-0.5 bg-white/5 rounded text-xs">4</kbd>）可选中所有时间帧内可见的点，适合清理跨帧噪点。
-                        </p>
-                    </div>
-                </div>
-
-                <div class="mt-4 pt-3 border-t border-white/10 text-center">
-                    <p class="text-xs text-gray-500">按 <kbd class="px-1.5 py-0.5 bg-white/5 rounded text-xs">ESC</kbd> 或点击空白处关闭</p>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-        this.helpModal = modal;
-
-        // Close button
-        modal.querySelector('#help-close')?.addEventListener('click', () => this.hideHelpModal());
-        
-        // Click outside to close
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) this.hideHelpModal();
-        });
-    }
-
-    */ // END MOVED createHelpModal
-
     updateTexture() {
         if (!this.selectionTexture || !this.selectionData) return;
 
@@ -807,77 +702,75 @@ export class SelectionTool {
         // Create Left Toolbar
         const div = document.createElement('div');
         div.id = 'selection-toolbar';
-        div.className = 'fixed left-6 z-20 flex flex-row items-start gap-2 pointer-events-none transition-all duration-500';
+        div.dataset.leftPanel = 'edit';
+        div.className = 'hidden flex-row items-start gap-2 pointer-events-none transition-all duration-500';
         div.innerHTML = `
-            <div id="selection-toolbar-inner" class="flex flex-col gap-2 w-[160px]">
-                <!-- Current-Time Selection Tools (3 in a row) -->
-                <div id="selection-current-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="tool-brush" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Brush" data-tip="Brush">
+            <div id="selection-toolbar-inner" class="flex flex-col gap-1.5 w-[160px] shrink-0">
+                
+                <!-- #WDD-gpt 2026-06-13 - 当前/全时段改为同一段控件，减少左侧栏重复工具组 -->
+                <div id="selection-alltime-tools" class="selection-panel-group glass-blue p-1 rounded-md flex flex-row pointer-events-auto shadow-sm" aria-label="Selection time scope">
+                    <button id="scope-current" class="selection-scope-btn active flex-1 py-1.5 text-[9px] rounded font-bold transition-all shadow-sm">Current</button>
+                    <button id="scope-alltime" class="selection-scope-btn flex-1 py-1.5 text-[9px] rounded font-bold transition-all">All-Time</button>
+                </div>
+
+                <div id="selection-current-tools" class="selection-panel-group glass-blue p-1.5 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
+                    <div class="selection-group-label">Tools</div>
+                    <div class="grid grid-cols-3 gap-1.5">
+                    <button id="tool-brush" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Brush" data-tip="Brush">
                         ${ICON_BRUSH}
                     </button>
-                    <button id="tool-rect" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Rect" data-tip="Rect">
+                    <button id="tool-rect" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Rect" data-tip="Rect">
                         ${ICON_RECT}
                     </button>
-                    <button id="tool-poly" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Polygon" data-tip="Poly">
+                    <button id="tool-poly" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Polygon" data-tip="Poly">
                         ${ICON_POLY}
                     </button>
+                    </div>
                 </div>
 
-                <!-- All-Time Selection Tools (3 in a row) -->
-                <div id="selection-alltime-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="tool-brush-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Brush" data-tip="All Brush">
-                        ${ICON_BRUSH_ALLTIME}
-                    </button>
-                    <button id="tool-rect-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Rect" data-tip="All Rect">
-                        ${ICON_RECT_ALLTIME}
-                    </button>
-                    <button id="tool-poly-alltime" class="ui-btn p-1.5 rounded-lg has-tooltip text-amber-400 alltime-tool" aria-label="All-Time Poly" data-tip="All Poly">
-                        ${ICON_POLY_ALLTIME}
-                    </button>
-                </div>
-
-                <!-- Operations: Invert / Clear / Undo / Redo -->
-                <div id="selection-operation-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
-                    <button id="tool-invert" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert" data-tip="Invert">
-                        ${ICON_INVERT}
-                    </button>
-                    <button id="tool-clear" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear" data-tip="Clear">
-                        ${ICON_CLEAR}
-                    </button>
-                    <button id="action-undo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Undo" data-tip="Undo">
-                        ${ICON_UNDO}
-                    </button>
-                    <button id="action-redo" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Redo" data-tip="Redo">
-                        ${ICON_REDO}
-                    </button>
-                </div>
-
-                <!-- Selection Mode -->
-                <div id="selection-mode-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto justify-center">
-                    <button id="select-mode-center" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Center Mode" data-tip="Center">
+                <div id="selection-mode-tools" class="selection-panel-group glass-blue p-1 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
+                    <div class="selection-group-label">Hit Mode</div>
+                    <div class="selection-compact-segment">
+                    <button id="select-mode-center" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Center Mode" data-tip="Center">
                         ${ICON_CENTER}
                     </button>
-                    <button id="select-mode-ellipse" class="ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Ellipse Mode" data-tip="Ellipse">
+                    <button id="select-mode-ellipse" class="selection-hit-mode-btn ui-btn has-tooltip" aria-label="Ellipse Mode" data-tip="Ellipse">
                         ${ICON_ELLIPSE}
                     </button>
+                    </div>
                 </div>
 
-                <!-- Delete & Help Panel -->
-                <div id="selection-delete-tools" class="glass-blue p-1.5 rounded-lg flex flex-row gap-1.5 pointer-events-auto items-center justify-center">
-                     <button id="action-delete" class="p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete">
-                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                <div id="selection-action-tools" class="selection-panel-group glass-blue p-1.5 rounded-md flex flex-col gap-1 pointer-events-auto shadow-sm">
+                    <div class="selection-group-label">Edit</div>
+                    <div id="selection-operation-tools" class="grid grid-cols-[1fr_1fr_1px_1fr] gap-1.5 items-center">
+                    <button id="tool-invert" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Invert" data-tip="Invert">
+                        ${ICON_INVERT}
                     </button>
-                    <button id="action-delete-hidden" class="p-1.5 rounded-lg hover:bg-pink-500/20 text-pink-400 active:scale-95 transition-all has-tooltip" aria-label="Delete Hidden" data-tip="Delete Hidden">
-                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current"><path d="M12 6.5c2.76 0 5 2.24 5 5 0 .66-.13 1.29-.36 1.87l3.18 3.18C21.17 15.35 22.23 13.78 23 11.5 21.27 6.89 16.89 4 12 4c-1.4 0-2.74.24-3.98.68l2.35 2.35c.52-.34 1.13-.53 1.63-.53zM2.28 3 1 4.27l2.42 2.42C2.37 7.85 1.55 9.43 1 11.5 2.73 16.11 7.11 19 12 19c1.56 0 3.04-.3 4.38-.84L19.73 21 21 19.73 2.28 3zM7.53 10.8l1.55 1.55c.3 1.35 1.37 2.42 2.72 2.72l1.55 1.55c-.43.15-.88.23-1.35.23-2.76 0-5-2.24-5-5 0-.47.08-.92.23-1.35z"/></svg>
+                    <button id="tool-clear" class="selection-icon-btn ui-btn p-1.5 rounded-lg has-tooltip" aria-label="Clear" data-tip="Clear">
+                        ${ICON_CLEAR}
                     </button>
-                    <button id="action-help" class="ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Help">
-                        ${ICON_HELP}
+                    <div class="w-px h-5 bg-white/10 justify-self-center"></div>
+                    <button id="action-delete" class="selection-icon-btn p-1.5 rounded-lg hover:bg-red-500/20 text-red-500 active:scale-95 transition-all has-tooltip" aria-label="Delete" data-tip="Delete">
+                        <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
+                    </div>
+                    <!-- #WDD-gpt 2026-06-13 - Delete Hidden 属于 Edit 面板操作，不再放在 Smart 面板内部 -->
+                    <button id="action-delete-hidden"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 text-pink-400 border border-pink-500/25 hover:bg-pink-500/15 has-tooltip"
+                        aria-label="Delete Hidden Points" data-tip="Delete normal hidden points">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current" aria-hidden="true">
+                            <path d="M12 6.5c2.76 0 5 2.24 5 5 0 .66-.13 1.29-.36 1.87l3.18 3.18C21.17 15.35 22.23 13.78 23 11.5 21.27 6.89 16.89 4 12 4c-1.4 0-2.74.24-3.98.68l2.35 2.35c.52-.34 1.13-.53 1.63-.53zM2.28 3 1 4.27l2.42 2.42C2.37 7.85 1.55 9.43 1 11.5 2.73 16.11 7.11 19 12 19c1.56 0 3.04-.3 4.38-.84L19.73 21 21 19.73 2.28 3zM7.53 10.8l1.55 1.55c.3 1.35 1.37 2.42 2.72 2.72l1.55 1.55c-.43.15-.88.23-1.35.23-2.76 0-5-2.24-5-5 0-.47.08-.92.23-1.35z" />
+                        </svg>
+                        <span class="text-[8px] font-bold tracking-tight uppercase">Delete Hidden</span>
                     </button>
                 </div>
+                
+                <!-- #WDD-gpt 2026-06-13 - 保留旧删除容器 ID 兼容 Render ALL 联动代码 -->
+                <div id="selection-delete-tools" class="hidden"></div>
             </div>
             
             <!-- Brush Settings (Hidden by default, shown on right) -->
-            <div id="brush-settings" class="glass-blue p-3 rounded-lg pointer-events-auto hidden transition-all flex-col gap-2 items-center">
+            <div id="brush-settings" class="glass-blue p-3 rounded-lg pointer-events-auto hidden transition-all flex-col gap-2 items-center shadow-sm">
                 <span class="text-[10px] uppercase font-bold ui-text-dim text-center whitespace-nowrap">Brush Size</span>
                 <div class="h-32 w-8 flex items-center justify-center relative">
                     <!-- Standard slider rotated -90deg -->
@@ -886,7 +779,39 @@ export class SelectionTool {
                 <span id="brush-size-val" class="text-xs text-center font-mono ui-text-highlight">50</span>
             </div>
         `;
-        document.body.appendChild(div);
+        const leftToolsPanel = document.getElementById('left-tools-panel');
+        if (leftToolsPanel) {
+            leftToolsPanel.appendChild(div);
+        } else {
+            div.classList.add('fixed', 'left-6', 'top-[20rem]', 'z-20');
+            document.body.appendChild(div);
+        }
+
+        // #WDD-gpt 2026-06-13 - 撤销/重做/帮助移动到顶部品牌栏右侧，减少左侧编辑栏高度
+        const topRight = document.createElement('div');
+        topRight.id = 'selection-top-right-toolbar';
+        topRight.className = 'selection-topbar-actions flex flex-row gap-1.5 pointer-events-auto transition-all duration-500';
+        topRight.innerHTML = `
+            <div class="flex flex-row gap-1 items-center justify-center">
+                <button id="action-undo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Undo" data-tip="Undo (Ctrl+Z)">
+                    ${ICON_UNDO}
+                </button>
+                <button id="action-redo" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip" aria-label="Redo" data-tip="Redo (Ctrl+Y)">
+                    ${ICON_REDO}
+                </button>
+                <div class="w-px h-5 bg-white/10 mx-0.5"></div>
+                <button id="action-help" class="selection-icon-btn ui-btn p-2 rounded-lg has-tooltip text-yellow-400" aria-label="Help" data-tip="Shortcuts Help">
+                    ${ICON_HELP}
+                </button>
+            </div>
+        `;
+        const headerBar = document.querySelector('#header-brand > .glass-blue');
+        if (headerBar) {
+            headerBar.appendChild(topRight);
+        } else {
+            topRight.classList.add('fixed', 'right-6', 'top-6', 'z-20');
+            document.body.appendChild(topRight);
+        }
 
         // Create Brush Cursor Overlay
         const overlay = document.createElement('div');
@@ -940,12 +865,13 @@ export class SelectionTool {
         // Listeners
         const get = (id: string) => document.getElementById(id);
 
-        get('tool-brush')?.addEventListener('click', () => this.setTool('brush'));
-        get('tool-rect')?.addEventListener('click', () => this.setTool('rect'));
-        get('tool-poly')?.addEventListener('click', () => this.setTool('poly'));
-        get('tool-brush-alltime')?.addEventListener('click', () => this.setTool('brush-alltime'));
-        get('tool-rect-alltime')?.addEventListener('click', () => this.setTool('rect-alltime'));
-        get('tool-poly-alltime')?.addEventListener('click', () => this.setTool('poly-alltime'));
+        get('scope-current')?.addEventListener('click', () => this.setTimeScope('current'));
+        get('scope-alltime')?.addEventListener('click', () => this.setTimeScope('alltime'));
+
+        get('tool-brush')?.addEventListener('click', () => this.setTool(this.isAllTimeMode ? 'brush-alltime' : 'brush'));
+        get('tool-rect')?.addEventListener('click', () => this.setTool(this.isAllTimeMode ? 'rect-alltime' : 'rect'));
+        get('tool-poly')?.addEventListener('click', () => this.setTool(this.isAllTimeMode ? 'poly-alltime' : 'poly'));
+
         get('select-mode-center')?.addEventListener('click', () => this.setSelectionMode('center'));
         get('select-mode-ellipse')?.addEventListener('click', () => this.setSelectionMode('ellipse'));
         get('tool-invert')?.addEventListener('click', () => {
@@ -1029,11 +955,61 @@ export class SelectionTool {
             : false;
     }
 
-    setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none') {
+    setTimeScope(scope: 'current' | 'alltime') {
+        if (this.renderAllSelectionDisabled) return;
+        this.isAllTimeMode = scope === 'alltime';
+        
+        const get = (id: string) => document.getElementById(id);
+        const btnCurrent = get('scope-current');
+        const btnAllTime = get('scope-alltime');
+        
+        if (this.isAllTimeMode) {
+            btnAllTime?.classList.add('active');
+            btnCurrent?.classList.remove('active');
+        } else {
+            btnCurrent?.classList.add('active');
+            btnAllTime?.classList.remove('active');
+        }
+        
+        // #WDD-gpt 2026-06-13 - 范围切换时保持当前工具类型，只切换 current/all-time 语义
+        if (this.currentTool !== 'none') {
+            if (this.currentTool.startsWith('brush')) {
+                this.setTool(this.isAllTimeMode ? 'brush-alltime' : 'brush', true);
+            } else if (this.currentTool.startsWith('rect')) {
+                this.setTool(this.isAllTimeMode ? 'rect-alltime' : 'rect', true);
+            } else if (this.currentTool.startsWith('poly')) {
+                this.setTool(this.isAllTimeMode ? 'poly-alltime' : 'poly', true);
+            }
+        } else {
+            // #WDD-gpt 2026-06-13 - 未激活工具时仍更新图标颜色，保证范围状态可见
+            const brushBtn = get('tool-brush');
+            const rectBtn = get('tool-rect');
+            const polyBtn = get('tool-poly');
+            if (brushBtn) brushBtn.innerHTML = this.isAllTimeMode ? ICON_BRUSH_ALLTIME : ICON_BRUSH;
+            if (rectBtn) rectBtn.innerHTML = this.isAllTimeMode ? ICON_RECT_ALLTIME : ICON_RECT;
+            if (polyBtn) polyBtn.innerHTML = this.isAllTimeMode ? ICON_POLY_ALLTIME : ICON_POLY;
+            
+            if (this.isAllTimeMode) {
+                 brushBtn?.classList.add('text-amber-400', 'alltime-tool');
+                 rectBtn?.classList.add('text-amber-400', 'alltime-tool');
+                 polyBtn?.classList.add('text-amber-400', 'alltime-tool');
+            } else {
+                 brushBtn?.classList.remove('text-amber-400', 'alltime-tool');
+                 rectBtn?.classList.remove('text-amber-400', 'alltime-tool');
+                 polyBtn?.classList.remove('text-amber-400', 'alltime-tool');
+            }
+        }
+        this.updateCursorState();
+    }
+
+    setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none', force = false) {
+        if (tool !== 'none' && this.renderAllSelectionDisabled) {
+            tool = 'none';
+        }
         if (tool !== 'none' && this.isLazyManualSelectionDisabled()) {
             tool = 'none';
         }
-        if (this.currentTool === tool && tool !== 'none') {
+        if (!force && this.currentTool === tool && tool !== 'none') {
             this.currentTool = 'none'; // Toggle off if clicking the same tool
         } else {
             this.currentTool = tool;
@@ -1046,18 +1022,38 @@ export class SelectionTool {
 
         // UI Feedback
         const get = (id: string) => document.getElementById(id);
-        const map: Record<string, string> = { 
-            'brush': 'tool-brush', 
-            'rect': 'tool-rect',
-            'brush-alltime': 'tool-brush-alltime',
-            'rect-alltime': 'tool-rect-alltime',
-            'poly': 'tool-poly',
-            'poly-alltime': 'tool-poly-alltime'
-        };
+        
+        ['tool-brush', 'tool-rect', 'tool-poly'].forEach(id => {
+            get(id)?.classList.remove('active');
+        });
 
-        Object.values(map).forEach(id => get(id)?.classList.remove('active'));
-        if (this.currentTool !== 'none' && map[this.currentTool]) {
-            get(map[this.currentTool])?.classList.add('active');
+        // #WDD-gpt 2026-06-13 - 工具图标跟随当前/全时段范围切换
+        const brushBtn = get('tool-brush');
+        const rectBtn = get('tool-rect');
+        const polyBtn = get('tool-poly');
+        
+        if (brushBtn) {
+            brushBtn.innerHTML = this.isAllTimeMode ? ICON_BRUSH_ALLTIME : ICON_BRUSH;
+            this.isAllTimeMode ? brushBtn.classList.add('text-amber-400', 'alltime-tool') : brushBtn.classList.remove('text-amber-400', 'alltime-tool');
+        }
+        if (rectBtn) {
+            rectBtn.innerHTML = this.isAllTimeMode ? ICON_RECT_ALLTIME : ICON_RECT;
+            this.isAllTimeMode ? rectBtn.classList.add('text-amber-400', 'alltime-tool') : rectBtn.classList.remove('text-amber-400', 'alltime-tool');
+        }
+        if (polyBtn) {
+            polyBtn.innerHTML = this.isAllTimeMode ? ICON_POLY_ALLTIME : ICON_POLY;
+            this.isAllTimeMode ? polyBtn.classList.add('text-amber-400', 'alltime-tool') : polyBtn.classList.remove('text-amber-400', 'alltime-tool');
+        }
+
+        if (this.currentTool !== 'none') {
+            let activeId = '';
+            if (this.currentTool.startsWith('brush')) activeId = 'tool-brush';
+            if (this.currentTool.startsWith('rect')) activeId = 'tool-rect';
+            if (this.currentTool.startsWith('poly')) activeId = 'tool-poly';
+            
+            if (activeId) {
+                get(activeId)?.classList.add('active');
+            }
         }
 
         // Show/Hide brush settings
@@ -1079,6 +1075,19 @@ export class SelectionTool {
         } else {
             if (this.polyOverlay) this.polyOverlay.style.display = 'none';
         }
+        this.updateCursorState();
+    }
+
+    setRenderAllSelectionDisabled(disabled: boolean) {
+        this.renderAllSelectionDisabled = disabled;
+        if (!disabled) return;
+        this.isSelecting = false;
+        this.brushPath = [];
+        this.polyPoints = [];
+        this.setTool('none');
+        this.removeRectOverlay();
+        if (this.polyOverlay) this.polyOverlay.style.display = 'none';
+        document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
     }
 
     setSelectionMode(mode: 'center' | 'ellipse') {
@@ -1118,6 +1127,12 @@ export class SelectionTool {
             
             // #WDD 2026-04-10: Skip shortcuts when typing in input fields
             if (isTyping()) return;
+
+            if (this.renderAllSelectionDisabled && (e.key === 'Delete' || ['1', '2', '3'].includes(e.key))) {
+                e.preventDefault();
+                this.setTool('none');
+                return;
+            }
             
             // #WDD 2026-04-10: Delete key to delete selected
             if (e.key === 'Delete') {
@@ -1129,52 +1144,19 @@ export class SelectionTool {
                 this.hideHelpModal();
             }
 
-            // #WDD 2026-04-20: Number keys for six selection tools
-            if (this.isLazyManualSelectionDisabled() && ['1', '2', '3', '4', '5', '6'].includes(e.key)) {
+            // #WDD-gpt 2026-06-13 - 数字键只切换三种工具，当前/全时段由顶部范围开关决定
+            if (this.isLazyManualSelectionDisabled() && ['1', '2', '3'].includes(e.key)) {
                 this.setTool('none');
                 return;
             }
             if (e.key === '1') {
-                if (this.currentTool === 'brush') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('brush');
-                }
+                this.setTool(this.isAllTimeMode ? 'brush-alltime' : 'brush');
             }
             if (e.key === '2') {
-                if (this.currentTool === 'rect') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('rect');
-                }
+                this.setTool(this.isAllTimeMode ? 'rect-alltime' : 'rect');
             }
             if (e.key === '3') {
-                if (this.currentTool === 'poly') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('poly');
-                }
-            }
-            if (e.key === '4') {
-                if (this.currentTool === 'brush-alltime') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('brush-alltime');
-                }
-            }
-            if (e.key === '5') {
-                if (this.currentTool === 'rect-alltime') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('rect-alltime');
-                }
-            }
-            if (e.key === '6') {
-                if (this.currentTool === 'poly-alltime') {
-                    this.setTool('none');
-                } else {
-                    this.setTool('poly-alltime');
-                }
+                this.setTool(this.isAllTimeMode ? 'poly-alltime' : 'poly');
             }
             
             // #WDD 2026-04-10: Undo/Redo keyboard shortcuts
@@ -1205,14 +1187,19 @@ export class SelectionTool {
 
     updateCursorState() {
         const overlay = document.getElementById('brush-cursor-overlay');
+        const tone = this.getSelectionOverlayTone();
         if (overlay) {
             // Apply visual change to brush cursor
             if (this.isSubtracting) {
                 overlay.style.borderColor = '#ef4444'; // Red-500
                 overlay.style.borderStyle = 'dashed';
+                overlay.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
+                overlay.style.boxShadow = '0 0 15px rgba(239, 68, 68, 0.32)';
             } else {
-                overlay.style.borderColor = 'rgba(255, 255, 255, 0.5)';
+                overlay.style.borderColor = tone.stroke;
                 overlay.style.borderStyle = 'solid';
+                overlay.style.backgroundColor = tone.fill;
+                overlay.style.boxShadow = tone.shadow;
             }
         }
 
@@ -1222,11 +1209,12 @@ export class SelectionTool {
                 this.rectOverlay.style.borderStyle = 'dashed';
             } else {
                 this.rectOverlay.className = 'fixed border-2 pointer-events-none z-50';
-                this.rectOverlay.style.borderColor = 'var(--text-highlight)';
-                this.rectOverlay.style.backgroundColor = 'var(--accent-glow)';
+                this.rectOverlay.style.borderColor = tone.stroke;
+                this.rectOverlay.style.backgroundColor = tone.fill;
                 this.rectOverlay.style.borderStyle = 'solid';
             }
         }
+        this.updatePolyOverlayTone();
     }
 
     onDblClick(e: MouseEvent) {
@@ -1347,6 +1335,31 @@ export class SelectionTool {
     // #WDD 2026-04-18: Check if current tool is an all-time selection tool
     isAllTimeTool(): boolean {
         return this.currentTool === 'brush-alltime' || this.currentTool === 'rect-alltime' || this.currentTool === 'poly-alltime';
+    }
+
+    // #WDD-gpt 2026-06-13 - 绘制中的 brush/rect/poly 反馈跟随 Current/All-Time 范围切换
+    private getSelectionOverlayTone() {
+        return this.isAllTimeTool() || this.isAllTimeMode
+            ? {
+                stroke: '#fbbf24',
+                fill: 'rgba(251, 191, 36, 0.18)',
+                shadow: '0 0 15px rgba(251, 191, 36, 0.38)'
+            }
+            : {
+                stroke: 'var(--text-highlight)',
+                fill: 'var(--accent-glow)',
+                shadow: '0 0 15px var(--accent-glow)'
+            };
+    }
+
+    private updatePolyOverlayTone() {
+        if (!this.polyLine || !this.polyCursorLine) return;
+        const tone = this.isSubtracting
+            ? { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.18)' }
+            : this.getSelectionOverlayTone();
+        this.polyLine.setAttribute('fill', tone.fill);
+        this.polyLine.setAttribute('stroke', tone.stroke);
+        this.polyCursorLine.setAttribute('stroke', tone.stroke);
     }
 
     // #WDD 2026-04-18: Check if a point is visible at a specific time
@@ -1788,7 +1801,10 @@ export class SelectionTool {
             this.rectOverlay.className = 'fixed border-2 border-red-500 bg-red-500/20 pointer-events-none z-50';
             this.rectOverlay.style.borderStyle = 'dashed';
         } else {
-            this.rectOverlay.className = 'fixed border-2 border-indigo-500 bg-indigo-500/20 pointer-events-none z-50';
+            const tone = this.getSelectionOverlayTone();
+            this.rectOverlay.className = 'fixed border-2 pointer-events-none z-50';
+            this.rectOverlay.style.borderColor = tone.stroke;
+            this.rectOverlay.style.backgroundColor = tone.fill;
             this.rectOverlay.style.borderStyle = 'solid';
         }
 
@@ -2254,6 +2270,7 @@ export class SelectionTool {
 
     updatePolyOverlay() {
         if (!this.polyLine || !this.polyCursorLine) return;
+        this.updatePolyOverlayTone();
         if (this.polyPoints.length === 0) {
             this.polyLine.setAttribute('points', '');
             this.polyCursorLine.setAttribute('x1', '0');

@@ -57,13 +57,34 @@ export class SmartSelectionTool {
         this.centerStatEl = document.getElementById('smart-align-center-stat');
         this.cylinderControlsEl = document.getElementById('smart-cylinder-controls');
         this.cylinderToggleEl = document.getElementById('smart-cylinder-toggle');
+        // #WDD-gpt 2026-06-13 - Smart/Edit 改为左侧面板级 tab，切换整个智能区和编辑工具区
+        document.querySelectorAll<HTMLElement>('[data-left-panel-tab]').forEach((tab) => {
+            tab.addEventListener('click', () => this.showLeftPanelTab(tab.dataset.leftPanelTab || 'smart'));
+        });
         document.getElementById('smart-align-run')?.addEventListener('click', () => this.runAlignment());
         this.cylinderToggleEl?.addEventListener('click', () => this.setCylinderVisible(!this.cylinderVisible, true));
         document.getElementById('smart-cylinder-select')?.addEventListener('click', () => void this.applyCylinderSelectionFromUI());
         for (const id of ['smart-cylinder-radius', 'smart-cylinder-height', 'smart-cylinder-x', 'smart-cylinder-z', 'smart-cylinder-ground']) {
             document.getElementById(id)?.addEventListener('input', () => this.updateCylinderFromInputs());
         }
+        this.showLeftPanelTab('smart');
         this.createProgressOverlay();
+    }
+
+    private showLeftPanelTab(tabName: string) {
+        const nextTab = tabName || 'smart';
+        document.querySelectorAll<HTMLElement>('[data-left-panel-tab]').forEach((tab) => {
+            const active = tab.dataset.leftPanelTab === nextTab;
+            tab.classList.toggle('active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll<HTMLElement>('[data-left-panel]').forEach((panel) => {
+            const active = panel.dataset.leftPanel === nextTab;
+            panel.classList.toggle('hidden', !active);
+            // #WDD-gpt 2026-06-13 - 面板级 tab 同步 display，避免 Tailwind display class 抢占 hidden
+            panel.style.display = active ? (nextTab === 'edit' ? 'flex' : '') : 'none';
+            panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+        });
     }
 
     // #WDD-gpt 2026-05-16 - 监听智能面板高度变化，自动调整手工选择面板位置避免重叠
@@ -91,6 +112,14 @@ export class SmartSelectionTool {
             });
             mutationObserver.observe(cylinderControls, { attributes: true, attributeFilter: ['class'] });
         }
+
+        // #WDD-gpt 2026-06-13 - 左侧面板级 tab 切换会改变工具高度，需要同步布局测量
+        document.querySelectorAll('[data-left-panel]').forEach((panel) => {
+            const mutationObserver = new MutationObserver(() => {
+                window.requestAnimationFrame(adjustLayout);
+            });
+            mutationObserver.observe(panel, { attributes: true, attributeFilter: ['class', 'style'] });
+        });
 
         // Initial adjustment
         adjustLayout();
@@ -253,6 +282,7 @@ export class SmartSelectionTool {
     // #WDD-gpt 2026-05-16 - 圆柱选择区用开关显示，关闭时清空当前选择
     private setCylinderVisible(visible: boolean, clearSelectionOnHide: boolean) {
         this.cylinderVisible = visible;
+        if (visible) this.showLeftPanelTab('smart');
         this.cylinderControlsEl?.classList.toggle('hidden', !visible);
         this.cylinderToggleEl?.classList.toggle('active', visible);
         const label = this.cylinderToggleEl?.querySelector('span');
