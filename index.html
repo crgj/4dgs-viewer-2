@@ -35,7 +35,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.19.7</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.1</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -72,6 +72,7 @@
         <div class="left-panel-tabs" role="tablist" aria-label="Left tool panels">
             <button class="left-panel-tab active" type="button" data-left-panel-tab="smart" aria-label="Smart" data-i18n="left.smart" data-i18n-aria-label="left.smart">Smart</button>
             <button class="left-panel-tab" type="button" data-left-panel-tab="edit" aria-label="Edit" data-i18n="left.edit" data-i18n-aria-label="left.edit">Edit</button>
+            <button class="left-panel-tab" type="button" data-left-panel-tab="lab" aria-label="Lab" data-i18n="left.lab" data-i18n-aria-label="left.lab">Lab</button>
         </div>
 
         <!-- #WDD-gpt 2026-05-15 - 新增左侧智能选择工具面板，用于地面检测和场景归零 -->
@@ -156,6 +157,29 @@
                 </div>
             </div>
 
+        </section>
+
+        <section id="lab-panel"
+            class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-1.5 overflow-x-hidden hidden" data-left-panel="lab" aria-hidden="true">
+            <div class="smart-panel-section">
+                <div class="smart-panel-label" data-i18n="lab.experimental">Experimental</div>
+                <button id="lab-compress-sh"
+                    class="ui-btn h-7 w-full rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                    aria-label="Compress SH to SH0+SH1" data-tip="Fit Full SH With SH0+SH1" data-i18n-aria-label="lab.compressSHAria" data-i18n-data-tip="lab.compressSHTip">
+                    <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 7h16"></path>
+                        <path d="M7 12h10"></path>
+                        <path d="M10 17h4"></path>
+                        <path d="M18 4v6h-6"></path>
+                    </svg>
+                    <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.compressSH">Compress SH</span>
+                </button>
+                <div id="lab-sh-status" class="panel-stat py-1">
+                    <span class="panel-stat-label" data-i18n="lab.status">STATUS</span>
+                    <span class="panel-stat-value font-mono tabular-nums text-[8px]" data-i18n="lab.ready">READY</span>
+                </div>
+            </div>
         </section>
     </aside>
 
@@ -398,6 +422,16 @@
                             class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.outline">OUTLINE</button>
                         <button id="render-mode-all-points"
                             class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.all">ALL</button>
+                    </div>
+                    <div class="grid grid-cols-4 gap-1 mt-1">
+                        <button id="sh-level-0"
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.sh0">SH0</button>
+                        <button id="sh-level-1"
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.sh1">SH1</button>
+                        <button id="sh-level-2"
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.sh2">SH2</button>
+                        <button id="sh-level-3"
+                            class="ui-btn px-1 py-1.5 rounded-lg text-[8px] font-bold tracking-tight leading-none" data-i18n="render.sh3">SH3</button>
                     </div>
                 </div>
 

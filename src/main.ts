@@ -2,6 +2,7 @@ import * as pc from 'playcanvas';
 import { PlyExporter } from './utils/ply-exporter';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { sequenceSplatCoreVS, sequenceSplatMainVS, sequenceSplatMainPS } from './shaders/gsplat-sequence-shader';
+import { canCompressVertexElementSH, compressVertexElementSHToLevel1, type PlyVertexElement } from './algorithms/sh-compression';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
@@ -33,7 +34,7 @@ import { ViewerExportManager } from './viewer/viewer-export-manager';
 import { ViewerTimelineManager } from './viewer/viewer-timeline-manager';
 import { ViewerSceneManager } from './viewer/viewer-scene-manager';
 import { ViewerFileInfoPanel } from './viewer/viewer-file-info-panel';
-import { applyI18n, bindLanguageToggle } from './i18n';
+import { applyI18n, bindLanguageToggle, t } from './i18n';
 
 type DebugNeverVisibleCache = {
     count: number;
@@ -89,6 +90,7 @@ export class Viewer {
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
     private gaussianRenderMode = 0; // 0=normal, 1=center point, 2=ellipse outline, 3=debug all points
+    private shLevel = 3;
     private debugAllPointsEntity: pc.Entity | null = null;
     private debugAllPointsSourceEntity: pc.Entity | null = null;
     private debugAllPointsCount = 0;
@@ -804,7 +806,7 @@ export class Viewer {
             document.querySelectorAll<HTMLElement>('[data-left-panel]').forEach((panel) => {
                 const isActive = panel.dataset.leftPanel === tabName;
                 panel.classList.toggle('hidden', !isActive);
-                panel.style.display = isActive ? (tabName === 'edit' ? 'flex' : '') : 'none';
+                panel.style.display = isActive ? ((tabName === 'edit' || tabName === 'lab') ? 'flex' : '') : 'none';
                 panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
             });
         };
@@ -949,6 +951,141 @@ export class Viewer {
         }
 
         apply(this.splatEntity);
+    }
+
+    private applySHLevel() {
+        const apply = (ent: pc.Entity | null) => {
+            if (!ent?.gsplat) return;
+            const instance = (ent.gsplat as any).instance;
+            if (instance?.material) {
+                instance.material.setParameter('uSHLevel', this.shLevel);
+                instance.material.update();
+            }
+        };
+
+        if (this.isSequenceMode || this.isSog4SequenceMode) {
+            this.sequenceEntityPool.forEach((ent) => apply(ent));
+            this.sog4SequenceSegments.forEach((seg) => apply(seg.entity));
+        }
+
+        apply(this.splatEntity);
+    }
+
+    private bindSHLevelControls() {
+        const buttons = [
+            document.getElementById('sh-level-0') as HTMLElement | null,
+            document.getElementById('sh-level-1') as HTMLElement | null,
+            document.getElementById('sh-level-2') as HTMLElement | null,
+            document.getElementById('sh-level-3') as HTMLElement | null
+        ];
+
+        const updateButtons = () => {
+            buttons.forEach((button, level) => this.updateToggleButton(button, this.shLevel === level));
+        };
+
+        buttons.forEach((button, level) => {
+            button?.addEventListener('click', () => {
+                this.shLevel = level;
+                this.applySHLevel();
+                updateButtons();
+            });
+        });
+
+        updateButtons();
+    }
+
+    private bindLabControls() {
+        document.getElementById('lab-compress-sh')?.addEventListener('click', () => this.compressActiveSHToLevel1());
+    }
+
+    private setLabSHStatus(key: string, vars?: Record<string, string | number>) {
+        const status = document.querySelector<HTMLElement>('#lab-sh-status .panel-stat-value');
+        if (status) status.textContent = t(key, vars);
+    }
+
+    private getActiveVertexElement(): PlyVertexElement | null {
+        const component = (this.splatEntity?.gsplat as any) || null;
+        const asset = component?._assetReference?.asset || (component?.asset ? this.app.assets.get(component.asset) : null);
+        const vertexElement = asset?.resource?.splatData?.elements?.[0] || null;
+        return vertexElement as PlyVertexElement | null;
+    }
+
+    private clearSplatSHTextures(splat: any) {
+        for (const texture of [splat?.sh1to3Texture, splat?.sh4to7Texture, splat?.sh8to11Texture, splat?.sh12to15Texture]) {
+            if (!texture?.lock) continue;
+            const data = texture.lock();
+            data.fill(0);
+            texture.unlock();
+        }
+    }
+
+    private refreshActiveSplatColorAndSH(vertexElement: PlyVertexElement) {
+        if (!this.splatEntity?.gsplat) return;
+        const component = this.splatEntity.gsplat as any;
+        const instance = component.instance;
+        const asset = component?._assetReference?.asset || (component?.asset ? this.app.assets.get(component.asset) : null);
+        const splatData = new (pc.GSplatData as any)([vertexElement]);
+        if (asset?.resource) asset.resource.splatData = splatData;
+
+        const splat = instance?.splat || asset?.resource?.splat || null;
+        if (splat?.updateColorData) splat.updateColorData(splatData);
+        if (splat?.updateSHData && splat?.hasSH) {
+            this.clearSplatSHTextures(splat);
+            splat.updateSHData(splatData);
+        }
+
+        instance?.material?.update?.();
+        this.applySHLevel();
+    }
+
+    private getSHCompressionCameraPositions(): [number, number, number][] {
+        const entity = this.splatEntity;
+        const cameraPositions: [number, number, number][] = [];
+        if (!entity) return cameraPositions;
+
+        const inverseWorld = new pc.Mat4();
+        inverseWorld.copy(entity.getWorldTransform()).invert();
+        const currentLocal = new pc.Vec3();
+        inverseWorld.transformPoint(this.camera?.getPosition?.() || new pc.Vec3(0, 0, 3), currentLocal);
+        const radius = Math.max(currentLocal.length(), 1e-3);
+        const count = 64;
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+        for (let i = 0; i < count; i++) {
+            const y = 1 - (2 * (i + 0.5)) / count;
+            const r = Math.sqrt(Math.max(0, 1 - y * y));
+            const theta = i * goldenAngle;
+            const x = Math.cos(theta) * r;
+            const z = Math.sin(theta) * r;
+            cameraPositions.push([x * radius, y * radius, z * radius]);
+        }
+        return cameraPositions;
+    }
+
+    private compressActiveSHToLevel1() {
+        const vertexElement = this.getActiveVertexElement();
+        if (!vertexElement) {
+            this.setLabSHStatus('lab.noModel');
+            return;
+        }
+        if (!canCompressVertexElementSH(vertexElement)) {
+            this.setLabSHStatus('lab.noSH');
+            return;
+        }
+
+        try {
+            this.setLabSHStatus('lab.processing');
+            const result = compressVertexElementSHToLevel1(vertexElement, {
+                cameraPositions: this.getSHCompressionCameraPositions(),
+                regularization: 1e-4
+            });
+            this.refreshActiveSplatColorAndSH(vertexElement);
+            this.setLabSHStatus('lab.done', { count: result.gaussianCount, views: result.sampleViewCount });
+            console.log('[Lab] SH compressed to SH0+SH1', result);
+        } catch (err) {
+            console.error('[Lab] SH compression failed', err);
+            this.setLabSHStatus('lab.failed');
+        }
     }
 
     private bindGaussianRenderModeControls() {
@@ -1390,6 +1527,8 @@ export class Viewer {
         if (btnAxes) this.updateToggleButton(btnAxes, this.axesEntity?.enabled ?? false);
         this.bindSidebarTabs();
         this.bindGaussianRenderModeControls();
+        this.bindSHLevelControls();
+        this.bindLabControls();
 
         const dropZone = document.getElementById('drop-zone');
         const dropMsg = document.getElementById('drop-msg');
@@ -1618,6 +1757,7 @@ export class Viewer {
             'selection-top-right-toolbar',
             'left-tools-panel',
             'smart-selection-panel',
+            'lab-panel',
             'text-edit-panel',
             'simplified-panel',
             'samples-dropdown',
@@ -2172,6 +2312,7 @@ export class Viewer {
         const selectionTopbar = document.getElementById('selection-top-right-toolbar');
         const leftToolsPanel = document.getElementById('left-tools-panel');
         const smartSelectionPanel = document.getElementById('smart-selection-panel');
+        const labPanel = document.getElementById('lab-panel');
         const controlPanel = document.getElementById('control-panel');
         const simplifiedPanel = document.getElementById('simplified-panel');
 
@@ -2185,6 +2326,7 @@ export class Viewer {
             selectionTopbar?.classList.add('tools-hidden');
             leftToolsPanel?.classList.add('tools-hidden');
             smartSelectionPanel?.classList.add('tools-hidden');
+            labPanel?.classList.add('tools-hidden');
             controlPanel?.classList.add('panel-hidden');
             simplifiedPanel?.classList.remove('hidden-panel');
         } else {
@@ -2194,6 +2336,7 @@ export class Viewer {
             selectionTopbar?.classList.remove('tools-hidden');
             leftToolsPanel?.classList.remove('tools-hidden');
             smartSelectionPanel?.classList.remove('tools-hidden');
+            labPanel?.classList.remove('tools-hidden');
             controlPanel?.classList.remove('panel-hidden');
             simplifiedPanel?.classList.add('hidden-panel');
         }
@@ -2470,6 +2613,7 @@ export class Viewer {
         material.setParameter('uGlobalTotalFrames', this.duration);
         material.setParameter('uOpacityScale', 1.0);
         material.setParameter('uRenderMode', this.gaussianRenderMode);
+        material.setParameter('uSHLevel', this.shLevel);
         if (this.selectionTool?.selectionTexture) {
             material.setParameter('selectionTexture', this.selectionTool.selectionTexture);
         }
@@ -4707,6 +4851,7 @@ export class Viewer {
         material.setParameter('uSwizzleMode', this.swizzleMode); // #WDD 2026-01-15 Init
         material.setParameter('uOpacityScale', 1.0);
         material.setParameter('uRenderMode', this.gaussianRenderMode);
+        material.setParameter('uSHLevel', this.shLevel);
 
         if (lifetimeTexture) {
             material.setParameter('lifetimeTexture', lifetimeTexture);

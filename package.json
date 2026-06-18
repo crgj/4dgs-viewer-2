@@ -8,7 +8,8 @@
     "build-local": "node scripts/update_samples.js && tsc && vite build",
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test-glm": "tsx scripts/test_glm.ts"
   },
   "dependencies": {
     "@jsquash/webp": "^1.5.0",
@@ -18,6 +19,7 @@
     "playcanvas": "^1.77.0"
   },
   "devDependencies": {
+    "dotenv": "^16.0.0",
     "adm-zip": "^0.5.16",
     "autoprefixer": "^10.4.18",
     "commander": "^14.0.2",

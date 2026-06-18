@@ -104,6 +104,10 @@ export class PerformanceMonitor {
     // 大模型模式
     private progressiveLoadProgress = 0;
     private isProgressiveLoading = false;
+    
+    // 定时器引用（用于销毁时清理）
+    private systemMetricsTimer: ReturnType<typeof setInterval> | null = null;
+    private frameUpdateHandler: ((dt: number) => void) | null = null;
 
     constructor(app: pc.Application, config?: Partial<PerformanceConfig>) {
         this.app = app;
@@ -214,10 +218,11 @@ export class PerformanceMonitor {
      * 开始监控
      */
     private startMonitoring() {
-        this.app.on('update', (dt: number) => this.onFrameUpdate(dt));
+        this.frameUpdateHandler = (dt: number) => this.onFrameUpdate(dt);
+        this.app.on('update', this.frameUpdateHandler);
         
         // 每秒更新一次系统级指标
-        setInterval(() => this.collectSystemMetrics(), 1000);
+        this.systemMetricsTimer = setInterval(() => this.collectSystemMetrics(), 1000);
     }
 
     /**
@@ -576,6 +581,32 @@ export class PerformanceMonitor {
             downgradeLevel: this.downgradeLevel,
             progressiveLoadProgress: this.progressiveLoadProgress
         };
+    }
+
+    /**
+     * 销毁监控器，清理所有定时器和事件监听
+     */
+    destroy() {
+        // 清理定时器
+        if (this.systemMetricsTimer !== null) {
+            clearInterval(this.systemMetricsTimer);
+            this.systemMetricsTimer = null;
+        }
+        
+        // 清理帧更新监听
+        if (this.frameUpdateHandler) {
+            this.app.off('update', this.frameUpdateHandler);
+            this.frameUpdateHandler = null;
+        }
+        
+        // 清理观察者
+        this.observers.clear();
+        this.warningObservers.clear();
+        
+        // 清理历史数据
+        this.clear();
+        
+        console.log('[PerformanceMonitor] Destroyed');
     }
 
     /**

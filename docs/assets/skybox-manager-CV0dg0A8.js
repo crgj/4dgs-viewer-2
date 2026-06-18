@@ -5987,6 +5987,7 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
     uniform mat4 matrix_projection;
     uniform vec2 viewport;
     uniform vec4 tex_params;
+    uniform float uSHLevel;
     uniform highp usampler2D splatOrder;
     uniform highp usampler2D transformA;
     uniform highp sampler2D transformB;
@@ -6119,6 +6120,10 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
             vec3 sh1, sh2, sh3;
             fetchScale(texelFetch(splatSH_1to3, splatUV, 0), scale, sh1, sh2, sh3);
             result += SH_C1 * (-sh1 * y + sh2 * z - sh3 * x);
+            if (uSHLevel < 1.5) {
+                result *= scale;
+                return result;
+            }
             #if defined(USE_SH2)
                 float xx = x * x;
                 float yy = y * y;
@@ -6136,6 +6141,10 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
                     sh6 * (SH_C2_2 * (2.0 * zz - xx - yy)) +
                     sh7 * (SH_C2_3 * xz) +
                     sh8 * (SH_C2_4 * (xx - yy));
+                if (uSHLevel < 2.5) {
+                    result *= scale;
+                    return result;
+                }
                 #if defined(USE_SH3)
                     vec3 sh12, sh13, sh14, sh15;
                     fetch(texelFetch(splatSH_12to15, splatUV, 0), sh12, sh13, sh14, sh15);
@@ -6699,9 +6708,11 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
         } else {
 
         #ifdef USE_SH1
-            vec4 worldCenter = matrix_model * vec4(center, 1.0);
-            vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
-            color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+            if (uSHLevel > 0.5) {
+                vec4 worldCenter = matrix_model * vec4(center, 1.0);
+                vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
+                color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+            }
         #endif
         
         } // End Debug Block

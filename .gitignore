@@ -11,9 +11,11 @@ __pycache__/
 
 # Temporary test outputs
 output/
-*.ply
-*.sog4
-!docs/sog4/*.sog4
-!public/sog4/*.sog4
 *.bin
-__pycache__/
+
+# Editor / OS artifacts
+*.swp
+*.swo
+*~
+*_snippet_save
+Thumbs.db

@@ -133,7 +133,7 @@ export class ARHandler {
             maxTrack: 1,
             warmupTolerance: 1,
             missTolerance: 1,
-            debugMode: true,
+            debugMode: import.meta.env.DEV,
             filterMinCF: 0.001,
             filterBeta: 1000,
             onUpdate: (data: any) => {

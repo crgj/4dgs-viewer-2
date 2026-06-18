@@ -84,7 +84,7 @@ export class SmartSelectionTool {
             const active = panel.dataset.leftPanel === nextTab;
             panel.classList.toggle('hidden', !active);
             // #WDD-gpt 2026-06-13 - 面板级 tab 同步 display，避免 Tailwind display class 抢占 hidden
-            panel.style.display = active ? (nextTab === 'edit' ? 'flex' : '') : 'none';
+            panel.style.display = active ? ((nextTab === 'edit' || nextTab === 'lab') ? 'flex' : '') : 'none';
             panel.setAttribute('aria-hidden', active ? 'false' : 'true');
         });
     }

@@ -560,7 +560,7 @@ body.theme-light .fps-item:not(.active):hover {
 }
 
 .left-panel-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .right-panel-tabs {
@@ -1257,6 +1257,7 @@ body.theme-light .fps-item:not(.active):hover {
 /* Custom Tooltip - Refined */
 .has-tooltip {
     position: relative;
+    z-index: 1;
 }
 
 .has-tooltip::before {
@@ -1280,9 +1281,19 @@ body.theme-light .fps-item:not(.active):hover {
     opacity: 0;
     pointer-events: none;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    z-index: 120;
+    z-index: 99999;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(10px);
+}
+
+/* #WDD-gpt 2026-06-18 - Lab 面板按钮 tooltip 需要越过左侧面板裁剪并显示在 UI 最上层 */
+#left-tools-panel,
+#lab-panel {
+    overflow: visible !important;
+}
+
+#left-tools-panel .has-tooltip:hover {
+    z-index: 99998;
 }
 
 .has-tooltip[aria-label]:not([data-tip])::before {
