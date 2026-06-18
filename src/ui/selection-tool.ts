@@ -382,6 +382,40 @@ export class SelectionTool {
         this.updateTexture();
     }
 
+    deleteIndices(indices: number[]) {
+        if (!this.selectionData || !Array.isArray(indices) || indices.length === 0) return 0;
+        const before = this.captureGlobalSelectionState();
+        const total = Math.floor(this.selectionData.length / 4);
+        let deleted = 0;
+
+        // #WDD-gpt 2026-06-18 - Lab 健康修复复用选择纹理 G 通道删除语义，避免 hidden 点清理和 Delete Hidden 出现两套状态
+        for (const value of indices) {
+            if (!Number.isFinite(value)) continue;
+            const i = Math.floor(value);
+            if (i < 0 || i >= total) continue;
+            const offset = i * 4;
+            if (this.selectionData[offset + 1] > 0) continue;
+            this.selectionData[offset] = 0;
+            this.selectionData[offset + 1] = 255;
+            if (this.allTimeSelectionData && offset + 1 < this.allTimeSelectionData.length) {
+                this.allTimeSelectionData[offset] = 0;
+                this.allTimeSelectionData[offset + 1] = 255;
+            }
+            deleted++;
+        }
+
+        if (deleted > 0) {
+            this.selectionScope = 'current';
+            this.pushUndoSnapshot(before);
+            this.updateTexture();
+            this.commitActiveSelectionState();
+            if (typeof this.viewer?.refreshDebugAllPointsEntity === 'function') {
+                this.viewer.refreshDebugAllPointsEntity();
+            }
+        }
+        return deleted;
+    }
+
     markAllTimeSelectionScope() {
         this.selectionScope = 'alltime';
     }

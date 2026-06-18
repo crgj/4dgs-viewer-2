@@ -15,6 +15,7 @@ import {
 } from '../utils/model-transform';
 import type { Viewer } from '../main';
 import type { CameraPreset } from '../types/viewer';
+import { t } from '../i18n';
 
 /**
  * #WDD 2026-04-20: Extracted from Viewer to reduce main.ts size.
@@ -238,6 +239,15 @@ export class ViewerExportManager {
             return;
         }
 
+        const preflightAction = await this.confirmPLY4ExportHealthGate();
+        if (preflightAction === 'cancel') return;
+        if (preflightAction === 'fix') {
+            const result = typeof v.applyPLY4ExportHealthAutoFix === 'function'
+                ? v.applyPLY4ExportHealthAutoFix()
+                : null;
+            console.log('[Export] PLY4 health preflight auto fix', result);
+        }
+
         try {
             const overlay = document.getElementById('loading-overlay');
             const statusEl = document.getElementById('loading-status');
@@ -302,6 +312,83 @@ export class ViewerExportManager {
                 if (overlay) overlay.classList.add('hidden');
             }, 1000);
         }
+    }
+
+    private async confirmPLY4ExportHealthGate(): Promise<'fix' | 'continue' | 'cancel'> {
+        const v = this.viewer as any;
+        const report = typeof v.getPLY4ExportHealthReport === 'function'
+            ? v.getPLY4ExportHealthReport()
+            : null;
+        if (!report || !Array.isArray(report.issues) || report.issues.length === 0) return 'continue';
+
+        return new Promise((resolve) => {
+            const existing = document.getElementById('ply4-health-gate');
+            existing?.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'ply4-health-gate';
+            modal.className = 'ply4-health-gate';
+            const issueRows = report.issues.map((issue: any) => {
+                const severity = this.escapeHTML(String(issue.severity || '').toUpperCase());
+                const message = this.escapeHTML(t(issue.messageKey || ''));
+                const count = Number(issue.count || 0).toLocaleString();
+                const fixable = issue.fixable ? `<span class="ply4-health-gate-fixable">${this.escapeHTML(t('export.health.fixable'))}</span>` : '';
+                return `<div class="ply4-health-gate-row ply4-health-gate-${this.escapeHTML(String(issue.severity || 'info'))}">
+                    <span class="ply4-health-gate-severity">${severity}</span>
+                    <span class="ply4-health-gate-message">${message}</span>
+                    <span class="ply4-health-gate-count">${count}</span>
+                    ${fixable}
+                </div>`;
+            }).join('');
+
+            modal.innerHTML = `
+                <div class="ply4-health-gate-card" role="dialog" aria-modal="true" aria-labelledby="ply4-health-gate-title">
+                    <div class="ply4-health-gate-kicker">${this.escapeHTML(t('export.health.kicker'))}</div>
+                    <div id="ply4-health-gate-title" class="ply4-health-gate-title">${this.escapeHTML(t('export.health.title'))}</div>
+                    <div class="ply4-health-gate-summary">${this.escapeHTML(t('export.health.summary', {
+                        count: report.gaussianCount,
+                        errors: report.errorCount,
+                        warnings: report.warningCount,
+                        fixable: report.fixableCount
+                    }))}</div>
+                    <div class="ply4-health-gate-list">${issueRows}</div>
+                    <div class="ply4-health-gate-actions">
+                        <button class="ui-btn ply4-health-gate-btn" type="button" data-action="cancel">${this.escapeHTML(t('export.health.cancel'))}</button>
+                        <button class="ui-btn ply4-health-gate-btn" type="button" data-action="continue">${this.escapeHTML(t('export.health.continue'))}</button>
+                        <button class="ui-btn ply4-health-gate-btn ui-text-highlight" type="button" data-action="fix" ${report.fixableCount > 0 ? '' : 'disabled'}>${this.escapeHTML(t('export.health.fixExport'))}</button>
+                    </div>
+                </div>
+            `;
+
+            const finish = (action: 'fix' | 'continue' | 'cancel') => {
+                modal.remove();
+                resolve(action);
+            };
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) {
+                    finish('cancel');
+                    return;
+                }
+                const action = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-action]')?.dataset.action;
+                if (action === 'fix' || action === 'continue' || action === 'cancel') finish(action);
+            });
+            modal.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') finish('cancel');
+            });
+            document.body.appendChild(modal);
+            modal.tabIndex = -1;
+            modal.focus();
+        });
+    }
+
+    private escapeHTML(value: string) {
+        return value.replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char] || char));
     }
 
     async saveAsSOG4() {

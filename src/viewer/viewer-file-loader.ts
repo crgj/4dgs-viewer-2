@@ -188,6 +188,7 @@ export class ViewerFileLoader {
             return;
         }
 
+        v.resetTransientStateForNewAsset?.();
         console.log(`[Viewer] Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
         const overlay = document.getElementById('loading-overlay');

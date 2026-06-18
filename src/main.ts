@@ -3,6 +3,7 @@ import { PlyExporter } from './utils/ply-exporter';
 import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { sequenceSplatCoreVS, sequenceSplatMainVS, sequenceSplatMainPS } from './shaders/gsplat-sequence-shader';
 import { canCompressVertexElementSH, compressVertexElementSHToLevel1, type PlyVertexElement } from './algorithms/sh-compression';
+import { analyzeModelHealth, applyModelHealthAutoFix, type ModelHealthReport } from './algorithms/model-health';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
@@ -86,6 +87,7 @@ export class Viewer {
     private performanceMonitor: PerformanceMonitor;
     private performancePanel: PerformancePanel;
     private simpleMemorySummaryTimer: number | null = null;
+    private labHealthReport: ModelHealthReport | null = null;
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
@@ -996,11 +998,53 @@ export class Viewer {
 
     private bindLabControls() {
         document.getElementById('lab-compress-sh')?.addEventListener('click', () => this.compressActiveSHToLevel1());
+        document.getElementById('lab-health-check')?.addEventListener('click', () => this.checkActiveModelHealth());
+        document.getElementById('lab-health-fix')?.addEventListener('click', () => this.fixActiveModelHealth());
+        document.getElementById('lab-health-report')?.addEventListener('click', (event) => {
+            const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-health-code]');
+            if (row?.dataset.healthCode) this.selectLabHealthIssue(row.dataset.healthCode);
+        });
+        document.getElementById('lab-health-report')?.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-health-code]');
+            if (!row?.dataset.healthCode) return;
+            event.preventDefault();
+            this.selectLabHealthIssue(row.dataset.healthCode);
+        });
     }
 
     private setLabSHStatus(key: string, vars?: Record<string, string | number>) {
         const status = document.querySelector<HTMLElement>('#lab-sh-status .panel-stat-value');
         if (status) status.textContent = t(key, vars);
+    }
+
+    public resetTransientStateForNewAsset(options: { preserveSelection?: boolean; segmentSwitch?: boolean } = {}) {
+        this.labHealthReport = null;
+        this.debugNeverVisibleCache = null;
+        document.getElementById('ply4-health-gate')?.remove();
+        this.setLabSHStatus('lab.ready');
+
+        const summary = document.getElementById('lab-health-summary');
+        if (summary) {
+            summary.textContent = t('lab.health.notChecked');
+            summary.removeAttribute('title');
+        }
+        const report = document.getElementById('lab-health-report');
+        if (report) {
+            report.innerHTML = `<div class="lab-health-empty">${this.escapeHTML(t('lab.health.notCheckedHint'))}</div>`;
+        }
+        const fixButton = document.getElementById('lab-health-fix') as HTMLButtonElement | null;
+        if (fixButton) fixButton.disabled = true;
+
+        if (!options.preserveSelection) {
+            this.selectionTool?.clearHistory?.();
+        }
+        if (!options.segmentSwitch) {
+            this.presetManager?.cancelPresetPathPlaybackForNewAsset?.();
+        }
+
+        const allPointsStatus = document.getElementById('debug-all-points-status');
+        if (allPointsStatus) allPointsStatus.textContent = '';
     }
 
     private getActiveVertexElement(): PlyVertexElement | null {
@@ -1026,6 +1070,18 @@ export class Viewer {
         const asset = component?._assetReference?.asset || (component?.asset ? this.app.assets.get(component.asset) : null);
         const splatData = new (pc.GSplatData as any)([vertexElement]);
         if (asset?.resource) asset.resource.splatData = splatData;
+        const x = vertexElement.properties.find((prop) => prop.name === 'x')?.storage;
+        const y = vertexElement.properties.find((prop) => prop.name === 'y')?.storage;
+        const z = vertexElement.properties.find((prop) => prop.name === 'z')?.storage;
+        if (x && y && z) {
+            const count = Math.min(vertexElement.count, x.length, y.length, z.length);
+            if (!this.cachedPositions || this.cachedPositions.length !== count * 3) this.cachedPositions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                this.cachedPositions[i * 3 + 0] = x[i];
+                this.cachedPositions[i * 3 + 1] = y[i];
+                this.cachedPositions[i * 3 + 2] = z[i];
+            }
+        }
 
         const splat = instance?.splat || asset?.resource?.splat || null;
         if (splat?.updateColorData) splat.updateColorData(splatData);
@@ -1036,6 +1092,28 @@ export class Viewer {
 
         instance?.material?.update?.();
         this.applySHLevel();
+    }
+
+    private refreshActiveSplatData(vertexElement: PlyVertexElement) {
+        if (!this.splatEntity?.gsplat) return;
+        const component = this.splatEntity.gsplat as any;
+        const instance = component.instance;
+        const asset = component?._assetReference?.asset || (component?.asset ? this.app.assets.get(component.asset) : null);
+        const splatData = new (pc.GSplatData as any)([vertexElement]);
+        if (asset?.resource) asset.resource.splatData = splatData;
+
+        const splat = instance?.splat || asset?.resource?.splat || null;
+        if (splat?.updateColorData) splat.updateColorData(splatData);
+        if (splat?.updateTransformData) splat.updateTransformData(splatData);
+        if (splat?.updateSHData && splat?.hasSH) {
+            this.clearSplatSHTextures(splat);
+            splat.updateSHData(splatData);
+        }
+
+        instance?.material?.update?.();
+        this.applySHLevel();
+        this.debugNeverVisibleCache = null;
+        this.refreshDebugAllPointsEntity();
     }
 
     private getSHCompressionCameraPositions(): [number, number, number][] {
@@ -1086,6 +1164,139 @@ export class Viewer {
             console.error('[Lab] SH compression failed', err);
             this.setLabSHStatus('lab.failed');
         }
+    }
+
+    private checkActiveModelHealth() {
+        const report = this.getActiveModelHealthReport();
+        this.renderLabHealthReport(report, 'lab.health.checked');
+    }
+
+    private fixActiveModelHealth() {
+        const result = this.applyActiveModelHealthAutoFix();
+        if (!result) {
+            this.renderLabHealthReport(this.withViewerHealthIssues(analyzeModelHealth(null)), 'lab.health.noModel');
+            return;
+        }
+        this.renderLabHealthReport(this.getActiveModelHealthReport(), 'lab.health.fixed', { count: result.changedValueCount });
+        console.log('[Lab] Model health auto fix', result);
+    }
+
+    public getPLY4ExportHealthReport() {
+        return this.getActiveModelHealthReport();
+    }
+
+    public applyPLY4ExportHealthAutoFix() {
+        return this.applyActiveModelHealthAutoFix();
+    }
+
+    private applyActiveModelHealthAutoFix() {
+        const vertexElement = this.getActiveVertexElement();
+        if (!vertexElement) {
+            return null;
+        }
+
+        const result = applyModelHealthAutoFix(vertexElement);
+        if (result.changedValueCount > 0) {
+            this.refreshActiveSplatData(vertexElement);
+        }
+        const hiddenTargets = this.collectDebugNeverVisiblePointIndices();
+        const deletedHidden = hiddenTargets.length > 0 && typeof this.selectionTool?.deleteIndices === 'function'
+            ? this.selectionTool.deleteIndices(hiddenTargets)
+            : 0;
+        const cleanup = deletedHidden > 0 ? this.zeroInvisibleTrajectoryKeyframesForDeleteHidden() : null;
+        if (deletedHidden > 0) {
+            this.debugNeverVisibleCache = null;
+            this.refreshDebugAllPointsEntity();
+        }
+        return { ...result, deletedHidden, cleanup, changedValueCount: result.changedValueCount + deletedHidden };
+    }
+
+    private getActiveModelHealthReport() {
+        return this.withViewerHealthIssues(analyzeModelHealth(this.getActiveVertexElement()));
+    }
+
+    private withViewerHealthIssues(report: ModelHealthReport): ModelHealthReport {
+        if (!this.splatEntity) return report;
+        const hiddenIndices = this.collectDebugNeverVisiblePointIndices();
+        if (hiddenIndices.length === 0) return report;
+
+        // #WDD-gpt 2026-06-18 - Delete Hidden 的检测依赖 Viewer 生命周期/opacity/删除状态，这里作为 Viewer 层健康项合并进 Lab 报告
+        const hiddenIssue = {
+            code: 'never-visible-hidden',
+            severity: 'warning' as const,
+            messageKey: 'lab.health.issue.hiddenNeverVisible',
+            count: hiddenIndices.length,
+            fixable: true,
+            indices: hiddenIndices
+        };
+
+        const issues = [...report.issues.filter((issue) => issue.code !== hiddenIssue.code), hiddenIssue];
+        return {
+            ...report,
+            issueCount: issues.length,
+            warningCount: issues.filter((issue) => issue.severity === 'warning').length,
+            errorCount: issues.filter((issue) => issue.severity === 'error').length,
+            fixableCount: issues.filter((issue) => issue.fixable).length,
+            issues
+        };
+    }
+
+    private renderLabHealthReport(report: ModelHealthReport, statusKey: string, vars?: Record<string, string | number>) {
+        this.labHealthReport = report;
+        const summary = document.getElementById('lab-health-summary');
+        const reportEl = document.getElementById('lab-health-report');
+        const fixButton = document.getElementById('lab-health-fix') as HTMLButtonElement | null;
+
+        if (summary) {
+            summary.textContent = t(statusKey, vars);
+            summary.title = t('lab.health.summaryTitle', {
+                count: report.gaussianCount,
+                errors: report.errorCount,
+                warnings: report.warningCount,
+                fixable: report.fixableCount
+            });
+        }
+        if (fixButton) fixButton.disabled = report.fixableCount === 0;
+        if (!reportEl) return;
+
+        if (report.issues.length === 0) {
+            reportEl.innerHTML = `<div class="lab-health-empty">${this.escapeHTML(t('lab.health.clean'))}</div>`;
+            return;
+        }
+
+        reportEl.innerHTML = report.issues.map((issue) => {
+            const severity = this.escapeHTML(issue.severity.toUpperCase());
+            const label = this.escapeHTML(t(issue.messageKey));
+            const fix = issue.fixable ? `<span class="lab-health-fixable">${this.escapeHTML(t('lab.health.fixable'))}</span>` : '';
+            const selectable = issue.indices.length > 0;
+            return `<div class="lab-health-issue lab-health-${this.escapeHTML(issue.severity)} ${selectable ? 'lab-health-selectable' : ''}" data-health-code="${this.escapeHTML(issue.code)}" ${selectable ? 'role="button" tabindex="0"' : ''}>
+                <span class="lab-health-severity">${severity}</span>
+                <span class="lab-health-message">${label}</span>
+                <span class="lab-health-count">${issue.count.toLocaleString()}</span>
+                ${fix}
+            </div>`;
+        }).join('');
+    }
+
+    private selectLabHealthIssue(code: string) {
+        const issue = this.labHealthReport?.issues.find((item) => item.code === code);
+        if (!issue || issue.indices.length === 0) return;
+        const selected = this.selectionTool?.selectIndices(issue.indices, true, true) || 0;
+        const summary = document.getElementById('lab-health-summary');
+        if (summary) summary.textContent = t('lab.health.selected', { count: selected });
+        document.querySelectorAll<HTMLElement>('.lab-health-issue.is-selected').forEach((row) => row.classList.remove('is-selected'));
+        document.querySelector<HTMLElement>(`.lab-health-issue[data-health-code="${CSS.escape(code)}"]`)?.classList.add('is-selected');
+        console.log('[Lab] Selected health issue points', { code, selected });
+    }
+
+    private escapeHTML(value: string) {
+        return value.replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char] || char));
     }
 
     private bindGaussianRenderModeControls() {
@@ -2277,6 +2488,8 @@ export class Viewer {
         // --- Camera Presets ---
         const addPresetBtn = document.getElementById('add-preset');
         const clearPresetsBtn = document.getElementById('clear-presets');
+        const previewPresetAnimationBtn = document.getElementById('preview-preset-animation');
+        const recordPresetVideoBtn = document.getElementById('record-preset-video');
 
         this.presetManager.renderPresets();
         addPresetBtn?.addEventListener('click', () => {
@@ -2295,6 +2508,14 @@ export class Viewer {
                 this.presetManager.cameraPresets = [];
                 this.presetManager.renderPresets();
             }
+        });
+
+        recordPresetVideoBtn?.addEventListener('click', () => {
+            void this.presetManager.recordPresetVideo();
+        });
+
+        previewPresetAnimationBtn?.addEventListener('click', () => {
+            this.presetManager.previewPresetAnimation();
         });
     }
 
@@ -3176,6 +3397,7 @@ export class Viewer {
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         this.currentFileSize = files.reduce((sum, file) => sum + file.size, 0);
+        this.resetTransientStateForNewAsset();
         progress(0, 'PREPARING', `Parsing ${files.length} PLY frames`);
         let succeeded = false;
         try {
@@ -3372,6 +3594,7 @@ export class Viewer {
            return;
         }
 
+        this.resetTransientStateForNewAsset();
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         progress(0, 'PREPARING', `Loading ${files.length} SOG4 segments`);
@@ -3482,6 +3705,7 @@ export class Viewer {
             await this.showPly4LazyModeDialog(totalSize, files.length);
         }
 
+        this.resetTransientStateForNewAsset();
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         progress(0, 'PREPARING', `${useSegmentedMode ? 'Segmented buffering' : 'Loading'} ${files.length} PLY4 segments`);
@@ -4065,6 +4289,7 @@ export class Viewer {
         this.currentTransformCacheKey = this.currentFileName;
         this.splatEntity = segment.entity;
         this.lastParsedData = segment.parsed;
+        this.resetTransientStateForNewAsset({ preserveSelection: true, segmentSwitch: true });
 
         // #WDD-kimi 2026-04-20 - 优先复用段内保存的选择状态，避免切段后删除状态丢失
         const preBoundElement = this.getSplatSequenceElementByAsset(segment.asset);
@@ -4179,6 +4404,7 @@ export class Viewer {
         const overlay = document.getElementById('loading-overlay');
         const progress = this.createSequenceProgressUpdater();
         this.currentFileSize = files.reduce((sum, file) => sum + file.size, 0);
+        this.resetTransientStateForNewAsset();
         progress(0, 'PREPARING', `Parsing ${files.length} SOG frames`);
         let succeeded = false;
         const loader = new TrueSplatsLoader(this.app);

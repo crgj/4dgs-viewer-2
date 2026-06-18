@@ -11,6 +11,8 @@ export class ViewerPresetManager {
     cameraPresets: CameraPreset[] = [];
     currentPresetIndex = -1;
     isCameraAnimating = false;
+    isRecordingPresetVideo = false;
+    isPreviewingPresetPath = false;
     wasPlayingBeforeAnim = false;
     animTargetPos = new pc.Vec3();
     animTargetPitch = 0;
@@ -21,6 +23,13 @@ export class ViewerPresetManager {
     animProgress = 0;
     activeTextId: string | null = null;
     textOverlays: Map<string, HTMLElement> = new Map();
+    private recordSegmentIndex = 0;
+    private recordSegmentProgress = 0;
+    private recordSegmentDuration = 2.0;
+    private recordFrameRate = 30;
+    private mediaRecorder: MediaRecorder | null = null;
+    private recordedChunks: Blob[] = [];
+    private recordingStream: MediaStream | null = null;
 
     constructor(private viewer: Viewer) {}
 
@@ -28,6 +37,11 @@ export class ViewerPresetManager {
     update(dt: number) {
         const v = this.viewer as any;
         this.updateTextVisibility();
+
+        if (this.isRecordingPresetVideo || this.isPreviewingPresetPath) {
+            this.updatePresetPathAnimation(dt);
+            return;
+        }
 
         // Smooth Camera Animation
         if (this.isCameraAnimating && v.camera) {
@@ -69,10 +83,253 @@ export class ViewerPresetManager {
         }
     }
 
+    async recordPresetVideo() {
+        const v = this.viewer as any;
+        if (this.isRecordingPresetVideo || this.isPreviewingPresetPath) return;
+        if (!v.camera || this.cameraPresets.length < 2) {
+            this.setRecordStatus(t('preset.videoNeedPresets'));
+            return;
+        }
+
+        const canvas = document.getElementById('application-canvas') as HTMLCanvasElement | null;
+        const captureStream = canvas?.captureStream;
+        if (!canvas || typeof captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+            this.setRecordStatus(t('preset.videoUnsupported'));
+            return;
+        }
+
+        const mimeType = this.getSupportedVideoMimeType();
+        if (!mimeType) {
+            this.setRecordStatus(t('preset.videoUnsupported'));
+            return;
+        }
+
+        this.isCameraAnimating = false;
+        this.wasPlayingBeforeAnim = v.isPlaying;
+        if (this.wasPlayingBeforeAnim) {
+            this.seekViewerToFirstFrame();
+        }
+
+        this.recordedChunks = [];
+        this.recordSegmentIndex = 0;
+        this.recordSegmentProgress = 0;
+        this.currentPresetIndex = 0;
+        this.applyPresetCamera(this.cameraPresets[0]);
+        this.syncPresetPathButtons();
+        this.setRecordStatus(t('preset.videoRecording'));
+
+        // #WDD-gpt 2026-06-18 - 直接录制 PlayCanvas canvas 输出，避免额外离屏渲染路径和 WebGL readPixels 带来的卡顿
+        this.recordingStream = canvas.captureStream(this.recordFrameRate);
+        this.mediaRecorder = new MediaRecorder(this.recordingStream, {
+            mimeType,
+            videoBitsPerSecond: 12_000_000
+        });
+        this.mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) this.recordedChunks.push(event.data);
+        };
+        this.mediaRecorder.onstop = () => this.finishPresetVideoRecording(mimeType);
+        this.mediaRecorder.start(250);
+        this.isRecordingPresetVideo = true;
+    }
+
+    previewPresetAnimation() {
+        const v = this.viewer as any;
+        if (this.isRecordingPresetVideo || this.isPreviewingPresetPath) return;
+        if (!v.camera || this.cameraPresets.length < 2) {
+            this.setRecordStatus(t('preset.videoNeedPresets'));
+            return;
+        }
+
+        this.isCameraAnimating = false;
+        this.wasPlayingBeforeAnim = v.isPlaying;
+        if (this.wasPlayingBeforeAnim) {
+            this.seekViewerToFirstFrame();
+        }
+        this.recordSegmentIndex = 0;
+        this.recordSegmentProgress = 0;
+        this.currentPresetIndex = 0;
+        this.applyPresetCamera(this.cameraPresets[0]);
+        this.isPreviewingPresetPath = true;
+        this.syncPresetPathButtons();
+        this.setRecordStatus(t('preset.previewing'));
+    }
+
+    cancelPresetPathPlaybackForNewAsset() {
+        if (!this.isRecordingPresetVideo && !this.isPreviewingPresetPath) {
+            this.wasPlayingBeforeAnim = false;
+            this.syncRecordAvailability();
+            return;
+        }
+
+        // #WDD-gpt 2026-06-18 - 新模型加载前取消预览/录制路径，避免旧相机轨迹继续驱动新模型视图
+        this.isPreviewingPresetPath = false;
+        this.isRecordingPresetVideo = false;
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.onstop = null;
+            this.mediaRecorder.stop();
+        }
+        this.mediaRecorder = null;
+        this.recordingStream?.getTracks().forEach((track) => track.stop());
+        this.recordingStream = null;
+        this.recordedChunks = [];
+        this.restoreRecordedPlaybackState();
+        this.syncRecordAvailability();
+    }
+
+    private updatePresetPathAnimation(dt: number) {
+        const v = this.viewer as any;
+        if (!v.camera || this.cameraPresets.length < 2) {
+            this.stopPresetPathAnimation();
+            return;
+        }
+
+        const from = this.cameraPresets[this.recordSegmentIndex];
+        const to = this.cameraPresets[this.recordSegmentIndex + 1];
+        if (!from || !to) {
+            this.stopPresetPathAnimation();
+            return;
+        }
+
+        this.recordSegmentProgress += dt / this.recordSegmentDuration;
+        const segmentT = Math.min(1, this.recordSegmentProgress);
+        const easedT = segmentT * segmentT * (3 - 2 * segmentT);
+        const pos = new pc.Vec3().lerp(from.pos, to.pos, easedT);
+        const pitch = pc.math.lerp(from.pitch, to.pitch, easedT);
+        const yaw = pc.math.lerp(from.yaw, to.yaw, easedT);
+
+        v.camera.setPosition(pos);
+        v.camera.setEulerAngles(pitch, yaw, 0);
+        v.pitch = pitch;
+        v.yaw = yaw;
+        this.currentPresetIndex = this.recordSegmentIndex;
+
+        const totalSegments = Math.max(1, this.cameraPresets.length - 1);
+        const progress = (this.recordSegmentIndex + segmentT) / totalSegments;
+        this.setRecordStatus(t(this.isRecordingPresetVideo ? 'preset.videoProgress' : 'preset.previewProgress', { percent: Math.round(progress * 100) }));
+
+        if (segmentT < 1) return;
+        this.recordSegmentIndex++;
+        this.recordSegmentProgress = 0;
+        if (this.recordSegmentIndex >= this.cameraPresets.length - 1) {
+            this.currentPresetIndex = this.cameraPresets.length - 1;
+            this.applyPresetCamera(this.cameraPresets[this.cameraPresets.length - 1]);
+            this.stopPresetPathAnimation();
+        }
+    }
+
+    private stopPresetPathAnimation() {
+        const wasRecording = this.isRecordingPresetVideo;
+        const wasPreviewing = this.isPreviewingPresetPath;
+        this.isRecordingPresetVideo = false;
+        this.isPreviewingPresetPath = false;
+        if (wasRecording && this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        } else if (wasRecording) {
+            this.finishPresetVideoRecording(this.getSupportedVideoMimeType() || 'video/webm');
+        } else {
+            this.restoreRecordedPlaybackState();
+            this.syncPresetPathButtons();
+            if (wasPreviewing) this.setRecordStatus(t('preset.previewDone'));
+        }
+    }
+
+    private finishPresetVideoRecording(mimeType: string) {
+        const v = this.viewer as any;
+        this.isRecordingPresetVideo = false;
+        this.isPreviewingPresetPath = false;
+        this.syncPresetPathButtons();
+        this.recordingStream?.getTracks().forEach((track) => track.stop());
+        this.recordingStream = null;
+        this.mediaRecorder = null;
+
+        this.restoreRecordedPlaybackState();
+
+        if (this.recordedChunks.length === 0) {
+            this.setRecordStatus(t('preset.videoFailed'));
+            return;
+        }
+
+        const blob = new Blob(this.recordedChunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `camera-presets-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        this.setRecordStatus(t('preset.videoDone'));
+    }
+
+    private getSupportedVideoMimeType() {
+        const candidates = [
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+        ];
+        return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    private applyPresetCamera(preset: CameraPreset) {
+        const v = this.viewer as any;
+        if (!v.camera) return;
+        v.camera.setPosition(preset.pos);
+        v.camera.setEulerAngles(preset.pitch, preset.yaw, 0);
+        v.pitch = preset.pitch;
+        v.yaw = preset.yaw;
+    }
+
+    private seekViewerToFirstFrame() {
+        const v = this.viewer as any;
+        // #WDD-gpt 2026-06-18 - 录制前如果用户处于播放状态，动画时间线回到第 0 帧并继续播放，保持“播放中”状态不被录制流程暂停
+        if (typeof v.seekToFrame === 'function') {
+            v.seekToFrame(0, { pause: false });
+        }
+        v.currentTime = 0;
+        v.playbackTime = 0;
+        if (typeof v.syncTimelineUI === 'function') {
+            v.syncTimelineUI(0);
+        }
+    }
+
+    private restoreRecordedPlaybackState() {
+        const v = this.viewer as any;
+        if (!!v.isPlaying !== !!this.wasPlayingBeforeAnim && typeof v.togglePlay === 'function') {
+            v.togglePlay();
+        }
+        this.wasPlayingBeforeAnim = false;
+    }
+
+    private setRecordStatus(text: string) {
+        const status = document.getElementById('preset-record-status');
+        if (status) status.textContent = text;
+    }
+
+    private syncPresetPathButtons() {
+        const recordButton = document.getElementById('record-preset-video') as HTMLButtonElement | null;
+        const previewButton = document.getElementById('preview-preset-animation') as HTMLButtonElement | null;
+        const disabled = this.cameraPresets.length < 2 || this.isRecordingPresetVideo || this.isPreviewingPresetPath;
+        if (recordButton) {
+            recordButton.disabled = disabled;
+            recordButton.classList.toggle('active', this.isRecordingPresetVideo);
+        }
+        if (previewButton) {
+            previewButton.disabled = disabled;
+            previewButton.classList.toggle('active', this.isPreviewingPresetPath);
+        }
+    }
+
+    private syncRecordAvailability() {
+        if (this.isRecordingPresetVideo || this.isPreviewingPresetPath) return;
+        this.syncPresetPathButtons();
+        this.setRecordStatus(t(this.cameraPresets.length < 2 ? 'preset.videoNeedPresets' : 'preset.videoReady'));
+    }
+
     renderPresets() {
         const presetsList = document.getElementById('presets-list');
         if (!presetsList) return;
         presetsList.innerHTML = '';
+        this.syncRecordAvailability();
         const v = this.viewer as any;
         this.cameraPresets.forEach((preset, index) => {
             const item = document.createElement('div');

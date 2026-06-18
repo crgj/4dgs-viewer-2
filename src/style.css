@@ -1296,6 +1296,201 @@ body.theme-light .fps-item:not(.active):hover {
     z-index: 99998;
 }
 
+/* #WDD-gpt 2026-06-18 - Lab 模型健康报告需要在窄侧栏内反复保留显示，并支持多条问题滚动查看 */
+.lab-health-report {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 154px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.lab-health-empty {
+    padding: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 8px;
+    line-height: 1.35;
+    text-transform: uppercase;
+}
+
+.lab-health-issue {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 4px;
+    padding: 5px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-left-width: 2px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.28);
+    font-size: 8px;
+    line-height: 1.25;
+}
+
+.lab-health-error {
+    border-left-color: rgba(248, 113, 113, 0.9);
+}
+
+.lab-health-warning {
+    border-left-color: rgba(251, 191, 36, 0.9);
+}
+
+.lab-health-info {
+    border-left-color: rgba(56, 189, 248, 0.9);
+}
+
+.lab-health-selectable {
+    cursor: pointer;
+}
+
+.lab-health-selectable:hover,
+.lab-health-selectable:focus-visible,
+.lab-health-issue.is-selected {
+    border-color: rgba(16, 185, 129, 0.45);
+    background: rgba(16, 185, 129, 0.1);
+    outline: none;
+}
+
+.lab-health-severity {
+    color: var(--text-secondary);
+    font-weight: 800;
+}
+
+.lab-health-message {
+    min-width: 0;
+    color: var(--text-primary);
+}
+
+.lab-health-count,
+.lab-health-fixable {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    color: var(--text-secondary);
+}
+
+.lab-health-fixable {
+    grid-column: 2 / 4;
+    justify-self: start;
+    padding: 1px 4px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.14);
+    color: rgba(110, 231, 183, 0.95);
+}
+
+/* #WDD-gpt 2026-06-18 - PLY4 导出前资产体检 Gate，要求用户显式选择修复、继续或取消 */
+.ply4-health-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(2, 6, 23, 0.62);
+    backdrop-filter: blur(12px);
+}
+
+.ply4-health-gate-card {
+    width: min(520px, 100%);
+    max-height: min(78vh, 680px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.94);
+    color: var(--text-primary);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.ply4-health-gate-kicker {
+    color: rgba(94, 234, 212, 0.9);
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.ply4-health-gate-title {
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.ply4-health-gate-summary {
+    color: var(--text-secondary);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.ply4-health-gate-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.ply4-health-gate-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 7px;
+    padding: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-left-width: 3px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.55);
+    font-size: 10px;
+}
+
+.ply4-health-gate-error {
+    border-left-color: rgba(248, 113, 113, 0.95);
+}
+
+.ply4-health-gate-warning {
+    border-left-color: rgba(251, 191, 36, 0.95);
+}
+
+.ply4-health-gate-info {
+    border-left-color: rgba(56, 189, 248, 0.95);
+}
+
+.ply4-health-gate-severity,
+.ply4-health-gate-count,
+.ply4-health-gate-fixable {
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 9px;
+    font-weight: 800;
+}
+
+.ply4-health-gate-fixable {
+    grid-column: 2 / 4;
+    justify-self: start;
+    padding: 2px 5px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.14);
+    color: rgba(110, 231, 183, 0.95);
+}
+
+.ply4-health-gate-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 7px;
+}
+
+.ply4-health-gate-btn {
+    min-height: 30px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
 .has-tooltip[aria-label]:not([data-tip])::before {
     content: attr(aria-label);
 }

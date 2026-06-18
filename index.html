@@ -35,7 +35,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.1</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.2</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -178,6 +178,36 @@
                 <div id="lab-sh-status" class="panel-stat py-1">
                     <span class="panel-stat-label" data-i18n="lab.status">STATUS</span>
                     <span class="panel-stat-value font-mono tabular-nums text-[8px]" data-i18n="lab.ready">READY</span>
+                </div>
+            </div>
+            <div class="smart-panel-section">
+                <div class="smart-panel-label" data-i18n="lab.health.title">Model Health</div>
+                <div class="grid grid-cols-2 gap-1">
+                    <button id="lab-health-check"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                        aria-label="Check Model Health" data-tip="Check Model Health" data-i18n-aria-label="lab.health.checkAria" data-i18n-data-tip="lab.health.checkTip">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                            stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M20 6 9 17l-5-5"></path>
+                        </svg>
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.health.check">Check</span>
+                    </button>
+                    <button id="lab-health-fix"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 has-tooltip" disabled
+                        aria-label="Auto Fix Model Health" data-tip="Auto Fix Safe Issues" data-i18n-aria-label="lab.health.fixAria" data-i18n-data-tip="lab.health.fixTip">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                            stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.8 2.8-3-3 2.8-2.8Z"></path>
+                        </svg>
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.health.fix">Fix</span>
+                    </button>
+                </div>
+                <div class="panel-stat py-1">
+                    <span class="panel-stat-label" data-i18n="lab.health.report">REPORT</span>
+                    <span id="lab-health-summary" class="panel-stat-value font-mono tabular-nums text-[8px]" data-i18n="lab.health.notChecked">NOT CHECKED</span>
+                </div>
+                <div id="lab-health-report" class="lab-health-report" aria-live="polite">
+                    <div class="lab-health-empty" data-i18n="lab.health.notCheckedHint">Run check to keep the latest health report here.</div>
                 </div>
             </div>
         </section>
@@ -473,6 +503,28 @@
                             </svg>
                         </button>
                     </div>
+                </div>
+                <div class="grid grid-cols-2 gap-1">
+                    <button id="preview-preset-animation"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                        aria-label="Preview Preset Animation" data-tip="Preview Animation" data-i18n-aria-label="preset.previewAria" data-i18n-data-tip="preset.previewTip">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current" aria-hidden="true">
+                            <path d="M8 5v14l11-7z" />
+                        </svg>
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="preset.preview">Preview</span>
+                    </button>
+                    <button id="record-preset-video"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                        aria-label="Record Preset Video" data-tip="Record Video" data-i18n-aria-label="preset.recordVideoAria" data-i18n-data-tip="preset.recordVideoTip">
+                        <svg viewBox="0 0 24 24" class="w-3.5 h-3.5 fill-current" aria-hidden="true">
+                            <path d="M17 10.5V6c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-4.5l4 4v-11l-4 4z" />
+                        </svg>
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="preset.recordVideo">Record Video</span>
+                    </button>
+                </div>
+                <div class="panel-stat py-1">
+                    <span class="panel-stat-label" data-i18n="preset.video">VIDEO</span>
+                    <span id="preset-record-status" class="panel-stat-value font-mono tabular-nums text-[8px]" data-i18n="preset.videoReady">READY</span>
                 </div>
                 <div class="panel-note">
                     Quick camera bookmarks with reorder and notes.
