@@ -1,0 +1,5 @@
+interface:
+  display_name: "TrueSplats Formats"
+  short_description: "PLY4, SOG4, TrueSplats, loaders, exporters, and metadata."
+  default_prompt: "Use $truesplats-formats to modify asset loading, export, compression, metadata, or format compatibility."
+

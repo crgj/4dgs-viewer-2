@@ -1,0 +1,5 @@
+interface:
+  display_name: "TrueSplats Frontend"
+  short_description: "Existing UI polish, panel states, and interaction reliability."
+  default_prompt: "Use $truesplats-frontend to polish current UI behavior, panel states, responsive layout, or tooltip layering without changing the style."
+

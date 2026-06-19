@@ -1,0 +1,5 @@
+interface:
+  display_name: "TrueSplats Editing"
+  short_description: "Selection, delete, repair, Lab tools, and model health."
+  default_prompt: "Use $truesplats-editing to work on selection semantics, delete/repair behavior, Lab tools, or SAM-assisted editing."
+

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Aholo Examples"
-  short_description: "Create and maintain Aholo Viewer examples."
-  default_prompt: "Use $aholo-examples to create, modify, or validate Aholo Viewer website examples."

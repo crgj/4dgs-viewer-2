@@ -1,0 +1,5 @@
+interface:
+  display_name: "TrueSplats Rendering"
+  short_description: "4DGS rendering, shaders, sorting, and playback performance."
+  default_prompt: "Use $truesplats-rendering to optimize 4DGS rendering, playback, shaders, sorting, or runtime quality settings."
+

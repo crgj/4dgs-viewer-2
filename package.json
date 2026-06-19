@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test-glm": "tsx scripts/test_glm.ts"
+    "test-glm": "tsx scripts/test_glm.ts",
+    "test-performance-guards": "tsx scripts/verify_performance_guards.ts"
   },
   "dependencies": {
     "@jsquash/webp": "^1.5.0",

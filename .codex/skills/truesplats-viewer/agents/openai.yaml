@@ -1,0 +1,5 @@
+interface:
+  display_name: "TrueSplats Viewer"
+  short_description: "Route repo-level viewer work and validation."
+  default_prompt: "Use $truesplats-viewer to route cross-module TrueSplats.ai viewer tasks and choose validation steps."
+

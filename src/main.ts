@@ -127,10 +127,10 @@ export class Viewer {
     private isWaitingForSort = false;
     private sortingTaskID = 0;
     private lastCompletedSortTaskID = 0;
-    private sorterUpdateInterval = 1;
     private pendingSortedFrame: number | null = null;
-
-    private sorterUpdateFrame = 0;
+    private debugAllPointsLastRefreshMs = 0;
+    private timelinePlaybackLastSyncMs = 0;
+    private readonly playbackTimelineSyncIntervalMs = 80;
 
     // --- Sequence Playback (static-per-frame) ---
     private isSequenceMode = false;
@@ -935,10 +935,24 @@ export class Viewer {
         this.setSelectionToolbarForRenderAll(true);
     }
 
+    private refreshDebugAllPointsEntityThrottled(force = false) {
+        if (this.gaussianRenderMode !== 3) return;
+        if (!force) {
+            const now = performance.now();
+            const intervalMs = this.isPlaying ? 180 : 66;
+            if (now - this.debugAllPointsLastRefreshMs < intervalMs) return;
+            this.debugAllPointsLastRefreshMs = now;
+        } else {
+            this.debugAllPointsLastRefreshMs = performance.now();
+        }
+        // #WDD-gpt 2026-06-18 - Render ALL 是调试视图，播放时节流刷新，避免持续重建点云拖慢 4D 动态展示
+        this.refreshDebugAllPointsEntity();
+    }
+
     private applyGaussianRenderMode() {
         if (this.gaussianRenderMode === 3) {
             // #WDD-gpt 2026-06-13 - ALL 模式使用独立点云 entity，不再改主 GSplat shader，避免破坏 PLY4 normal
-            this.refreshDebugAllPointsEntity();
+            this.refreshDebugAllPointsEntityThrottled(true);
             return;
         }
 
@@ -2650,11 +2664,9 @@ export class Viewer {
                     if (this.playbackTime > loopEnd) {
                         this.playbackTime = loopStart;
                     }
-                    if (!this.isWaitingForSort) {
-                        const nextFrame = Math.floor(this.playbackTime);
-                        if (nextFrame !== Math.floor(this.currentTime)) {
-                            this.requestSortedFrame(nextFrame);
-                        }
+                    const nextFrame = Math.floor(this.playbackTime);
+                    if (nextFrame !== Math.floor(this.currentTime)) {
+                        this.requestSortedFrame(nextFrame);
                     }
                 } else {
                     if (!this.isWaitingForSort) {
@@ -2702,7 +2714,7 @@ export class Viewer {
                 if (timeSlider && !isScrubbing) {
                     timeSlider.value = displayFrame.toString();
                 }
-                this.syncTimelineUI(displayFrame, total);
+                this.syncTimelineUIForPlayback(displayFrame, total);
             } else {
                 
                 // Also update on scrub
@@ -2728,7 +2740,7 @@ export class Viewer {
             }
 
             // #WDD-gpt 2026-06-13 - ALL 点云模式按当前帧刷新位置，但不经过生命周期/透明度/删除过滤
-            this.refreshDebugAllPointsEntity();
+            this.refreshDebugAllPointsEntityThrottled();
         });
 
         // --- Samples Dropdown ---
@@ -4764,8 +4776,8 @@ export class Viewer {
             }
         }
         // #WDD-gpt 2026-06-13 - 4D 动态排序应用帧后同步 ALL 点云位置
-        this.refreshDebugAllPointsEntity();
-        this.syncTimelineUI(clamped, this.getTimelineMaxFrame());
+        this.refreshDebugAllPointsEntityThrottled(!this.isPlaying);
+        this.syncTimelineUIForPlayback(clamped, this.getTimelineMaxFrame());
     }
 
     private requestSortedFrame(frame: number) {
@@ -4777,13 +4789,22 @@ export class Viewer {
         }
 
         const targetFrame = Math.max(0, Math.floor(frame));
-        if (this.isWaitingForSort) {
-            return;
-        }
         if (targetFrame === Math.floor(this.currentTime)) {
             return;
         }
 
+        if (this.isPlaying) {
+            // #WDD-gpt 2026-06-18 - 播放保持最高质量排序：worker 空闲即提交排序，但画面时间先行避免排序阻塞 4D 动态展示
+            this.applyVisible4DFrame(targetFrame);
+            if (this.isWaitingForSort) return;
+            this.pendingSortedFrame = null;
+            this.updateDynamicPositions(targetFrame);
+            return;
+        }
+
+        if (this.isWaitingForSort) {
+            return;
+        }
         this.pendingSortedFrame = targetFrame;
         this.updateDynamicPositions(targetFrame);
     }
@@ -4794,7 +4815,7 @@ export class Viewer {
 
         const frameIdx = Math.floor(time);
         // #WDD 2026-03-31: If frame hasn't changed, skip CPU calculation to save performance.
-        if (frameIdx === this.lastUpdatedFrame && this.isPlaying) return;
+        if (frameIdx === this.lastUpdatedFrame) return;
         this.lastUpdatedFrame = frameIdx;
 
 
@@ -4859,15 +4880,12 @@ export class Viewer {
             // Important: varying checks to ensure stability
             // We MUST copy the buffer because sending it transfers ownership (detaches it),
             // which would crash the Main Thread on the next frame access.
-            const shouldUpdate = !this.isPlaying || (this.sorterUpdateFrame++ % this.sorterUpdateInterval === 0);
-            if (shouldUpdate) {
-                this.isWaitingForSort = true;
-                this.sortingTaskID++;
-                const centersCopy = new Float32Array(centers);
-                instance.sorter.worker.postMessage({
-                    centers: centersCopy.buffer
-                }, [centersCopy.buffer]);
-            }
+            this.isWaitingForSort = true;
+            this.sortingTaskID++;
+            const centersCopy = new Float32Array(centers);
+            instance.sorter.worker.postMessage({
+                centers: centersCopy.buffer
+            }, [centersCopy.buffer]);
         }
 
         // PlayCanvas's GSplat sorter reads these arrays (referenced by GSplatData) naturally 
@@ -5533,6 +5551,18 @@ export class Viewer {
     private renderTimelineDecorations() { return this.timelineManager.renderTimelineDecorations(); }
     private seekToFrame(frame: number, options?: { pause?: boolean }) { return this.timelineManager.seekToFrame(frame, options); }
     private stepFrame(delta: number) { return this.timelineManager.stepFrame(delta); }
+
+    private syncTimelineUIForPlayback(displayFrame: number, total: number, force = false) {
+        if (!this.isPlaying || force) {
+            this.timelinePlaybackLastSyncMs = performance.now();
+            this.syncTimelineUI(displayFrame, total);
+            return;
+        }
+        const now = performance.now();
+        if (now - this.timelinePlaybackLastSyncMs < this.playbackTimelineSyncIntervalMs) return;
+        this.timelinePlaybackLastSyncMs = now;
+        this.syncTimelineUI(displayFrame, total);
+    }
 
     private resetObjectTransformUI() {
         ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z'].forEach(id => {

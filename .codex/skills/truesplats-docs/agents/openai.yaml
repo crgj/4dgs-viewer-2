@@ -1,0 +1,4 @@
+interface:
+  display_name: "TrueSplats Docs"
+  short_description: "Docs, architecture notes, release notes, and UI copy."
+  default_prompt: "Use $truesplats-docs to update TrueSplats.ai documentation, architecture notes, release notes, or bilingual UI copy."
