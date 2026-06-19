@@ -19,6 +19,7 @@ type OutlineScaleProps = {
     opacity?: Float32Array | null;
     lifeTexData?: Float32Array | null;
     totalFrames?: number;
+    opacitySemantic?: string;
     rotationSemantic?: 'wxyz' | 'xyzw';
 };
 
@@ -61,6 +62,7 @@ const OUTLINE_MIN_RADIUS_PX = 2;
 const OUTLINE_MAX_RADIUS_PX = 1024;
 const OUTLINE_SAMPLE_STEPS = 48;
 const RINGS_CACHE_CELL_SIZE = 64;
+const SELECTION_VISIBLE_ALPHA_THRESHOLD = 0.01;
 
 // Export class
 export class SelectionTool {
@@ -296,13 +298,17 @@ export class SelectionTool {
             : [];
         if (Array.isArray(sequenceElements) && sequenceElements.length > 0) {
             const before = this.captureGlobalSelectionState();
-            const invertAllTime = this.isAllTimeTool() || this.selectionScope === 'alltime';
+            // #WDD-gpt 2026-06-18 - 反选模式以当前 UI 范围为准，避免切回 Current 后被历史 all-time selectionScope 继续带成全时段反选
+            const invertAllTime = this.isAllTimeTool() || this.isAllTimeMode;
             const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
                 ? this.viewer.splatSequence.activeElementIndex
                 : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
+            const currentTime = this.getCurrentTime();
             let changed = false;
-            // #WDD-kimi 2026-04-20 - 反选改为全序列：对每个段的所有非删除点执行反向
-            for (const element of sequenceElements) {
+            // #WDD-gpt 2026-06-18 - 当前模式只反选当前帧可见点；全时段模式才遍历所有序列段并写入黄色 all-time 通道
+            for (let elementIndex = 0; elementIndex < sequenceElements.length; elementIndex++) {
+                const element = sequenceElements[elementIndex];
+                if (!invertAllTime && elementIndex !== activeIndex) continue;
                 const rt = this.buildSelectionRuntimeFromElement(element);
                 const data = (rt?.selectionData as Uint8Array | null) || null;
                 let allTimeData = (rt?.allTimeSelectionData as Uint8Array | null) || null;
@@ -315,35 +321,41 @@ export class SelectionTool {
                     element.runtime.allTimeSelectionData = allTimeData;
                 }
                 const count = Math.floor(data.length / 4);
-                const elementIndex = Array.isArray(sequenceElements) ? sequenceElements.indexOf(element) : -1;
-                const currentTime = elementIndex === activeIndex ? this.getCurrentTime() : null;
                 for (let i = 0; i < count; i++) {
                     const idx = i * 4;
                     if (data[idx + 1] > 0) continue;
-                    changed = true;
                     if (invertAllTime && allTimeData) {
                         // #WDD-gpt 2026-05-16 - 圆柱 all-time 反选必须以 all-time 通道为基准，不能用当前帧高亮通道
-                        allTimeData[idx] = allTimeData[idx] > 0 ? 0 : 255;
-                        data[idx] = currentTime !== null && this.isVisibleAtTimeForRuntime(rt, i, currentTime) ? allTimeData[idx] : 0;
+                        const next = allTimeData[idx] > 0 ? 0 : 255;
+                        if (allTimeData[idx] !== next) changed = true;
+                        allTimeData[idx] = next;
+                        const shouldShowNow = elementIndex === activeIndex && this.isVisibleAtTimeForRuntime(rt, i, currentTime);
+                        if (data[idx] !== (shouldShowNow ? next : 0)) changed = true;
+                        data[idx] = shouldShowNow ? next : 0;
                     } else {
-                        data[idx] = data[idx] > 0 ? 0 : 255;
+                        if (!this.isVisibleAtTimeForRuntime(rt, i, currentTime)) continue;
+                        const next = data[idx] > 0 ? 0 : 255;
+                        if (data[idx] !== next) changed = true;
+                        data[idx] = next;
                         if (allTimeData && idx < allTimeData.length) allTimeData[idx] = data[idx];
                     }
                 }
                 this.updateTextureForRuntime(tex, data);
-                if (elementIndex >= 0) {
-                    const allTime = (allTimeData || data) as Uint8Array;
-                    this.commitSequenceEditState(elementIndex, data, allTime);
-                }
+                const allTime = (allTimeData || data) as Uint8Array;
+                this.commitSequenceEditState(elementIndex, data, allTime);
             }
-            if (changed) this.pushUndoSnapshot(before);
+            if (changed) {
+                this.selectionScope = invertAllTime ? 'alltime' : 'current';
+                this.pushUndoSnapshot(before);
+            }
             this.updateTexture();
             return;
         }
 
         const before = this.captureGlobalSelectionState();
-        const isAllTime = this.isAllTimeTool();
-        const shouldInvertAllTime = isAllTime || this.selectionScope === 'alltime';
+        const isAllTime = this.isAllTimeTool() || this.isAllTimeMode;
+        // #WDD-gpt 2026-06-18 - Current 范围下反选必须只处理当前生命周期可见点，不再继承历史 all-time selectionScope
+        const shouldInvertAllTime = isAllTime;
         let changed = false;
         if (shouldInvertAllTime && (!this.allTimeSelectionData || this.allTimeSelectionData.length !== this.selectionData.length)) {
             this.allTimeSelectionData = new Uint8Array(this.selectionData.length);
@@ -352,18 +364,25 @@ export class SelectionTool {
             const idx = i * 4;
             if (this.selectionData[idx + 1] > 0) continue;
             if (shouldInvertAllTime && this.allTimeSelectionData) {
-                changed = true;
-                this.allTimeSelectionData[idx] = this.allTimeSelectionData[idx] > 0 ? 0 : 255;
-                this.selectionData[idx] = this.isVisibleAtCurrentTime(i) ? this.allTimeSelectionData[idx] : 0;
+                const next = this.allTimeSelectionData[idx] > 0 ? 0 : 255;
+                if (this.allTimeSelectionData[idx] !== next) changed = true;
+                this.allTimeSelectionData[idx] = next;
+                const shouldShowNow = this.isVisibleAtCurrentTime(i);
+                if (this.selectionData[idx] !== (shouldShowNow ? next : 0)) changed = true;
+                this.selectionData[idx] = shouldShowNow ? next : 0;
             } else if (this.isVisibleAtCurrentTime(i)) {
-                changed = true;
-                this.selectionData[idx] = this.selectionData[idx] > 0 ? 0 : 255;
+                const next = this.selectionData[idx] > 0 ? 0 : 255;
+                if (this.selectionData[idx] !== next) changed = true;
+                this.selectionData[idx] = next;
                 if (this.allTimeSelectionData && idx < this.allTimeSelectionData.length) {
                     this.allTimeSelectionData[idx] = this.selectionData[idx];
                 }
             }
         }
-        if (changed) this.pushUndoSnapshot(before);
+        if (changed) {
+            this.selectionScope = shouldInvertAllTime ? 'alltime' : 'current';
+            this.pushUndoSnapshot(before);
+        }
         this.updateTexture();
     }
 
@@ -1092,7 +1111,17 @@ export class SelectionTool {
                  polyBtn?.classList.remove('text-amber-400', 'alltime-tool');
             }
         }
+        this.updateAllTimeActionTone();
         this.updateCursorState();
+    }
+
+    private updateAllTimeActionTone() {
+        const invertBtn = document.getElementById('tool-invert');
+        if (!invertBtn) return;
+        // #WDD-gpt 2026-06-18 - 全时段范围下反选也是 all-time 操作，按钮使用同一套主黄色反馈
+        invertBtn.classList.toggle('text-amber-400', this.isAllTimeMode);
+        invertBtn.classList.toggle('alltime-tool', this.isAllTimeMode);
+        invertBtn.classList.toggle('alltime-action', this.isAllTimeMode);
     }
 
     setTool(tool: 'brush' | 'rect' | 'brush-alltime' | 'rect-alltime' | 'poly' | 'poly-alltime' | 'none', force = false) {
@@ -1138,6 +1167,7 @@ export class SelectionTool {
             polyBtn.innerHTML = this.isAllTimeMode ? ICON_POLY_ALLTIME : ICON_POLY;
             this.isAllTimeMode ? polyBtn.classList.add('text-amber-400', 'alltime-tool') : polyBtn.classList.remove('text-amber-400', 'alltime-tool');
         }
+        this.updateAllTimeActionTone();
 
         if (this.currentTool !== 'none') {
             let activeId = '';
@@ -1465,6 +1495,20 @@ export class SelectionTool {
         return (hit?.storage as Float32Array | null) || null;
     }
 
+    private getOpacityAlphaFromValue(raw: number, semantic?: string): number {
+        if (!Number.isFinite(raw)) return 1.0;
+        const mode = String(semantic || '').toLowerCase();
+        if (mode === 'linear' || mode === 'probability' || mode === 'alpha') {
+            return Math.max(0, Math.min(1, raw));
+        }
+        if (mode === 'logit') {
+            return 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, raw))));
+        }
+        return raw >= 0 && raw <= 1
+            ? Math.max(0, Math.min(1, raw))
+            : 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, raw))));
+    }
+
     private getActiveOutlineScaleProps(): OutlineScaleProps {
         const parsed = this.viewer?.lastParsedData || {};
         const splatData = (this.viewer?.splatEntity?.gsplat as any)?.asset?.resource?.splatData
@@ -1485,6 +1529,7 @@ export class SelectionTool {
             opacity: this.readFloatProp(parsed, 'opacity') || readSplatProp('opacity'),
             lifeTexData: this.viewer?.lifeTexData || null,
             totalFrames: this.viewer?.duration ?? 1,
+            opacitySemantic: parsed?.opacitySemantic || undefined,
             rotationSemantic: parsed?.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz'
         };
     }
@@ -1540,7 +1585,7 @@ export class SelectionTool {
             ? scaleProps.opacity[splatIdx]
             : 20;
         let activeAlpha = Number.isFinite(opacityRaw)
-            ? 1.0 / (1.0 + Math.exp(-Math.max(-20, Math.min(20, opacityRaw))))
+            ? this.getOpacityAlphaFromValue(opacityRaw, scaleProps?.opacitySemantic)
             : 1.0;
 
         const lifeTexData = scaleProps?.lifeTexData;
@@ -1560,7 +1605,7 @@ export class SelectionTool {
             activeAlpha *= left * right;
         }
 
-        if (activeAlpha < 0.01) return 0;
+        if (activeAlpha < SELECTION_VISIBLE_ALPHA_THRESHOLD) return 0;
         return Math.min(1.0, Math.sqrt(Math.max(0, -Math.log(1.0 / 255.0 / activeAlpha))) / 2.0);
     }
 
@@ -1901,34 +1946,37 @@ export class SelectionTool {
     // #WDD 2026-04-18: Check if a point is visible at a specific time
     isVisibleAtTime(splatIdx: number, time: number): boolean {
         const lifeTexData = this.viewer.lifeTexData;
-        if (!lifeTexData) return true;
+        let lifetimeAlpha = 1.0;
 
-        const idx = splatIdx * 4;
-        if (idx >= lifeTexData.length) return true;
+        if (lifeTexData) {
+            const idx = splatIdx * 4;
+            if (idx + 2 >= lifeTexData.length) return false;
 
-        const mu = lifeTexData[idx + 0];
-        const w = lifeTexData[idx + 1];
-        const k = lifeTexData[idx + 2];
-        const duration = this.viewer.duration ?? 100;
-        const totalFrames = Math.ceil(duration);
-        const segmentMax = Math.max(0, totalFrames - 1);
+            const mu = lifeTexData[idx + 0];
+            const w = lifeTexData[idx + 1];
+            const k = lifeTexData[idx + 2];
+            const duration = this.viewer.duration ?? 100;
+            const totalFrames = Math.ceil(duration);
+            const segmentMax = Math.max(0, totalFrames - 1);
 
-        if (time < 0.0 || time > segmentMax) return false;
+            if (time < 0.0 || time > segmentMax) return false;
 
-        const lifeStart = mu - w;
-        const lifeEnd = mu + w;
+            const lifeStart = mu - w;
+            const lifeEnd = mu + w;
 
-        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
+            if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
 
-        const argLeft = k * (time - lifeStart);
-        const left = 1.0 / (1.0 + Math.exp(-argLeft));
+            const argLeft = k * (time - lifeStart);
+            const left = 1.0 / (1.0 + Math.exp(-argLeft));
 
-        const argRight = -k * (time - lifeEnd);
-        const right = 1.0 / (1.0 + Math.exp(-argRight));
+            const argRight = -k * (time - lifeEnd);
+            const right = 1.0 / (1.0 + Math.exp(-argRight));
 
-        const alpha = left * right;
+            lifetimeAlpha = left * right;
+        }
 
-        return alpha > 0.01;
+        // #WDD-gpt 2026-06-18 - Current 反选只按生命周期判断参与，避免 opacity 语义差异误伤可选点
+        return lifetimeAlpha > SELECTION_VISIBLE_ALPHA_THRESHOLD;
     }
 
     // #WDD 2026-04-10: Check if a point is visible at current time
@@ -1939,27 +1987,30 @@ export class SelectionTool {
     // #WDD-gpt 2026-04-20 - 序列元素可见性检查（使用元素自己的生命周期纹理数据）
     private isVisibleAtTimeForRuntime(runtime: any, splatIdx: number, time: number): boolean {
         const lifeTexData = runtime?.lifeTexData as Float32Array | null | undefined;
-        if (!lifeTexData) return true;
+        let lifetimeAlpha = 1.0;
 
-        const idx = splatIdx * 4;
-        if (idx >= lifeTexData.length) return true;
+        if (lifeTexData) {
+            const idx = splatIdx * 4;
+            if (idx + 2 >= lifeTexData.length) return false;
 
-        const mu = lifeTexData[idx + 0];
-        const w = lifeTexData[idx + 1];
-        const k = lifeTexData[idx + 2];
-        const duration = runtime?.totalFrames ?? 100;
-        const totalFrames = Math.ceil(duration);
-        const segmentMax = Math.max(0, totalFrames - 1);
+            const mu = lifeTexData[idx + 0];
+            const w = lifeTexData[idx + 1];
+            const k = lifeTexData[idx + 2];
+            const duration = runtime?.totalFrames ?? 100;
+            const totalFrames = Math.ceil(duration);
+            const segmentMax = Math.max(0, totalFrames - 1);
 
-        if (time < 0.0 || time > segmentMax) return false;
+            if (time < 0.0 || time > segmentMax) return false;
 
-        const lifeStart = mu - w;
-        const lifeEnd = mu + w;
-        if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
+            const lifeStart = mu - w;
+            const lifeEnd = mu + w;
+            if (lifeEnd <= 0.0 || lifeStart >= segmentMax || lifeEnd <= lifeStart) return false;
 
-        const left = 1.0 / (1.0 + Math.exp(-k * (time - lifeStart)));
-        const right = 1.0 / (1.0 + Math.exp(k * (time - lifeEnd)));
-        return (left * right) > 0.01;
+            const left = 1.0 / (1.0 + Math.exp(-k * (time - lifeStart)));
+            const right = 1.0 / (1.0 + Math.exp(k * (time - lifeEnd)));
+            lifetimeAlpha = left * right;
+        }
+        return lifetimeAlpha > SELECTION_VISIBLE_ALPHA_THRESHOLD;
     }
 
     // #WDD-gpt 2026-04-20 - 从序列元素 runtime 计算指定时刻位置
@@ -2100,6 +2151,7 @@ export class SelectionTool {
             rot2: runtime.rot2 || parsed?.rot_2 || readProp('rot_2'),
             rot3: runtime.rot3 || parsed?.rot_3 || readProp('rot_3'),
             opacity: runtime.opacity || parsed?.opacity || readProp('opacity'),
+            opacitySemantic: runtime.opacitySemantic || parsed?.opacitySemantic || undefined,
             rotationSemantic: runtime.rotationSemantic || (parsed?.rotationSemantic === 'xyzw' ? 'xyzw' : 'wxyz'),
             posArrays: runtime.posArrays || (cachedPositions && x && y && z ? {
                 x: x as Float32Array,

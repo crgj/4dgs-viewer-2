@@ -352,6 +352,20 @@ body.theme-light .fps-item:not(.active):hover {
     box-shadow: 0 0 15px rgba(251, 191, 36, 0.45) !important;
 }
 
+/* #WDD-gpt 2026-06-18 - 全时段反选是立即执行动作，不设置 active 也需要显示主黄色 */
+.ui-btn.alltime-tool.alltime-action {
+    background: #fbbf24 !important;
+    border-color: #fbbf24 !important;
+    color: #111827 !important;
+    box-shadow: 0 0 15px rgba(251, 191, 36, 0.42) !important;
+}
+
+.ui-btn.alltime-tool.alltime-action:hover {
+    background: #fde047 !important;
+    border-color: #fde047 !important;
+    color: #111827 !important;
+}
+
 .ui-playbar {
     background: var(--playbar-bg);
     backdrop-filter: blur(20px);
@@ -491,6 +505,52 @@ body.theme-light .fps-item:not(.active):hover {
     color: var(--text-highlight);
     line-height: 1.1;
     word-break: break-word;
+}
+
+/* #WDD-gpt 2026-06-18 - SAM3 真实模型加载错误可能较长，状态栏截断展示并通过 title 保留完整信息 */
+.lab-sam3-status {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: normal;
+}
+
+/* #WDD-gpt 2026-06-18 - 在线 SAM3 mask 调试预览层，覆盖主画布但不拦截交互 */
+.sam3-mask-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0.62;
+    image-rendering: pixelated;
+    z-index: 3;
+}
+
+#application-canvas {
+    position: relative;
+    z-index: 0;
+}
+
+/* #WDD-gpt 2026-06-18 - Lab 面板内显示原始 SAM3 mask 缩略图，避免只看主画布叠层时无法判断返回内容 */
+.lab-sam3-mask-thumb,
+.lab-sam3-debug-thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 6px;
+    border: 1px solid var(--glass-border);
+    background:
+        linear-gradient(45deg, rgba(255,255,255,0.06) 25%, transparent 25% 75%, rgba(255,255,255,0.06) 75%),
+        linear-gradient(45deg, rgba(255,255,255,0.06) 25%, transparent 25% 75%, rgba(255,255,255,0.06) 75%);
+    background-position: 0 0, 6px 6px;
+    background-size: 12px 12px;
+    image-rendering: pixelated;
+}
+
+.lab-sam3-debug-thumb {
+    background: #050608;
 }
 
 /* #WDD-gpt 2026-05-15 - 智能选择工具面板状态与紧凑统计样式 */

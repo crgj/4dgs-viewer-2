@@ -4,6 +4,7 @@ import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { sequenceSplatCoreVS, sequenceSplatMainVS, sequenceSplatMainPS } from './shaders/gsplat-sequence-shader';
 import { canCompressVertexElementSH, compressVertexElementSHToLevel1, type PlyVertexElement } from './algorithms/sh-compression';
 import { analyzeModelHealth, applyModelHealthAutoFix, type ModelHealthReport } from './algorithms/model-health';
+import { Sam3WebClient, captureCanvasImageData, selectGaussianIndicesFromMask, type Sam3MaskResult } from './algorithms/sam3-web';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
@@ -88,6 +89,12 @@ export class Viewer {
     private performancePanel: PerformancePanel;
     private simpleMemorySummaryTimer: number | null = null;
     private labHealthReport: ModelHealthReport | null = null;
+    private sam3WebClient: Sam3WebClient | null = null;
+    private sam3MaskResult: Sam3MaskResult | null = null;
+    private sam3ModelReady = false;
+    private sam3MaskPreviewVisible = false;
+    private sam3LastUploadImage: ImageData | null = null;
+    private readonly sam3ApiKeyStorageKey = '4dgs-viewer.sam3.roboflowApiKey';
 
     // Debugging #WDD 2026-01-15
     private swizzleMode = 1; // 0=yzwx, 1=xyzw, 2=wxyz
@@ -266,7 +273,8 @@ export class Viewer {
                 graphicsDeviceOptions: {
                     antialias: true,
                     alpha: false,
-                    preserveDrawingBuffer: false,
+                    // #WDD-gpt 2026-06-18 - 在线 SAM3 需要从 WebGL canvas 截图上传；关闭 preserveDrawingBuffer 会导致 drawImage 读到黑图
+                    preserveDrawingBuffer: true,
                     powerPreference: 'high-performance'
                 }
             });
@@ -1000,6 +1008,15 @@ export class Viewer {
         document.getElementById('lab-compress-sh')?.addEventListener('click', () => this.compressActiveSHToLevel1());
         document.getElementById('lab-health-check')?.addEventListener('click', () => this.checkActiveModelHealth());
         document.getElementById('lab-health-fix')?.addEventListener('click', () => this.fixActiveModelHealth());
+        this.bindSam3ApiKeyCache();
+        document.getElementById('lab-sam3-load')?.addEventListener('click', () => void this.loadSam3WebModel());
+        document.getElementById('lab-sam3-segment')?.addEventListener('click', () => void this.segmentCurrentViewWithSam3());
+        document.getElementById('lab-sam3-select')?.addEventListener('click', () => this.selectCurrentSam3Mask());
+        document.getElementById('lab-sam3-preview')?.addEventListener('click', () => this.toggleSam3MaskPreview());
+        for (const id of ['lab-sam3-align-x', 'lab-sam3-align-y', 'lab-sam3-align-scale', 'lab-sam3-align-flip-x', 'lab-sam3-align-flip-y']) {
+            document.getElementById(id)?.addEventListener('input', () => this.renderSam3MaskPreview());
+            document.getElementById(id)?.addEventListener('change', () => this.renderSam3MaskPreview());
+        }
         document.getElementById('lab-health-report')?.addEventListener('click', (event) => {
             const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-health-code]');
             if (row?.dataset.healthCode) this.selectLabHealthIssue(row.dataset.healthCode);
@@ -1021,8 +1038,15 @@ export class Viewer {
     public resetTransientStateForNewAsset(options: { preserveSelection?: boolean; segmentSwitch?: boolean } = {}) {
         this.labHealthReport = null;
         this.debugNeverVisibleCache = null;
+        this.sam3MaskResult = null;
+        this.sam3LastUploadImage = null;
+        this.sam3MaskPreviewVisible = false;
+        this.renderSam3MaskPreview();
+        this.renderSam3UploadPreview();
         document.getElementById('ply4-health-gate')?.remove();
         this.setLabSHStatus('lab.ready');
+        this.setSam3Status(this.sam3ModelReady ? 'lab.sam3.ready' : 'lab.sam3.idle');
+        this.updateSam3Buttons();
 
         const summary = document.getElementById('lab-health-summary');
         if (summary) {
@@ -1045,6 +1069,285 @@ export class Viewer {
 
         const allPointsStatus = document.getElementById('debug-all-points-status');
         if (allPointsStatus) allPointsStatus.textContent = '';
+    }
+
+    private bindSam3ApiKeyCache() {
+        const input = document.getElementById('lab-sam3-api-key') as HTMLInputElement | null;
+        if (!input) return;
+
+        // #WDD-gpt 2026-06-18 - 用户要求网页缓存在线 SAM3 key；仅保存到当前浏览器 localStorage，不写入源码或构建产物
+        const cached = this.readLocalSetting(this.sam3ApiKeyStorageKey);
+        if (cached && !input.value) input.value = cached;
+        input.addEventListener('input', () => {
+            const value = input.value.trim();
+            if (value) {
+                this.writeLocalSetting(this.sam3ApiKeyStorageKey, value);
+            } else {
+                this.removeLocalSetting(this.sam3ApiKeyStorageKey);
+                this.sam3ModelReady = false;
+                this.sam3MaskResult = null;
+                this.updateSam3Buttons();
+            }
+        });
+    }
+
+    private readLocalSetting(key: string) {
+        try {
+            return window.localStorage.getItem(key);
+        } catch {
+            return null;
+        }
+    }
+
+    private writeLocalSetting(key: string, value: string) {
+        try {
+            window.localStorage.setItem(key, value);
+        } catch {
+            // Ignore storage failures so SAM3 can still work for the current page session.
+        }
+    }
+
+    private removeLocalSetting(key: string) {
+        try {
+            window.localStorage.removeItem(key);
+        } catch {
+            // Ignore storage failures so clearing the visible input still works.
+        }
+    }
+
+    private setSam3Status(key: string, vars?: Record<string, string | number>) {
+        const status = document.getElementById('lab-sam3-status');
+        if (status) {
+            const text = t(key, vars);
+            status.textContent = text;
+            status.title = text;
+        }
+    }
+
+    private updateSam3Buttons() {
+        const segment = document.getElementById('lab-sam3-segment') as HTMLButtonElement | null;
+        const select = document.getElementById('lab-sam3-select') as HTMLButtonElement | null;
+        const preview = document.getElementById('lab-sam3-preview') as HTMLButtonElement | null;
+        if (segment) segment.disabled = !this.sam3ModelReady;
+        if (select) select.disabled = !this.sam3MaskResult;
+        if (preview) preview.disabled = !this.sam3MaskResult;
+    }
+
+    private async loadSam3WebModel() {
+        try {
+            this.setSam3Status('lab.sam3.loading');
+            this.sam3WebClient = this.sam3WebClient || new Sam3WebClient();
+            const apiKey = (document.getElementById('lab-sam3-api-key') as HTMLInputElement | null)?.value.trim() || '';
+            if (!apiKey) {
+                this.setSam3Status('lab.sam3.noKey');
+                this.sam3ModelReady = false;
+                this.sam3MaskPreviewVisible = false;
+                this.renderSam3MaskPreview();
+                return;
+            }
+            await this.sam3WebClient.init({ apiKey });
+            this.writeLocalSetting(this.sam3ApiKeyStorageKey, apiKey);
+            this.sam3ModelReady = true;
+            this.sam3MaskResult = null;
+            this.sam3MaskPreviewVisible = false;
+            this.renderSam3MaskPreview();
+            this.setSam3Status('lab.sam3.ready');
+        } catch (err) {
+            this.sam3ModelReady = false;
+            console.warn('[SAM3 Web] Load failed', err);
+            this.setSam3Status('lab.sam3.failed', { message: err instanceof Error ? err.message : String(err) });
+        } finally {
+            this.updateSam3Buttons();
+        }
+    }
+
+    private async segmentCurrentViewWithSam3() {
+        if (!this.sam3WebClient || !this.sam3ModelReady) {
+            this.setSam3Status('lab.sam3.notLoaded');
+            return;
+        }
+        const canvas = document.getElementById('application-canvas') as HTMLCanvasElement | null;
+        const prompt = (document.getElementById('lab-sam3-prompt') as HTMLInputElement | null)?.value.trim() || 'object';
+        if (!canvas) {
+            this.setSam3Status('lab.sam3.noCanvas');
+            return;
+        }
+        try {
+            this.setSam3Status('lab.sam3.segmenting');
+            await this.waitRafs(1);
+            const uploadMaxSize = Math.max(640, Math.min(1400, Math.round(Math.max(this.app.graphicsDevice.width, this.app.graphicsDevice.height) * 0.5)));
+            const image = captureCanvasImageData(canvas, uploadMaxSize);
+            this.sam3LastUploadImage = image;
+            this.renderSam3UploadPreview();
+            this.sam3MaskResult = await this.sam3WebClient.segment(image, prompt);
+            this.sam3MaskPreviewVisible = true;
+            this.renderSam3MaskPreview();
+            this.setSam3Status('lab.sam3.maskReady', { width: `${this.sam3MaskResult.width}x${this.sam3MaskResult.height}`, height: `${this.sam3MaskResult.maskPixels}px ${this.sam3MaskResult.debugSummary}` });
+        } catch (err) {
+            this.sam3MaskResult = null;
+            this.sam3MaskPreviewVisible = false;
+            this.renderSam3MaskPreview();
+            console.warn('[SAM3 Web] Segment failed', err);
+            this.setSam3Status('lab.sam3.failed', { message: err instanceof Error ? err.message : String(err) });
+        } finally {
+            this.updateSam3Buttons();
+        }
+    }
+
+    private selectCurrentSam3Mask() {
+        const mask = this.sam3MaskResult;
+        const positions = this.getCurrentPositions();
+        const camera = this.camera?.camera || null;
+        if (!mask || !positions || !this.splatEntity || !camera) {
+            this.setSam3Status('lab.sam3.noSelectionSource');
+            return;
+        }
+        const selection = selectGaussianIndicesFromMask({
+            positions,
+            entity: this.splatEntity,
+            camera,
+            mask: mask.mask,
+            maskWidth: mask.width,
+            maskHeight: mask.height,
+            screenWidth: mask.projectionWidth || this.app.graphicsDevice.clientRect?.width || mask.width,
+            screenHeight: mask.projectionHeight || this.app.graphicsDevice.clientRect?.height || mask.height,
+            ...this.getSam3MaskAlignment()
+        });
+        console.log('[SAM3 Online] selection projection', {
+            maskPixels: selection.maskPixels,
+            projectedPoints: selection.projectedPoints,
+            hitPoints: selection.indices.length,
+            maskSize: `${mask.width}x${mask.height}`,
+            sourceSize: `${mask.sourceWidth}x${mask.sourceHeight}`,
+            projectionSize: `${mask.projectionWidth}x${mask.projectionHeight}`,
+            screenSize: `${this.app.graphicsDevice.width}x${this.app.graphicsDevice.height}`,
+            align: this.getSam3MaskAlignment()
+        });
+        const count = this.selectionTool?.selectIndices(selection.indices, true, true) || 0;
+        this.setSam3Status('lab.sam3.selected', { count });
+    }
+
+    private toggleSam3MaskPreview() {
+        if (!this.sam3MaskResult) return;
+        this.sam3MaskPreviewVisible = !this.sam3MaskPreviewVisible;
+        this.renderSam3MaskPreview();
+    }
+
+    private renderSam3MaskPreview() {
+        const canvas = document.getElementById('sam3-mask-preview') as HTMLCanvasElement | null;
+        const thumb = document.getElementById('lab-sam3-mask-thumb') as HTMLCanvasElement | null;
+        const sourceCanvas = document.getElementById('application-canvas') as HTMLCanvasElement | null;
+        if (!canvas && !thumb) return;
+        if (!this.sam3MaskResult || !this.sam3MaskPreviewVisible) {
+            canvas?.classList.add('hidden');
+            thumb?.classList.add('hidden');
+            const ctx = canvas?.getContext('2d');
+            const thumbCtx = thumb?.getContext('2d');
+            if (canvas) ctx?.clearRect(0, 0, canvas.width, canvas.height);
+            if (thumb) thumbCtx?.clearRect(0, 0, thumb.width, thumb.height);
+            return;
+        }
+
+        const mask = this.sam3MaskResult;
+        if (canvas) {
+            // #WDD-gpt 2026-06-18 - 预览层使用 WebGL drawing buffer 尺寸，避免 CSS 尺寸和 worldToScreen 坐标系混用导致 mask 偏移/缩放错误
+            canvas.width = this.app.graphicsDevice.width || sourceCanvas?.width || mask.width;
+            canvas.height = this.app.graphicsDevice.height || sourceCanvas?.height || mask.height;
+        }
+        const scratch = document.createElement('canvas');
+        scratch.width = mask.width;
+        scratch.height = mask.height;
+        const scratchCtx = scratch.getContext('2d');
+        if (!scratchCtx) return;
+
+        const image = scratchCtx.createImageData(mask.width, mask.height);
+        // #WDD-gpt 2026-06-18 - 将 SAM3 二值 mask 画成绿色透明预览，用于定位在线返回 mask 与当前视图的偏移/翻转问题
+        for (let i = 0; i < mask.mask.length; i++) {
+            const offset = i * 4;
+            image.data[offset + 0] = 0;
+            image.data[offset + 1] = 255;
+            image.data[offset + 2] = 130;
+            image.data[offset + 3] = mask.mask[i] > 0 ? 190 : 0;
+        }
+        scratchCtx.putImageData(image, 0, 0);
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.imageSmoothingEnabled = false;
+                const align = this.getSam3MaskAlignment();
+                const drawW = canvas.width * align.maskScale;
+                const drawH = canvas.height * align.maskScale;
+                const drawX = (canvas.width - drawW) * 0.5 + align.maskOffsetX;
+                const drawY = (canvas.height - drawH) * 0.5 + align.maskOffsetY;
+                ctx.save();
+                ctx.translate(canvas.width * 0.5, canvas.height * 0.5);
+                ctx.scale(align.flipX ? -1 : 1, align.flipY ? -1 : 1);
+                ctx.translate(-canvas.width * 0.5, -canvas.height * 0.5);
+                ctx.drawImage(scratch, drawX, drawY, drawW, drawH);
+                ctx.restore();
+                canvas.classList.remove('hidden');
+                console.log('[SAM3 Online] preview mapping', {
+                    maskSize: `${mask.width}x${mask.height}`,
+                    overlayBuffer: `${canvas.width}x${canvas.height}`,
+                    sourceBuffer: `${sourceCanvas?.width || 0}x${sourceCanvas?.height || 0}`,
+                    sourceClient: `${sourceCanvas?.clientWidth || 0}x${sourceCanvas?.clientHeight || 0}`,
+                    graphicsDevice: `${this.app.graphicsDevice.width}x${this.app.graphicsDevice.height}`,
+                    align
+                });
+            }
+        }
+        if (thumb) {
+            const thumbCtx = thumb.getContext('2d');
+            thumb.width = 240;
+            thumb.height = Math.max(1, Math.round(240 * (mask.height / Math.max(1, mask.width))));
+            if (thumbCtx) {
+                thumbCtx.clearRect(0, 0, thumb.width, thumb.height);
+                thumbCtx.imageSmoothingEnabled = false;
+                thumbCtx.drawImage(scratch, 0, 0, thumb.width, thumb.height);
+                thumb.classList.remove('hidden');
+            }
+        }
+    }
+
+    private getSam3MaskAlignment() {
+        const readNumber = (id: string, fallback: number) => {
+            const value = Number((document.getElementById(id) as HTMLInputElement | null)?.value);
+            return Number.isFinite(value) ? value : fallback;
+        };
+        return {
+            maskOffsetX: readNumber('lab-sam3-align-x', 0),
+            maskOffsetY: readNumber('lab-sam3-align-y', 0),
+            maskScale: Math.max(0.05, readNumber('lab-sam3-align-scale', 1)),
+            flipX: !!(document.getElementById('lab-sam3-align-flip-x') as HTMLInputElement | null)?.checked,
+            flipY: !!(document.getElementById('lab-sam3-align-flip-y') as HTMLInputElement | null)?.checked
+        };
+    }
+
+    private renderSam3UploadPreview() {
+        const thumb = document.getElementById('lab-sam3-upload-thumb') as HTMLCanvasElement | null;
+        const image = this.sam3LastUploadImage;
+        if (!thumb) return;
+        if (!image) {
+            thumb.classList.add('hidden');
+            const ctx = thumb.getContext('2d');
+            ctx?.clearRect(0, 0, thumb.width, thumb.height);
+            return;
+        }
+        thumb.width = 240;
+        thumb.height = Math.max(1, Math.round(240 * (image.height / Math.max(1, image.width))));
+        const scratch = document.createElement('canvas');
+        scratch.width = image.width;
+        scratch.height = image.height;
+        const scratchCtx = scratch.getContext('2d');
+        const ctx = thumb.getContext('2d');
+        if (!scratchCtx || !ctx) return;
+        // #WDD-gpt 2026-06-18 - 显示实际上传到在线 SAM3 的截图，便于对比返回 mask 是否对应当前视图
+        scratchCtx.putImageData(image, 0, 0);
+        ctx.clearRect(0, 0, thumb.width, thumb.height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(scratch, 0, 0, thumb.width, thumb.height);
+        thumb.classList.remove('hidden');
     }
 
     private getActiveVertexElement(): PlyVertexElement | null {

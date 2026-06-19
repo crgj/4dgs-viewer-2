@@ -14,6 +14,7 @@
     <!-- Main Fullscreen Canvas (100% W/H) -->
     <div id="canvas-container" class="fixed inset-0 z-0 overflow-hidden">
         <canvas id="application-canvas" class="w-full h-full block touch-none"></canvas>
+        <canvas id="sam3-mask-preview" class="sam3-mask-preview hidden" aria-hidden="true"></canvas>
 
         <!-- Subtle Active Signal -->
         <div id="drop-zone"
@@ -35,7 +36,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.2</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.3</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -96,7 +97,7 @@
                 <div class="smart-panel-divider" aria-hidden="true"></div>
 
                 <div class="smart-panel-label" data-i18n="smart.stats">Stats</div>
-                <div class="grid grid-cols-3 gap-1">
+                <div class="grid grid-cols-4 gap-1">
                     <div class="panel-stat smart-align-stat">
                         <span class="panel-stat-label" data-i18n="smart.plane">PLANE</span>
                         <span id="smart-align-plane-stat" class="panel-stat-value font-mono tabular-nums">--</span>
@@ -209,6 +210,65 @@
                 <div id="lab-health-report" class="lab-health-report" aria-live="polite">
                     <div class="lab-health-empty" data-i18n="lab.health.notCheckedHint">Run check to keep the latest health report here.</div>
                 </div>
+            </div>
+            <div class="smart-panel-section">
+                <div class="smart-panel-label" data-i18n="lab.sam3.title">SAM3 Online</div>
+                <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                    <input id="lab-sam3-api-key" type="password"
+                        class="w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0"
+                        data-i18n-placeholder="lab.sam3.keyPlaceholder" placeholder="Roboflow API Key" autocomplete="off" />
+                </div>
+                <div class="flex items-center gap-1 ui-input px-1 py-0.5">
+                    <input id="lab-sam3-prompt" type="text" value="person"
+                        class="w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0"
+                        data-i18n-placeholder="lab.sam3.promptPlaceholder" placeholder="person" />
+                </div>
+                <div class="grid grid-cols-4 gap-1">
+                    <button id="lab-sam3-load"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                        aria-label="Connect SAM3 Online" data-tip="Connect SAM3" data-i18n-aria-label="lab.sam3.loadAria" data-i18n-data-tip="lab.sam3.loadTip">
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.sam3.load">Connect</span>
+                    </button>
+                    <button id="lab-sam3-segment"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 has-tooltip" disabled
+                        aria-label="Segment Current View" data-tip="Segment View" data-i18n-aria-label="lab.sam3.segmentAria" data-i18n-data-tip="lab.sam3.segmentTip">
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.sam3.segment">Segment</span>
+                    </button>
+                    <button id="lab-sam3-select"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 has-tooltip" disabled
+                        aria-label="Select SAM3 Mask" data-tip="Select Mask" data-i18n-aria-label="lab.sam3.selectAria" data-i18n-data-tip="lab.sam3.selectTip">
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.sam3.select">Select</span>
+                    </button>
+                    <button id="lab-sam3-preview"
+                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 has-tooltip" disabled
+                        aria-label="Toggle SAM3 Mask Preview" data-tip="Mask Preview" data-i18n-aria-label="lab.sam3.previewAria" data-i18n-data-tip="lab.sam3.previewTip">
+                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="lab.sam3.preview">Mask</span>
+                    </button>
+                </div>
+                <div class="panel-stat py-1">
+                    <span class="panel-stat-label" data-i18n="lab.status">STATUS</span>
+                    <span id="lab-sam3-status" class="panel-stat-value lab-sam3-status font-mono tabular-nums text-[8px]" data-i18n="lab.sam3.idle">IDLE</span>
+                </div>
+                <div class="grid grid-cols-3 gap-1">
+                    <input id="lab-sam3-align-x" type="number" value="0" step="10"
+                        class="ui-input px-1 py-1 text-[9px] font-mono" aria-label="SAM3 Mask X Offset" />
+                    <input id="lab-sam3-align-y" type="number" value="0" step="10"
+                        class="ui-input px-1 py-1 text-[9px] font-mono" aria-label="SAM3 Mask Y Offset" />
+                    <input id="lab-sam3-align-scale" type="number" value="1" step="0.02"
+                        class="ui-input px-1 py-1 text-[9px] font-mono" aria-label="SAM3 Mask Scale" />
+                </div>
+                <div class="grid grid-cols-2 gap-1">
+                    <label class="ui-btn h-6 rounded-md flex items-center justify-center gap-1 text-[8px] font-bold uppercase">
+                        <input id="lab-sam3-align-flip-x" type="checkbox" class="hidden" />
+                        Flip X
+                    </label>
+                    <label class="ui-btn h-6 rounded-md flex items-center justify-center gap-1 text-[8px] font-bold uppercase">
+                        <input id="lab-sam3-align-flip-y" type="checkbox" class="hidden" />
+                        Flip Y
+                    </label>
+                </div>
+                <canvas id="lab-sam3-upload-thumb" class="lab-sam3-debug-thumb hidden" aria-hidden="true"></canvas>
+                <canvas id="lab-sam3-mask-thumb" class="lab-sam3-mask-thumb hidden" aria-hidden="true"></canvas>
             </div>
         </section>
     </aside>
