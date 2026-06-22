@@ -4323,6 +4323,10 @@ export class Viewer {
     }
 
     private setSog4SequenceVisibleSegment(activeIndex: number | null) {
+        // #WDD-gpt 2026-06-22 - Render ALL 使用独立点云，暂停刷新段时间时不能重新打开主 GSplat，否则会和 ALL 点云交替显示造成闪烁
+        if (this.gaussianRenderMode === 3 && activeIndex !== null) {
+            activeIndex = null;
+        }
         for (let i = 0; i < this.sog4SequenceSegments.length; i++) {
             const entity = this.sog4SequenceSegments[i]?.entity;
             if (!entity) continue;
@@ -4700,7 +4704,10 @@ export class Viewer {
 
 
         this.setSog4SequenceVisibleSegment(index);
-        this.applySog4LocalTime(0);
+        const segmentStart = this.sog4SequenceOffsets[index] || 0;
+        const localTime = Math.max(0, Math.min(segment.duration - 1, Math.floor(this.currentTime - segmentStart)));
+        // #WDD-gpt 2026-06-22 - 切到第二段及以后暂停时应保持目标局部帧，避免先显示第 0 帧再被下一帧纠正造成闪烁
+        this.applySog4LocalTime(localTime);
         // #WDD-gpt 2026-06-13 - 多段 PLY4 激活段变化后，ALL 点云跟随当前段刷新
         this.refreshDebugAllPointsEntity();
         this.updateTimelineTicks(this.sog4SequenceTotalFrames || this.duration);
@@ -5701,7 +5708,8 @@ export class Viewer {
         this.faceTrackingManager.update();
 
         // Sequence playback is driven by the main update loop in the constructor; avoid double-advancing time here.
-        if (this.isSequenceMode) {
+        // #WDD-gpt 2026-06-22 - 多段 4D 序列必须用段内局部帧更新 sorter，避免暂停时这里再用全局帧覆盖中心导致第二段以后闪烁
+        if (this.isSequenceMode || this.isSog4SequenceMode) {
             return;
         }
 
