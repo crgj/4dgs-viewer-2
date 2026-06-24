@@ -4801,10 +4801,9 @@ export class Viewer {
         }
 
         if (this.isPlaying) {
-            // #WDD-gpt 2026-06-18 - 播放保持最高质量排序：worker 空闲即提交排序，但画面时间先行避免排序阻塞 4D 动态展示
-            this.applyVisible4DFrame(targetFrame);
             if (this.isWaitingForSort) return;
-            this.pendingSortedFrame = null;
+            // #WDD-gpt 2026-06-24 - 大点数 4DGS 播放时必须等待 sorter 完成后再推进 shader 时间，避免新帧位置与旧帧深度顺序混用造成严重闪烁
+            this.pendingSortedFrame = targetFrame;
             this.updateDynamicPositions(targetFrame);
             return;
         }
