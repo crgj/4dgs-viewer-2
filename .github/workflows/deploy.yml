@@ -18,7 +18,8 @@ jobs:
   deploy:
     environment:
       name: github-pages
-      url: ${{ steps:deployment.outputs.page_url }}
+      #WDD-gpt 2026-06-24 - 修复 GitHub Actions 表达式语法，冒号会导致 workflow 文件在解析阶段失败
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
