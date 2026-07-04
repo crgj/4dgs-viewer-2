@@ -1347,8 +1347,10 @@ body.theme-light .fps-item:not(.active):hover {
 }
 
 /* #WDD-gpt 2026-06-18 - Lab 面板按钮 tooltip 需要越过左侧面板裁剪并显示在 UI 最上层 */
+/* #WDD 2026-07-04 - Smart 面板同样需要 overflow:visible，否则纯图标按钮的 tooltip 被裁剪 */
 #left-tools-panel,
-#lab-panel {
+#lab-panel,
+#smart-selection-panel {
     overflow: visible !important;
 }
 

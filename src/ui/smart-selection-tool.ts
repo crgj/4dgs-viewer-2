@@ -64,7 +64,8 @@ export class SmartSelectionTool {
         });
         document.getElementById('smart-align-run')?.addEventListener('click', () => this.runAlignment());
         this.cylinderToggleEl?.addEventListener('click', () => this.setCylinderVisible(!this.cylinderVisible, true));
-        document.getElementById('smart-cylinder-select')?.addEventListener('click', () => void this.applyCylinderSelectionFromUI());
+        document.getElementById('smart-cylinder-keep-in')?.addEventListener('click', () => void this.applyCylinderKeepFromUI('inside'));
+        document.getElementById('smart-cylinder-keep-out')?.addEventListener('click', () => void this.applyCylinderKeepFromUI('outside'));
         for (const id of ['smart-cylinder-radius', 'smart-cylinder-height', 'smart-cylinder-x', 'smart-cylinder-z', 'smart-cylinder-ground']) {
             document.getElementById(id)?.addEventListener('input', () => this.updateCylinderFromInputs());
         }
@@ -287,11 +288,10 @@ export class SmartSelectionTool {
         if (visible) this.showLeftPanelTab('smart');
         this.cylinderControlsEl?.classList.toggle('hidden', !visible);
         this.cylinderToggleEl?.classList.toggle('active', visible);
-        const label = this.cylinderToggleEl?.querySelector('span');
-        if (label) {
-            label.dataset.i18n = visible ? 'smart.hideCylinder' : 'smart.showCylinder';
-            label.textContent = t(label.dataset.i18n);
-        }
+        // #WDD 2026-07-04: 纯图标按钮，通过 data-tip 切换「显示/隐藏」提示文案
+        const tipKey = visible ? 'smart.hideCylinder' : 'smart.showCylinder';
+        this.cylinderToggleEl?.setAttribute('data-i18n-data-tip', tipKey);
+        this.cylinderToggleEl?.setAttribute('data-tip', t(tipKey));
         if (!visible) {
             if (this.cylinderPreview) this.cylinderPreview.enabled = false;
             if (clearSelectionOnHide) this.viewer.selectionTool?.clearSelection();
@@ -300,6 +300,21 @@ export class SmartSelectionTool {
         }
         this.updateCylinderFromInputs();
         this.updateCylinderPreview();
+    }
+
+    // #WDD 2026-07-04: 加载新文件前重置智能选择状态——销毁旧圆柱预览实体、清空 region/visible/result
+    resetForNewAsset() {
+        if (this.cylinderPreview) {
+            try { this.cylinderPreview.destroy(); } catch (_) { /* noop */ }
+            this.cylinderPreview = null;
+        }
+        this.cylinderLineMaterial = null;
+        this.cylinderRegion = null;
+        this.cylinderVisible = false;
+        this.lastResult = null;
+        this.cylinderControlsEl?.classList.add('hidden');
+        this.cylinderToggleEl?.classList.remove('active');
+        this.hideProgress();
     }
 
     private syncCylinderInputs() {
@@ -456,6 +471,105 @@ export class SmartSelectionTool {
         console.log('[SmartSelectionTool] Cylinder selection', { total, segments, region: this.cylinderRegion });
     }
 
+    // #WDD 2026-07-04: 圆柱「保留」操作——一步删除（圆柱内/外）。遍历生命期内关键帧。
+    // mode='inside' 删除圆柱外的点；mode='outside' 删除圆柱内的点。
+    private async applyCylinderKeepFromUI(mode: 'inside' | 'outside') {
+        if (!this.cylinderRegion || !this.viewer.selectionTool) {
+            this.setStatus('NO CYL', 'warn');
+            return;
+        }
+        if (!this.cylinderVisible) {
+            this.setStatus('CYL OFF', 'warn');
+            return;
+        }
+        this.updateCylinderFromInputs();
+        const modeLabel = mode === 'inside' ? 'KEEP IN' : 'KEEP OUT';
+        // #WDD 2026-07-04: Lazy 模式下走「批量处理文件 + 保存到用户文件夹 + 自动重载」专用路径
+        const isLazy = typeof (this.viewer as any).isPly4LazySequenceMode === 'function'
+            && (this.viewer as any).isPly4LazySequenceMode();
+        const saveAndReload = (this.viewer as any).cylinderKeepPointsAndSaveReload;
+        if (isLazy && typeof saveAndReload === 'function') {
+            const segCount = (this.viewer as any).sog4SequenceSegments?.length || 0;
+            // #WDD 2026-07-04: 用自定义 UI 对话框（非系统 confirm）告知批量处理流程
+            const showConfirmDialog = (this.viewer as any).showConfirmDialog;
+            const ok = typeof showConfirmDialog === 'function'
+                ? await showConfirmDialog.call(this.viewer, {
+                    kicker: mode === 'inside' ? t('smart.keepInCylinder') : t('smart.keepOutCylinder'),
+                    title: t('smart.cylinderBatchTitle'),
+                    bodyHtml: `
+                        <div class="ply4-lazy-mode-row"><span>${t('smart.cylinderBatchSegments')}</span><strong>${segCount}</strong></div>
+                        <p>${t('smart.cylinderBatchConfirm', { count: segCount })}</p>
+                    `,
+                    okLabel: t('smart.cylinderBatchStart'),
+                    cancelLabel: t('smart.cylinderBatchCancel'),
+                    danger: true
+                })
+                : confirm(t('smart.cylinderBatchConfirm', { count: segCount }));
+            if (!ok) return;
+            this.showProgress(2, modeLabel, 'Batch-processing all segment files', 'Cylinder Keep');
+            const result = await saveAndReload.call(this.viewer, this.cylinderRegion, mode, (progress: any) => {
+                const percent = Number(progress?.percent);
+                if (Number.isFinite(percent)) {
+                    this.showProgress(Math.max(2, Math.min(99, percent)), progress.stage || modeLabel, progress.detail || '', 'Cylinder Keep');
+                }
+            });
+            if (result) {
+                this.viewer.selectionTool.markAllTimeSelectionScope?.();
+                this.showProgress(100, 'DONE', `Deleted ${result.deleted} • Saved ${result.saved} • Reloaded`, 'Cylinder Keep');
+                window.setTimeout(() => this.hideProgress(), 1000);
+                this.setStatus(result.saved > 0 ? 'SAVED' : 'DELETED', result.saved > 0 ? 'ok' : 'warn');
+                if (this.planeStatEl) this.planeStatEl.textContent = `${result.deleted}`;
+                if (this.staticStatEl) this.staticStatEl.textContent = `${result.saved} saved`;
+                console.log('[SmartSelectionTool] Cylinder keep (lazy save+reload)', { mode, ...result, region: this.cylinderRegion });
+                return;
+            }
+        }
+        const keepPoints = (this.viewer as any).cylinderKeepPoints;
+        if (typeof keepPoints === 'function') {
+            this.showProgress(5, modeLabel, 'Scanning PLY4 segments one by one', 'Cylinder Keep');
+            const batchResult = await keepPoints.call(this.viewer, this.cylinderRegion, mode, (progress: any) => {
+                const percent = Number(progress?.percent);
+                if (Number.isFinite(percent)) {
+                    this.showProgress(Math.max(5, Math.min(95, percent)), progress.stage || modeLabel, progress.detail || '', 'Cylinder Keep');
+                }
+            });
+            if (batchResult) {
+                this.viewer.selectionTool.markAllTimeSelectionScope?.();
+                this.showProgress(100, 'DONE', `Deleted ${batchResult.deleted} points across ${batchResult.segments} segments`, 'Cylinder Keep');
+                window.setTimeout(() => this.hideProgress(), 700);
+                this.setStatus(batchResult.deleted > 0 ? 'DELETED' : 'EMPTY', batchResult.deleted > 0 ? 'ok' : 'warn');
+                if (this.planeStatEl) this.planeStatEl.textContent = `${batchResult.deleted}`;
+                if (this.staticStatEl) this.staticStatEl.textContent = `${batchResult.segments} seg`;
+                console.log('[SmartSelectionTool] Cylinder keep', { mode, ...batchResult, region: this.cylinderRegion });
+                return;
+            }
+        }
+        // 单源回退：非多段序列模式（如单独加载的 .ply/.sog4）
+        const sources = this.getAnalysisSources();
+        const totalSources = Math.max(1, sources.length);
+        let totalDeleted = 0;
+        let segments = 0;
+        this.showProgress(5, modeLabel, `Scanning ${totalSources} source${totalSources > 1 ? 's' : ''}`, 'Cylinder Keep');
+        for (const source of sources) {
+            if (!source.positions) continue;
+            const indices = await this.computeCylinderKeepIndicesAsync(source, this.cylinderRegion, mode, segments, totalSources);
+            if (indices.length > 0 && source.selectionElement) {
+                const deleted = this.viewer.selectionTool.deleteIndicesForElement?.(source.selectionElement, indices) ?? 0;
+                totalDeleted += deleted;
+            } else if (indices.length > 0) {
+                this.viewer.selectionTool.deleteIndices(indices);
+                totalDeleted += indices.length;
+            }
+            segments++;
+        }
+        this.showProgress(100, 'DONE', `Deleted ${totalDeleted} points across ${segments} segments`, 'Cylinder Keep');
+        window.setTimeout(() => this.hideProgress(), 700);
+        this.setStatus(totalDeleted > 0 ? 'DELETED' : 'EMPTY', totalDeleted > 0 ? 'ok' : 'warn');
+        if (this.planeStatEl) this.planeStatEl.textContent = `${totalDeleted}`;
+        if (this.staticStatEl) this.staticStatEl.textContent = `${segments} seg`;
+        console.log('[SmartSelectionTool] Cylinder keep (single-source fallback)', { mode, totalDeleted, segments, region: this.cylinderRegion });
+    }
+
     // #WDD-gpt 2026-05-16 - 圆柱选择按时间片扫描，避免大 PLY4 全时段检测阻塞浏览器主线程
     private async computeCylinderSelectionIndicesAsync(
         source: ViewerAnalysisSource,
@@ -489,6 +603,40 @@ export class SmartSelectionTool {
             }
         }
         return { current, allTime };
+    }
+
+    // #WDD 2026-07-04: 圆柱「保留」操作的单源回退扫描——返回待删除（渲染顺序）索引
+    // mode='inside'（保留内→删外）：生命期内任一关键帧都不在圆柱内的点 → 删除
+    // mode='outside'（保留外→删内）：生命期内任一关键帧在圆柱内的点 → 删除
+    private async computeCylinderKeepIndicesAsync(
+        source: ViewerAnalysisSource,
+        region: CylinderSelectionRegion,
+        mode: 'inside' | 'outside',
+        sourceIndex: number,
+        sourceCount: number
+    ): Promise<number[]> {
+        const deleteIndices: number[] = [];
+        const count = Math.floor(source.positions!.length / 3);
+        const base = 5 + (sourceIndex / Math.max(1, sourceCount)) * 90;
+        const span = 90 / Math.max(1, sourceCount);
+        const modeLabel = mode === 'inside' ? 'KEEP IN' : 'KEEP OUT';
+        let lastYield = performance.now();
+        for (let i = 0; i < count; i++) {
+            const enters = this.pointEntersCylinderAnyKeyframe(source, i, region);
+            const shouldDelete = mode === 'inside' ? !enters : enters;
+            if (shouldDelete) deleteIndices.push(i);
+            if ((i & 511) === 0) {
+                const now = performance.now();
+                if (now - lastYield > 12) {
+                    const pct = base + span * (i / Math.max(1, count));
+                    const name = source.name ? `${source.name} • ` : '';
+                    this.showProgress(pct, modeLabel, `${name}${i.toLocaleString()}/${count.toLocaleString()} splats`, 'Cylinder Keep');
+                    await this.yieldToBrowser();
+                    lastYield = performance.now();
+                }
+            }
+        }
+        return deleteIndices;
     }
 
     private yieldToBrowser(): Promise<void> {
@@ -529,6 +677,30 @@ export class SmartSelectionTool {
         const localPoint = this.readTrajectoryPointAtFrame(source, originalIndex, frame);
         const worldPoint = localPoint && source.transformPoint ? source.transformPoint(localPoint) : localPoint;
         return !!worldPoint && this.isPointInsideCylinder(worldPoint, region);
+    }
+
+    // #WDD 2026-07-04: 圆柱「保留」操作只检测生命期内的关键帧本身（不测插值帧）
+    // 关键帧 k 对应 frame = k * xyzStride；落点 lifetime 窗口（mu±w）外的不参与检测
+    private pointEntersCylinderAnyKeyframe(source: ViewerAnalysisSource, renderIndex: number, region: CylinderSelectionRegion): boolean {
+        const frameRange = this.getLifetimeFrameRange(source, renderIndex);
+        if (!frameRange) return false;
+        const K = Math.max(0, Math.floor(source.keyframes || 0));
+        if (!source.trajectoryData || K <= 0) {
+            // 无轨迹：退化为当前世界位置测一次
+            return this.isPointInsideCylinder(this.getWorldPoint(source, renderIndex), region);
+        }
+        const stride = Math.max(1, Math.floor(source.xyzStride || 1));
+        const base = this.trajectoryBase(source, renderIndex); // originalIndex * K * 3
+        for (let k = 0; k < K; k++) {
+            const frame = k * stride;
+            if (frame < frameRange.start || frame > frameRange.end) continue; // 生命周期外跳过
+            const o = base + k * 3;
+            if (o + 2 >= source.trajectoryData.length) break;
+            const p: Vec3 = [source.trajectoryData[o], source.trajectoryData[o + 1], source.trajectoryData[o + 2]];
+            const wp = source.transformPoint ? source.transformPoint(p) : p;
+            if (this.isPointInsideCylinder(wp, region)) return true;
+        }
+        return false;
     }
 
     private getSourceCurrentFrame(source: ViewerAnalysisSource): number | null {

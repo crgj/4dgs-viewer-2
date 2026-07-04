@@ -1081,6 +1081,11 @@ export class Viewer {
             this.presetManager?.cancelPresetPathPlaybackForNewAsset?.();
         }
 
+        // #WDD 2026-07-04: 第二次加载文件时彻底重置选择/智能圆柱/分段编辑状态，避免残留
+        this.selectionTool?.resetForNewAsset?.();
+        this.smartSelectionTool?.resetForNewAsset?.();
+        this.sequenceEditStates.clear();
+
         const allPointsStatus = document.getElementById('debug-all-points-status');
         if (allPointsStatus) allPointsStatus.textContent = '';
     }
@@ -3833,6 +3838,44 @@ export class Viewer {
         });
     }
 
+    // #WDD 2026-07-04: 通用自定义确认对话框（替代浏览器 confirm），复用 ply4-lazy-mode 玻璃风格，返回 Promise<boolean>
+    public showConfirmDialog(opts: {
+        kicker?: string;
+        title: string;
+        bodyHtml?: string;
+        okLabel?: string;
+        cancelLabel?: string;
+        danger?: boolean;
+    }): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            document.getElementById('app-confirm-dialog')?.remove();
+            const overlay = document.createElement('div');
+            overlay.id = 'app-confirm-dialog';
+            overlay.className = 'ply4-lazy-mode-dialog';
+            const kicker = opts.kicker ? `<div class="ply4-lazy-mode-kicker">${opts.kicker}</div>` : '';
+            const body = opts.bodyHtml ? `<div class="ply4-lazy-mode-body">${opts.bodyHtml}</div>` : '';
+            overlay.innerHTML = `
+                <div class="ply4-lazy-mode-card">
+                    ${kicker}
+                    <div class="ply4-lazy-mode-title">${opts.title}</div>
+                    ${body}
+                    <div class="ply4-lazy-mode-actions" style="gap:8px;">
+                        <button id="app-confirm-cancel" class="ui-btn ply4-lazy-mode-button">${opts.cancelLabel ?? 'Cancel'}</button>
+                        <button id="app-confirm-ok" class="ui-btn ply4-lazy-mode-button">${opts.okLabel ?? 'OK'}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            if (opts.danger) {
+                overlay.querySelector('#app-confirm-ok')?.classList.add('active');
+            }
+            const finish = (result: boolean) => { overlay.remove(); resolve(result); };
+            overlay.querySelector('#app-confirm-ok')?.addEventListener('click', () => finish(true), { once: true });
+            overlay.querySelector('#app-confirm-cancel')?.addEventListener('click', () => finish(false), { once: true });
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); }, { once: true });
+        });
+    }
+
     // #WDD-gpt 2026-05-16 - Lazy 模式按段解码时在右下角显示读取进度
     private ensureLazySegmentProgressUI() {
         if (this.lazySegmentProgressEl) return;
@@ -4004,7 +4047,7 @@ export class Viewer {
     }
 
     // #WDD-gpt 2026-04-20 - 新增 PLY4 多段序列读取，和 SOG4 一样按段累计总帧
-    private async loadPly4Sequence(files: File[]): Promise<void> {
+    private async loadPly4Sequence(files: File[], skipLazyDialog = false): Promise<void> {
         let totalSize = 0;
         for (const f of files) totalSize += f.size;
         this.currentFileSize = totalSize;
@@ -4016,7 +4059,7 @@ export class Viewer {
            alert(`[Memory Preflight Blocked]\n\nLoading was aborted.\n\nThe selected PLY4 sequence totals ${this.formatImportBudget(totalSize)}, exceeding the current 10GB processing budget (${this.formatImportBudget(maxLimitBytes)}).\n\nEven after preflight, very large PLY4 files can still hit browser ArrayBuffer or GPU driver limits.\n\nRecommended action: select fewer sequence segments and process them in batches, or use a machine with more GPU/system memory and a 64-bit browser.`);
            return;
         }
-        if (useSegmentedMode) {
+        if (useSegmentedMode && !skipLazyDialog) {
             await this.showPly4LazyModeDialog(totalSize, files.length);
         }
 
@@ -6141,6 +6184,366 @@ export class Viewer {
         reportProgress(100, 'Cylinder Selection', `Selected ${totalSelected.toLocaleString()} splats across ${processedSegments} segments`);
         if (this.ply4SequenceLoadMode === 'segmented') this.hideLazySegmentProgress(900);
         return { total: totalSelected, segments: processedSegments };
+    }
+
+    // #WDD 2026-07-04: 圆柱「保留」操作——一步删除圆柱内/外的点。遍历生命期内关键帧本身。
+    // mode='inside'（保留圆柱内→删圆柱外的点）；mode='outside'（保留圆柱外→删圆柱内的点）。
+    // 仅测 K 个关键帧（不测插值帧），落点 lifetime 窗口外的关键帧不参与检测。
+    public async cylinderKeepPoints(
+        region: { centerX: number; centerZ: number; radius: number; height: number; groundPad: number },
+        mode: 'inside' | 'outside',
+        onProgress?: (progress: { percent: number; stage: string; detail: string; segmentIndex?: number; segmentCount?: number }) => void
+    ): Promise<{ deleted: number; segments: number } | null> {
+        const hasPly4Sequence = this.isSog4SequenceMode
+            && this.sog4SequenceSegments.length > 1
+            && this.sog4SequenceSegments.some((segment) => segment?.name?.toLowerCase().endsWith('.ply4'));
+        if (!hasPly4Sequence) {
+            return null;
+        }
+        const readProp = (parsed: any, name: string): Float32Array | null => {
+            if (parsed?.[name] instanceof Float32Array) return parsed[name] as Float32Array;
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+        const transformPoint = this.createSharedPly4SequenceTransformPoint();
+        const inside = (point: [number, number, number]) => {
+            const r = Math.hypot(point[0] - region.centerX, point[2] - region.centerZ);
+            return r <= region.radius && point[1] >= -region.groundPad && point[1] <= region.height;
+        };
+        const loader = new PLY4Loader();
+        const modeLabel = mode === 'inside' ? 'Keep Inside' : 'Keep Outside';
+        let totalDeleted = 0;
+        let processedSegments = 0;
+        const ply4Segments = this.sog4SequenceSegments
+            .map((segment, index) => ({ segment, index }))
+            .filter((entry) => entry.segment?.name?.toLowerCase().endsWith('.ply4'));
+        const segmentCount = Math.max(1, ply4Segments.length);
+        const reportProgress = (percent: number, stage: string, detail: string, segmentIndex?: number) => {
+            const p = Math.max(0, Math.min(100, percent));
+            onProgress?.({ percent: p, stage, detail, segmentIndex, segmentCount });
+            if (this.ply4SequenceLoadMode === 'segmented') {
+                this.showLazySegmentProgress(p, stage, detail);
+            }
+        };
+        const yieldToBrowser = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        // 删除前捕获全局选择状态以便撤销（与 deleteSelected 一致）
+        const before = this.selectionTool?.captureSelectionStateForExternalOp?.() ?? null;
+        reportProgress(1, modeLabel, `Preparing ${segmentCount} PLY4 segments`);
+        for (let segmentIndex = 0; segmentIndex < this.sog4SequenceSegments.length; segmentIndex++) {
+            const segment = this.sog4SequenceSegments[segmentIndex];
+            if (!segment) continue;
+            if (!segment.name.toLowerCase().endsWith('.ply4')) continue;
+            processedSegments++;
+            const wasLoaded = !!segment.parsed;
+            const segmentBase = ((processedSegments - 1) / segmentCount) * 100;
+            const segmentSpan = 100 / segmentCount;
+            reportProgress(segmentBase, `${modeLabel} ${processedSegments}/${segmentCount}`, `Opening ${segment.name}`, segmentIndex);
+            const parsed = segment.parsed || (segment.file ? await loader.load(segment.file, (progress, message, meta) => {
+                const local = Math.max(0, Math.min(65, progress * 0.65));
+                const chunk = meta?.chunkIndex && meta?.chunkCount ? ` • chunk ${meta.chunkIndex}/${meta.chunkCount}` : '';
+                const rows = meta?.rowsRead && meta?.rowCount ? ` • ${meta.rowsRead.toLocaleString()}/${meta.rowCount.toLocaleString()}` : '';
+                reportProgress(segmentBase + segmentSpan * (local / 100), `${modeLabel} ${processedSegments}/${segmentCount}`, `${segment.name} • ${message}${chunk}${rows}`, segmentIndex);
+            }) : null);
+            if (!parsed) continue;
+            const x = readProp(parsed, 'x');
+            const y = readProp(parsed, 'y');
+            const z = readProp(parsed, 'z');
+            if (!x || !y || !z) {
+                if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) segment.parsed = null;
+                continue;
+            }
+            const count = Math.min(parsed.count || x.length, x.length, y.length, z.length);
+            const trajectory = parsed.trajectory as Float32Array | null;
+            const keyframes = Math.max(0, Math.floor(parsed.keyframes || 0));
+            const xyzStride = Math.max(1, Math.floor(parsed.xyzStride || Math.max(1, Math.round(((parsed.frames || parsed.maxMu || segment.duration || keyframes || 1) - 1) / Math.max(1, keyframes - 1)))));
+            const originalIndices = readProp(parsed, 'original_index');
+            const lifetimeMu = readProp(parsed, 'lifetime_mu');
+            const lifetimeW = readProp(parsed, 'lifetime_w');
+            const totalFrames = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || segment.duration || 1));
+            const lifetimeFrameRange = (index: number): { start: number; end: number } | null => {
+                if (!lifetimeMu || !lifetimeW) return null;
+                const mu = lifetimeMu[index];
+                const w = lifetimeW[index];
+                if (!Number.isFinite(mu) || !Number.isFinite(w)) return null;
+                const start = Math.max(0, Math.ceil(mu - Math.max(0, w)));
+                const end = Math.min(totalFrames - 1, Math.floor(mu + Math.max(0, w)));
+                return end >= start ? { start, end } : null;
+            };
+            reportProgress(segmentBase + segmentSpan * 0.68, `${modeLabel} ${processedSegments}/${segmentCount}`, `Testing ${count.toLocaleString()} splats in ${segment.name}`, segmentIndex);
+            const existingSelection = this.getSequenceEditSelectionData(segmentIndex) as Uint8Array | null;
+            const existingAllTime = this.getSequenceEditAllTimeSelectionData(segmentIndex) as Uint8Array | null;
+            const selectionData = new Uint8Array(Math.max(count * 4, existingSelection?.length || 0));
+            const allTimeSelectionData = new Uint8Array(Math.max(count * 4, existingAllTime?.length || existingSelection?.length || 0));
+            if (existingSelection) selectionData.set(existingSelection.subarray(0, Math.min(existingSelection.length, selectionData.length)));
+            if (existingAllTime) allTimeSelectionData.set(existingAllTime.subarray(0, Math.min(existingAllTime.length, allTimeSelectionData.length)));
+            // 注意：删除场景不清 byte0，只追加 byte1（已删点保留），与 deleteSelected 一致
+
+            let deleted = 0;
+            let lastYield = performance.now();
+            for (let i = 0; i < count; i++) {
+                const off = i * 4;
+                if (off + 1 >= selectionData.length) break;
+                if (selectionData[off + 1] > 0) continue; // 已删除的点跳过，幂等
+                const validFrames = lifetimeFrameRange(i);
+                // 判定生命期内任一关键帧是否命中圆柱
+                let enters = false;
+                if (!validFrames) {
+                    enters = false; // 生命期外：按「不在圆柱内」处理
+                } else if (!trajectory || keyframes <= 0) {
+                    enters = inside(transformPoint([x[i], y[i], z[i]])); // 无轨迹：测当前位置
+                } else {
+                    const originalIndex = originalIndices ? Math.max(0, Math.round(originalIndices[i] || 0)) : i;
+                    const base = originalIndex * keyframes * 3;
+                    for (let k = 0; k < keyframes; k++) {
+                        const frame = k * xyzStride;
+                        if (frame < validFrames.start || frame > validFrames.end) continue; // 生命期外关键帧跳过
+                        const o = base + k * 3;
+                        if (o + 2 >= trajectory.length) break;
+                        if (inside(transformPoint([trajectory[o], trajectory[o + 1], trajectory[o + 2]]))) {
+                            enters = true;
+                            break;
+                        }
+                    }
+                }
+                // mode='inside' 保留内 → 删外（!enters）；mode='outside' 保留外 → 删内（enters）
+                const shouldDelete = mode === 'inside' ? !enters : enters;
+                if (shouldDelete) {
+                    selectionData[off] = 0;
+                    selectionData[off + 1] = 255;
+                    if (off + 1 < allTimeSelectionData.length) {
+                        allTimeSelectionData[off] = 0;
+                        allTimeSelectionData[off + 1] = 255;
+                    }
+                    deleted++;
+                }
+                if ((i & 511) === 0) {
+                    const now = performance.now();
+                    if (now - lastYield > 12) {
+                        const scanPct = 0.68 + 0.22 * (i / Math.max(1, count));
+                        reportProgress(
+                            segmentBase + segmentSpan * scanPct,
+                            `${modeLabel} ${processedSegments}/${segmentCount}`,
+                            `Testing ${i.toLocaleString()}/${count.toLocaleString()} splats in ${segment.name}`,
+                            segmentIndex
+                        );
+                        await yieldToBrowser();
+                        lastYield = performance.now();
+                    }
+                }
+            }
+            totalDeleted += deleted;
+            reportProgress(segmentBase + segmentSpan * 0.92, `${modeLabel} ${processedSegments}/${segmentCount}`, `Deleting ${deleted.toLocaleString()} splats for ${segment.name}`, segmentIndex);
+            this.setSequenceEditSelectionData(segmentIndex, selectionData, allTimeSelectionData);
+            if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) {
+                segment.parsed = null;
+                const element = this.splatSequence?.elements?.[segmentIndex] as any;
+                if (element) element.parsed = null;
+            }
+            reportProgress(segmentBase + segmentSpan, `${modeLabel} ${processedSegments}/${segmentCount}`, `Finished ${segment.name}`, segmentIndex);
+        }
+        // 撤销快照 + 纹理刷新
+        if (before) {
+            this.selectionTool?.pushSelectionUndo?.(before);
+        }
+        this.selectionTool?.updateTexture?.();
+        reportProgress(100, modeLabel, `Deleted ${totalDeleted.toLocaleString()} splats across ${processedSegments} segments`);
+        if (this.ply4SequenceLoadMode === 'segmented') this.hideLazySegmentProgress(900);
+        return { deleted: totalDeleted, segments: processedSegments };
+    }
+
+    // #WDD 2026-07-04: 重新加载 PLY4 序列（圆柱删除保存后自动重载用），跳过 lazy 模式确认对话框
+    public async reloadPly4Sequence(files: File[]): Promise<void> {
+        return this.loadPly4Sequence(files, true);
+    }
+
+    // #WDD 2026-07-04: 圆柱删除 Lazy 模式专用——批量处理所有段文件、写入用户选定文件夹、自动重载
+    // 流程：选目录 → 逐段读取+命中检测+写删除标记+编码保存 → 全部完成后统一重载
+    public async cylinderKeepPointsAndSaveReload(
+        region: { centerX: number; centerZ: number; radius: number; height: number; groundPad: number },
+        mode: 'inside' | 'outside',
+        onProgress?: (progress: { percent: number; stage: string; detail: string; segmentIndex?: number; segmentCount?: number }) => void
+    ): Promise<{ deleted: number; segments: number; saved: number } | null> {
+        const hasPly4Sequence = this.isSog4SequenceMode
+            && this.sog4SequenceSegments.length > 1
+            && this.sog4SequenceSegments.some((segment) => segment?.name?.toLowerCase().endsWith('.ply4'));
+        if (!hasPly4Sequence) return null;
+
+        // 1. 选目录（File System Access API）——先选目录，取消则不浪费处理
+        const showDirectoryPicker = (window as any).showDirectoryPicker;
+        if (typeof showDirectoryPicker !== 'function') {
+            alert(t('smart.cylinderNoFsApi'));
+            return null;
+        }
+        let dirHandle: any;
+        try {
+            dirHandle = await showDirectoryPicker({ mode: 'readwrite', id: 'ply4-cylinder-export' });
+        } catch (pickErr) {
+            // 用户取消选目录
+            return null;
+        }
+
+        // 2. 逐段：读取 + 命中检测 + 写删除标记 + 编码保存到所选目录 + 收集新 File
+        const readProp = (parsed: any, name: string): Float32Array | null => {
+            if (parsed?.[name] instanceof Float32Array) return parsed[name] as Float32Array;
+            const props = parsed?.plyData?.elements?.[0]?.properties || [];
+            const hit = props.find((p: any) => p?.name === name);
+            return (hit?.storage as Float32Array) || null;
+        };
+        const transformPoint = this.createSharedPly4SequenceTransformPoint();
+        const transform = this.sog4SequenceSharedTransform;
+        const inside = (point: [number, number, number]) => {
+            const r = Math.hypot(point[0] - region.centerX, point[2] - region.centerZ);
+            return r <= region.radius && point[1] >= -region.groundPad && point[1] <= region.height;
+        };
+        const modeLabel = mode === 'inside' ? 'Keep Inside' : 'Keep Outside';
+        const loader = new PLY4Loader();
+        const newFiles: File[] = [];
+        const segCount = Math.max(1, this.sog4SequenceSegments.length);
+        const yieldToBrowser = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        let totalDeleted = 0;
+        let processedSegments = 0;
+        let savedCount = 0;
+        // 删除前捕获全局选择状态以便撤销
+        const before = this.selectionTool?.captureSelectionStateForExternalOp?.() ?? null;
+        onProgress?.({ percent: 1, stage: modeLabel, detail: `Saving to ${dirHandle?.name || 'folder'}` });
+
+        for (let segmentIndex = 0; segmentIndex < this.sog4SequenceSegments.length; segmentIndex++) {
+            const segment = this.sog4SequenceSegments[segmentIndex];
+            if (!segment || !segment.name.toLowerCase().endsWith('.ply4')) continue;
+            processedSegments++;
+            const wasLoaded = !!segment.parsed;
+            const segmentBase = ((processedSegments - 1) / segCount) * 90; // 处理+保存占 0~90%
+            const segmentSpan = 90 / segCount;
+            onProgress?.({ percent: segmentBase, stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `Opening ${segment.name}`, segmentIndex, segmentCount: segCount });
+            // 读取段（已加载则复用，否则从 File 临时解码）
+            const parsed = segment.parsed || (segment.file ? await loader.load(segment.file, (progress, message, meta) => {
+                const local = Math.max(0, Math.min(65, progress * 0.65));
+                const rows = meta?.rowsRead && meta?.rowCount ? ` • ${meta.rowsRead.toLocaleString()}/${meta.rowCount.toLocaleString()}` : '';
+                onProgress?.({ percent: segmentBase + segmentSpan * (local / 100), stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `${segment.name} • ${message}${rows}`, segmentIndex, segmentCount: segCount });
+            }) : null);
+            if (!parsed) continue;
+            const x = readProp(parsed, 'x');
+            const y = readProp(parsed, 'y');
+            const z = readProp(parsed, 'z');
+            if (!x || !y || !z) {
+                if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) segment.parsed = null;
+                continue;
+            }
+            const count = Math.min(parsed.count || x.length, x.length, y.length, z.length);
+            const trajectory = parsed.trajectory as Float32Array | null;
+            const keyframes = Math.max(0, Math.floor(parsed.keyframes || 0));
+            const xyzStride = Math.max(1, Math.floor(parsed.xyzStride || Math.max(1, Math.round(((parsed.frames || parsed.maxMu || segment.duration || keyframes || 1) - 1) / Math.max(1, keyframes - 1)))));
+            const originalIndices = readProp(parsed, 'original_index');
+            const lifetimeMu = readProp(parsed, 'lifetime_mu');
+            const lifetimeW = readProp(parsed, 'lifetime_w');
+            const totalFrames = Math.max(1, Math.floor(parsed.frames || parsed.maxMu || segment.duration || 1));
+            const lifetimeFrameRange = (index: number): { start: number; end: number } | null => {
+                if (!lifetimeMu || !lifetimeW) return null;
+                const mu = lifetimeMu[index];
+                const w = lifetimeW[index];
+                if (!Number.isFinite(mu) || !Number.isFinite(w)) return null;
+                const start = Math.max(0, Math.ceil(mu - Math.max(0, w)));
+                const end = Math.min(totalFrames - 1, Math.floor(mu + Math.max(0, w)));
+                return end >= start ? { start, end } : null;
+            };
+            onProgress?.({ percent: segmentBase + segmentSpan * 0.5, stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `Testing ${count.toLocaleString()} splats in ${segment.name}`, segmentIndex, segmentCount: segCount });
+            // 读已有删除状态，构建缓冲（不清 byte0，只追加 byte1）
+            const existingSelection = this.getSequenceEditSelectionData(segmentIndex) as Uint8Array | null;
+            const existingAllTime = this.getSequenceEditAllTimeSelectionData(segmentIndex) as Uint8Array | null;
+            const selectionData = new Uint8Array(Math.max(count * 4, existingSelection?.length || 0));
+            const allTimeSelectionData = new Uint8Array(Math.max(count * 4, existingAllTime?.length || existingSelection?.length || 0));
+            if (existingSelection) selectionData.set(existingSelection.subarray(0, Math.min(existingSelection.length, selectionData.length)));
+            if (existingAllTime) allTimeSelectionData.set(existingAllTime.subarray(0, Math.min(existingAllTime.length, allTimeSelectionData.length)));
+
+            // 逐点命中检测（关键帧 + lifetime 窗口）→ 写删除标记
+            let deleted = 0;
+            let lastYield = performance.now();
+            for (let i = 0; i < count; i++) {
+                const off = i * 4;
+                if (off + 1 >= selectionData.length) break;
+                if (selectionData[off + 1] > 0) continue; // 已删除跳过，幂等
+                const validFrames = lifetimeFrameRange(i);
+                let enters = false;
+                if (!validFrames) {
+                    enters = false;
+                } else if (!trajectory || keyframes <= 0) {
+                    enters = inside(transformPoint([x[i], y[i], z[i]]));
+                } else {
+                    const originalIndex = originalIndices ? Math.max(0, Math.round(originalIndices[i] || 0)) : i;
+                    const base = originalIndex * keyframes * 3;
+                    for (let k = 0; k < keyframes; k++) {
+                        const frame = k * xyzStride;
+                        if (frame < validFrames.start || frame > validFrames.end) continue;
+                        const o = base + k * 3;
+                        if (o + 2 >= trajectory.length) break;
+                        if (inside(transformPoint([trajectory[o], trajectory[o + 1], trajectory[o + 2]]))) {
+                            enters = true;
+                            break;
+                        }
+                    }
+                }
+                const shouldDelete = mode === 'inside' ? !enters : enters;
+                if (shouldDelete) {
+                    selectionData[off] = 0;
+                    selectionData[off + 1] = 255;
+                    if (off + 1 < allTimeSelectionData.length) {
+                        allTimeSelectionData[off] = 0;
+                        allTimeSelectionData[off + 1] = 255;
+                    }
+                    deleted++;
+                }
+                if ((i & 511) === 0) {
+                    const now = performance.now();
+                    if (now - lastYield > 12) {
+                        onProgress?.({ percent: segmentBase + segmentSpan * (0.5 + 0.25 * (i / Math.max(1, count))), stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `Testing ${i.toLocaleString()}/${count.toLocaleString()} in ${segment.name}`, segmentIndex, segmentCount: segCount });
+                        await yieldToBrowser();
+                        lastYield = performance.now();
+                    }
+                }
+            }
+            totalDeleted += deleted;
+            // 提交删除状态（内存 + 持久化）
+            this.setSequenceEditSelectionData(segmentIndex, selectionData, allTimeSelectionData);
+            // 编码保存（encode 自动剔除 byte1>0 的点）
+            onProgress?.({ percent: segmentBase + segmentSpan * 0.85, stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `Saving ${segment.name} (deleted ${deleted.toLocaleString()})`, segmentIndex, segmentCount: segCount });
+            try {
+                const buffer = await PLY4Encoder.encode(parsed, {
+                    selectionData,
+                    model_transform: transform
+                }, (pct, msg) => {
+                    onProgress?.({ percent: segmentBase + segmentSpan * (0.85 + (pct / 100) * 0.13), stage: `${modeLabel} ${processedSegments}/${segCount}`, detail: `${segment.name} • ${msg}`, segmentIndex, segmentCount: segCount });
+                });
+                const fileHandle = await dirHandle.getFileHandle(segment.name, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(buffer);
+                await writable.close();
+                newFiles.push(new File([buffer], segment.name, { type: 'application/octet-stream' }));
+                savedCount++;
+            } catch (writeErr) {
+                console.error(`[Cylinder Save] Failed to write ${segment.name}`, writeErr);
+                alert(`Failed to write ${segment.name}: ` + (writeErr instanceof Error ? writeErr.message : String(writeErr)));
+            }
+            // 回收临时 parsed
+            if (!wasLoaded && segmentIndex !== this.sog4SequenceIndex) {
+                segment.parsed = null;
+                const element = this.splatSequence?.elements?.[segmentIndex] as any;
+                if (element) element.parsed = null;
+            }
+            await yieldToBrowser();
+        }
+
+        // 3. 全部段处理完后再统一重载
+        if (before) this.selectionTool?.pushSelectionUndo?.(before);
+        if (newFiles.length === 0) {
+            onProgress?.({ percent: 100, stage: 'DONE', detail: 'No files saved' });
+            return { deleted: totalDeleted, segments: processedSegments, saved: 0 };
+        }
+        onProgress?.({ percent: 92, stage: 'RELOADING', detail: `Reloading ${newFiles.length} processed files` });
+        await this.reloadPly4Sequence(newFiles);
+        onProgress?.({ percent: 100, stage: 'DONE', detail: `Deleted ${totalDeleted.toLocaleString()} • Saved ${savedCount} • Reloaded` });
+        if (this.ply4SequenceLoadMode === 'segmented') this.hideLazySegmentProgress(900);
+        return { deleted: totalDeleted, segments: processedSegments, saved: savedCount };
     }
 
     // #WDD-gpt 2026-05-15 - 智能选择工具应用地面对齐结果，并同步多段序列与导出状态

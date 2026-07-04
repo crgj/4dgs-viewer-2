@@ -1,4 +1,4 @@
-var ue=Object.defineProperty;var pe=(t,e,o)=>e in t?ue(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var B=(t,e,o)=>pe(t,typeof e!="symbol"?e+"":e,o);import{P as fe,S as ge,J as ye,a as ce}from"./sog4-loader-BZ0rWGTW.js";import{b as be,a as me,o as ve,t as c}from"./i18n-DEwRzusa.js";class H{static async encode(e,o){var y,f,b,l,z,T;const r=e.count||0;if(r===0)return new ArrayBuffer(0);const n=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let d=0;d<45;d++){const S=`f_rest_${d}`;e[S]&&i.push(S)}let s=`ply
+var ue=Object.defineProperty;var pe=(t,e,o)=>e in t?ue(t,e,{enumerable:!0,configurable:!0,writable:!0,value:o}):t[e]=o;var B=(t,e,o)=>pe(t,typeof e!="symbol"?e+"":e,o);import{P as fe,S as ge,J as ye,a as ce}from"./sog4-loader-BZ0rWGTW.js";import{b as be,a as me,o as ve,t as c}from"./i18n-BIzHrSIg.js";class H{static async encode(e,o){var y,f,b,l,z,T;const r=e.count||0;if(r===0)return new ArrayBuffer(0);const n=["f_dc_0","f_dc_1","f_dc_2"],i=[];for(let d=0;d<45;d++){const S=`f_rest_${d}`;e[S]&&i.push(S)}let s=`ply
 format binary_little_endian 1.0
 `;s+=`element vertex ${r}
 `,s+=`property float x

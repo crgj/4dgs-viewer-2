@@ -7,11 +7,11 @@
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-xPuxZotC.ico" />
 
-  <script type="module" crossorigin src="./assets/index-Cs-tqee9.js"></script>
+  <script type="module" crossorigin src="./assets/index-BOlrfQZA.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/sog4-loader-BZ0rWGTW.js">
-  <link rel="modulepreload" crossorigin href="./assets/i18n-DEwRzusa.js">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-BIzHrSIg.js">
   <link rel="modulepreload" crossorigin href="./assets/skybox-manager-CV0dg0A8.js">
-  <link rel="stylesheet" crossorigin href="./assets/i18n-B37E-GxK.css">
+  <link rel="stylesheet" crossorigin href="./assets/i18n-B9tbIS09.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -40,7 +40,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.20.6</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.21.0</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -86,7 +86,7 @@
             <div class="smart-panel-section">
                 <div class="smart-panel-label" data-i18n="smart.analyze">Analyze</div>
                 <button id="smart-align-run"
-                    class="ui-btn h-7 w-full rounded-md flex items-center justify-center gap-1 ui-text-highlight has-tooltip"
+                    class="ui-btn h-7 w-full rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 has-tooltip"
                     aria-label="Auto Analyze And Align" data-tip="Auto Align" data-i18n-aria-label="smart.autoAlignAria" data-i18n-data-tip="smart.autoAlign">
                     <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                         stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -95,7 +95,6 @@
                         <path d="M7 7l10 10"></path>
                         <path d="M17 7L7 17"></path>
                     </svg>
-                    <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.autoAlign">Auto Align</span>
                 </button>
 
                 <div class="smart-panel-divider" aria-hidden="true"></div>
@@ -121,9 +120,16 @@
                 <!-- #WDD-gpt 2026-05-16 - 智能选择改为可调圆柱选择区域，避免自动分类漏选身体点 -->
                 <div class="smart-panel-label" data-i18n="smart.cylinder">Cylinder</div>
                 <button id="smart-cylinder-toggle"
-                    class="ui-btn h-7 w-full rounded-md flex items-center justify-center gap-1 ui-text-secondary"
-                    aria-label="Toggle Cylinder Region" data-i18n-aria-label="smart.toggleCylinder">
-                    <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.showCylinder">Show Cylinder</span>
+                    class="ui-btn h-7 w-full rounded-md flex items-center justify-center bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 has-tooltip"
+                    aria-label="Toggle Cylinder Region" data-tip="Show Cylinder" data-i18n-aria-label="smart.toggleCylinder" data-i18n-data-tip="smart.showCylinder">
+                    <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <ellipse cx="12" cy="5.5" rx="7" ry="2.5"></ellipse>
+                        <path d="M5 5.5v13"></path>
+                        <path d="M19 5.5v13"></path>
+                        <path d="M5 18.5a7 2.5 0 0 0 14 0"></path>
+                        <ellipse cx="12" cy="18.5" rx="7" ry="2.5" stroke-dasharray="2 2" opacity="0.5"></ellipse>
+                    </svg>
                 </button>
 
                 <div id="smart-cylinder-controls" class="smart-cylinder-controls hidden">
@@ -154,11 +160,33 @@
                                 class="scrub-input w-0 flex-1 bg-transparent text-[10px] ui-text-primary outline-none p-0 cursor-ew-resize" />
                         </div>
                     </div>
-                    <button id="smart-cylinder-select"
-                        class="ui-btn h-7 rounded-md flex items-center justify-center gap-1 ui-text-highlight"
-                        aria-label="Select In Cylinder" data-i18n-aria-label="smart.selectInCylinder">
-                        <span class="text-[8px] font-bold tracking-tight uppercase" data-i18n="smart.selectInCylinder">Select In Cylinder</span>
-                    </button>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button id="smart-cylinder-keep-in"
+                            class="ui-btn h-7 w-full rounded-md flex items-center justify-center bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 has-tooltip"
+                            aria-label="Keep Inside Cylinder" data-tip="Keep Inside Cylinder" data-i18n-aria-label="smart.keepInCylinder" data-i18n-data-tip="smart.keepInCylinder">
+                            <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M5 6.5a7 2.5 0 0 1 14 0v11a7 2.5 0 0 1-14 0Z" fill="currentColor" stroke="none" opacity="0.85"></path>
+                                <ellipse cx="12" cy="6.5" rx="7" ry="2.5"></ellipse>
+                                <path d="M5 6.5v11"></path>
+                                <path d="M19 6.5v11"></path>
+                                <path d="M5 17.5a7 2.5 0 0 0 14 0"></path>
+                            </svg>
+                        </button>
+                        <button id="smart-cylinder-keep-out"
+                            class="ui-btn h-7 w-full rounded-md flex items-center justify-center bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 has-tooltip"
+                            aria-label="Keep Outside Cylinder" data-tip="Keep Outside Cylinder" data-i18n-aria-label="smart.keepOutCylinder" data-i18n-data-tip="smart.keepOutCylinder">
+                            <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M5 6.5a7 2.5 0 0 1 14 0v11a7 2.5 0 0 1-14 0Z" fill="currentColor" stroke="none" opacity="0.14"></path>
+                                <ellipse cx="12" cy="6.5" rx="7" ry="2.5" stroke-width="2.2"></ellipse>
+                                <path d="M5 6.5v11" stroke-width="2.2"></path>
+                                <path d="M19 6.5v11" stroke-width="2.2"></path>
+                                <path d="M5 17.5a7 2.5 0 0 0 14 0" stroke-width="2.2"></path>
+                                <line x1="3" y1="21" x2="21" y2="3" stroke-width="3.2"></line>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
 

@@ -435,6 +435,61 @@ export class SelectionTool {
         return deleted;
     }
 
+    // #WDD 2026-07-04: 跨段删除——供圆柱「保留」单源回退路径按段删除索引
+    deleteIndicesForElement(element: any, indices: number[]): number {
+        if (!Array.isArray(indices) || indices.length === 0) return 0;
+        const rt = this.buildSelectionRuntimeFromElement(element);
+        const positions = rt?.cachedPositions as Float32Array | null | undefined;
+        if (!rt || !positions) return 0;
+        const count = Math.floor(positions.length / 3);
+        const bytes = Math.max(count * 4, rt.selectionData?.length || 0);
+        if (!rt.selectionData || rt.selectionData.length < count * 4) rt.selectionData = new Uint8Array(bytes);
+        if (!rt.allTimeSelectionData || rt.allTimeSelectionData.length < count * 4) rt.allTimeSelectionData = new Uint8Array(bytes);
+
+        const selectionData = rt.selectionData as Uint8Array;
+        const allTimeSelectionData = rt.allTimeSelectionData as Uint8Array;
+        const sequenceElements = typeof this.viewer.getSplatSequenceSelectionElements === 'function'
+            ? this.viewer.getSplatSequenceSelectionElements()
+            : [];
+        const activeIndex = Number.isInteger(this.viewer?.splatSequence?.activeElementIndex)
+            ? this.viewer.splatSequence.activeElementIndex
+            : (Number.isInteger(this.viewer?.sog4SequenceIndex) ? this.viewer.sog4SequenceIndex : -1);
+        const isActiveElement = Array.isArray(sequenceElements) && sequenceElements[activeIndex] === element;
+        if (!rt.selectionTexture && isActiveElement && this.selectionTexture && selectionData.length === this.selectionData?.length) {
+            rt.selectionTexture = this.selectionTexture;
+        }
+
+        let deleted = 0;
+        for (const splatIdx of indices) {
+            if (!Number.isFinite(splatIdx)) continue;
+            const i = Math.floor(splatIdx);
+            if (i < 0 || i >= count) continue;
+            const offset = i * 4;
+            if (selectionData[offset + 1] > 0) continue; // 已删除跳过，幂等
+            selectionData[offset] = 0;
+            selectionData[offset + 1] = 255;
+            if (offset + 1 < allTimeSelectionData.length) {
+                allTimeSelectionData[offset] = 0;
+                allTimeSelectionData[offset + 1] = 255;
+            }
+            deleted++;
+        }
+
+        element.runtime = element.runtime || {};
+        element.runtime.selectionData = selectionData;
+        element.runtime.allTimeSelectionData = allTimeSelectionData;
+        element.runtime.selectionTexture = rt.selectionTexture || element.runtime.selectionTexture || null;
+        if (rt.selectionTexture) this.updateTextureForRuntime(rt.selectionTexture, selectionData);
+        const elementIndex = Array.isArray(sequenceElements) ? sequenceElements.indexOf(element) : -1;
+        if (elementIndex >= 0) this.commitSequenceEditState(elementIndex, selectionData, allTimeSelectionData);
+        if (isActiveElement) {
+            this.selectionData = selectionData;
+            this.allTimeSelectionData = allTimeSelectionData;
+            this.updateTexture();
+        }
+        return deleted;
+    }
+
     markAllTimeSelectionScope() {
         this.selectionScope = 'alltime';
     }
@@ -645,6 +700,19 @@ export class SelectionTool {
         console.log('[Selection] History cleared');
     }
 
+    // #WDD 2026-07-04: 加载新文件前重置选择状态——清空 rings 缓存、复位工具、释放旧 GPU 选择纹理
+    resetForNewAsset() {
+        this.clearRingsOutlineCache();
+        if (this.currentTool !== 'none') this.setTool('none');
+        this.selectionScope = 'current';
+        // 释放上一份 selectionTexture，避免 initWithSize 直接覆盖造成的 GPU 显存泄漏
+        if (this.selectionTexture) {
+            try { this.selectionTexture.destroy(); } catch (_) { /* noop */ }
+            this.selectionTexture = null;
+        }
+        this.clearHistory();
+    }
+
     // #WDD-kimi 2026-04-20 - 捕获当前所有段落的选择状态快照（用于 undo/redo）
     private captureGlobalSelectionState(): {
         segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
@@ -672,6 +740,18 @@ export class SelectionTool {
         this.undoStack.push(snapshot);
         if (this.undoStack.length > this.MAX_HISTORY) this.undoStack.shift();
         this.redoStack = [];
+    }
+
+    // #WDD 2026-07-04: 供外部操作（如圆柱「保留」批量删除）复用全局选择状态的捕获/撤销
+    captureSelectionStateForExternalOp() {
+        return this.captureGlobalSelectionState();
+    }
+
+    pushSelectionUndo(snapshot: {
+        segments: Array<{ elementIndex: number; selectionData: Uint8Array; allTimeSelectionData: Uint8Array }>;
+        viewContext: any;
+    }) {
+        if (snapshot) this.pushUndoSnapshot(snapshot);
     }
 
     private restoreGlobalSelectionState(snapshot: {
@@ -1051,6 +1131,33 @@ export class SelectionTool {
             settings?.classList.remove('flex');
             document.getElementById('brush-cursor-overlay')?.classList.add('hidden');
             if (this.polyOverlay) this.polyOverlay.style.display = 'none';
+        }
+        // #WDD 2026-07-04: Lazy 模式下隐藏「编辑」面板和「实验」面板及其 tab 按钮
+        const panelSelectors = ['[data-left-panel-tab="edit"]', '[data-left-panel-tab="lab"]', '#selection-toolbar', '#lab-panel'];
+        for (const sel of panelSelectors) {
+            const el = document.querySelector<HTMLElement>(sel);
+            if (!el) continue;
+            if (lazy) {
+                el.classList.add('hidden');
+                el.style.display = 'none';
+                el.setAttribute('aria-hidden', 'true');
+            } else {
+                // 恢复：tab 按钮直接显示；面板的 display 由 showLeftPanelTab 的 active 规则决定，
+                // 这里只清除 lazy 强加的 display:none，不越权覆盖（避免破坏 flex 布局）。
+                el.classList.remove('hidden');
+                el.removeAttribute('style');
+                el.setAttribute('aria-hidden', 'false');
+            }
+        }
+        if (!lazy) {
+            // 恢复非 lazy 时，按当前 active tab 重建面板显示状态（复刻 showLeftPanelTab 的 display 规则）
+            const activeTab = document.querySelector<HTMLElement>('[data-left-panel-tab].active')?.dataset.leftPanelTab || 'smart';
+            document.querySelectorAll<HTMLElement>('[data-left-panel]').forEach((panel) => {
+                const active = panel.dataset.leftPanel === activeTab;
+                panel.classList.toggle('hidden', !active);
+                panel.style.display = active ? ((activeTab === 'edit' || activeTab === 'lab') ? 'flex' : '') : 'none';
+                panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+            });
         }
         document.getElementById('selection-toolbar')?.classList.toggle('selection-lazy-mode', lazy);
     }
