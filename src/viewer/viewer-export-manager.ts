@@ -187,6 +187,10 @@ export class ViewerExportManager {
             return;
         }
 
+        const preflightAction = await this.confirmExportHealthGate('TrueSplats');
+        if (preflightAction === 'cancel') return;
+        if (preflightAction === 'fix') this.applyExportHealthAutoFix('TrueSplats');
+
         console.log(`[Export] Saving .truesplats...`);
         try {
             const transform = this.resolveExportModelTransform();
@@ -245,13 +249,10 @@ export class ViewerExportManager {
             return;
         }
 
-        const preflightAction = await this.confirmPLY4ExportHealthGate();
+        const preflightAction = await this.confirmExportHealthGate('PLY4');
         if (preflightAction === 'cancel') return;
         if (preflightAction === 'fix') {
-            const result = typeof v.applyPLY4ExportHealthAutoFix === 'function'
-                ? v.applyPLY4ExportHealthAutoFix()
-                : null;
-            console.log('[Export] PLY4 health preflight auto fix', result);
+            this.applyExportHealthAutoFix('PLY4');
         }
 
         try {
@@ -320,11 +321,24 @@ export class ViewerExportManager {
         }
     }
 
-    private async confirmPLY4ExportHealthGate(): Promise<'fix' | 'continue' | 'cancel'> {
+    private applyExportHealthAutoFix(format: string) {
         const v = this.viewer as any;
-        const report = typeof v.getPLY4ExportHealthReport === 'function'
-            ? v.getPLY4ExportHealthReport()
-            : null;
+        const result = typeof v.applyExportHealthAutoFix === 'function'
+            ? v.applyExportHealthAutoFix()
+            : typeof v.applyPLY4ExportHealthAutoFix === 'function'
+                ? v.applyPLY4ExportHealthAutoFix()
+                : null;
+        console.log(`[Export] ${format} health preflight auto fix`, result);
+        return result;
+    }
+
+    private async confirmExportHealthGate(format: string): Promise<'fix' | 'continue' | 'cancel'> {
+        const v = this.viewer as any;
+        const report = typeof v.getExportHealthReport === 'function'
+            ? v.getExportHealthReport()
+            : typeof v.getPLY4ExportHealthReport === 'function'
+                ? v.getPLY4ExportHealthReport()
+                : null;
         if (!report || !Array.isArray(report.issues) || report.issues.length === 0) return 'continue';
 
         return new Promise((resolve) => {
@@ -349,7 +363,7 @@ export class ViewerExportManager {
 
             modal.innerHTML = `
                 <div class="ply4-health-gate-card" role="dialog" aria-modal="true" aria-labelledby="ply4-health-gate-title">
-                    <div class="ply4-health-gate-kicker">${this.escapeHTML(t('export.health.kicker'))}</div>
+                    <div class="ply4-health-gate-kicker">${this.escapeHTML(t('export.health.kicker', { format }))}</div>
                     <div id="ply4-health-gate-title" class="ply4-health-gate-title">${this.escapeHTML(t('export.health.title'))}</div>
                     <div class="ply4-health-gate-summary">${this.escapeHTML(t('export.health.summary', {
                         count: report.gaussianCount,
@@ -404,6 +418,10 @@ export class ViewerExportManager {
             alert("No data loaded.");
             return;
         }
+
+        const preflightAction = await this.confirmExportHealthGate('SOG4');
+        if (preflightAction === 'cancel') return;
+        if (preflightAction === 'fix') this.applyExportHealthAutoFix('SOG4');
 
         console.log(`[Export] Saving .sog4...`);
         const abortController = new AbortController();

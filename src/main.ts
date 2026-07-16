@@ -4,6 +4,11 @@ import { splatCoreVS, splatMainVS, splatMainPS } from './shaders/gsplat-shader';
 import { sequenceSplatCoreVS, sequenceSplatMainVS, sequenceSplatMainPS } from './shaders/gsplat-sequence-shader';
 import { canCompressVertexElementSH, compressVertexElementSHToLevel1, type PlyVertexElement } from './algorithms/sh-compression';
 import { analyzeModelHealth, applyModelHealthAutoFix, type ModelHealthReport } from './algorithms/model-health';
+import {
+    buildNeverVisibleFlags,
+    getPointEffectiveAlphaAtFrame,
+    NORMAL_RENDER_ALPHA_DISCARD
+} from './algorithms/hidden-point-visibility';
 import { Sam3WebClient, captureCanvasImageData, selectGaussianIndicesFromMask, type Sam3MaskResult } from './algorithms/sam3-web';
 
 import { TrueSplatsLoader } from './utils/truesplats-loader';
@@ -43,6 +48,7 @@ type DebugNeverVisibleCache = {
     durationFrames: number;
     lifeTexData: Float32Array | null;
     opacity: Float32Array | null;
+    opacitySemantic: string;
     flags: Uint8Array;
 };
 
@@ -607,25 +613,27 @@ export class Viewer {
     private getDebugNeverVisibleFlags(count: number): Uint8Array {
         const opacity = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null;
         const durationFrames = Math.max(1, Math.ceil(this.duration ?? this.totalFrames ?? 1));
+        const opacitySemantic = String(this.lastParsedData?.opacitySemantic || '');
         const cached = this.debugNeverVisibleCache;
         if (
             cached &&
             cached.count === count &&
             cached.durationFrames === durationFrames &&
             cached.lifeTexData === this.lifeTexData &&
-            cached.opacity === opacity
+            cached.opacity === opacity &&
+            cached.opacitySemantic === opacitySemantic
         ) {
             return cached.flags;
         }
 
-        const flags = new Uint8Array(count);
-        // #WDD-gpt 2026-06-14 - Render ALL 红色/删除隐藏点必须表示全时段 normal 都不可见，而不是当前帧不可见
-        for (let i = 0; i < count; i++) {
-            if (!this.isDebugPointOpacityVisible(i, opacity) || !this.isDebugPointLifetimeEverVisible(i, durationFrames)) {
-                flags[i] = 1;
-            }
-        }
-        this.debugNeverVisibleCache = { count, durationFrames, lifeTexData: this.lifeTexData, opacity, flags };
+        const flags = buildNeverVisibleFlags({
+            count,
+            totalFrames: durationFrames,
+            opacity,
+            opacitySemantic,
+            lifeTexData: this.lifeTexData
+        });
+        this.debugNeverVisibleCache = { count, durationFrames, lifeTexData: this.lifeTexData, opacity, opacitySemantic, flags };
         return flags;
     }
 
@@ -743,8 +751,16 @@ export class Viewer {
 
     public isDebugPointNormallyVisible(index: number, frame: number = Math.floor(this.currentTime)): boolean {
         if (this.isDebugPointDeleted(index)) return false;
-        if (!this.isDebugPointLifetimeVisible(index, frame)) return false;
-        return this.isDebugPointOpacityVisible(index);
+        const opacity = ((this.getCurrentSplatData()?.getProp?.('opacity') as Float32Array | null) || this.readDebugParsedProp('opacity')) || null;
+        const effectiveAlpha = getPointEffectiveAlphaAtFrame({
+            index,
+            frame: Math.floor(frame),
+            totalFrames: Math.max(1, Math.ceil(this.duration ?? this.totalFrames ?? 1)),
+            opacity,
+            opacitySemantic: this.lastParsedData?.opacitySemantic,
+            lifeTexData: this.lifeTexData
+        });
+        return effectiveAlpha >= NORMAL_RENDER_ALPHA_DISCARD;
     }
 
     private buildDebugAllPointsRenderData(sourcePositions: Float32Array, frame: number): { positions: Float32Array; colors: Float32Array; sourceCount: number; visibleCount: number; hiddenCount: number; deletedCount: number } {
@@ -1504,10 +1520,19 @@ export class Viewer {
     }
 
     public getPLY4ExportHealthReport() {
-        return this.getActiveModelHealthReport();
+        return this.getExportHealthReport();
     }
 
     public applyPLY4ExportHealthAutoFix() {
+        return this.applyExportHealthAutoFix();
+    }
+
+    public getExportHealthReport() {
+        // #WDD-gpt 2026-07-16 - 保存预检统一调用包含最终透明度隐藏点检测的 Viewer 健康报告
+        return this.getActiveModelHealthReport();
+    }
+
+    public applyExportHealthAutoFix() {
         return this.applyActiveModelHealthAutoFix();
     }
 
