@@ -5,6 +5,7 @@ import { TrueSplatsLoader } from '../utils/truesplats-loader';
 import { SOG4Encoder, type SOG4EncodeProgressMeta } from '../utils/sog4-encoder';
 import { PLY4Encoder } from '../utils/ply4-encoder';
 import { PLY4Loader } from '../utils/ply4-loader';
+import { downloadEqualCountPLYSequence } from '../utils/equal-count-ply-sequence-exporter';
 import {
     chooseExportModelTransform,
     cloneModelTransform,
@@ -61,6 +62,11 @@ export class ViewerExportManager {
 
         const totalFrames = v.totalFrames || Math.ceil(v.duration);
         await PlyExporter.exportSequence(data, totalFrames, `sequence_${v.currentFileName}`);
+    }
+
+    public async exportEqualCountPlySequence() {
+        // #WDD-gpt  2026-07-16 - 为首页新增独立等点数 PLY 序列导出入口，不改变原有 PLY 序列导出行为
+        return downloadEqualCountPLYSequence(this.viewer as any);
     }
 
     private async exportCurrentFrameToPly() {

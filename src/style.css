@@ -1553,6 +1553,91 @@ body.theme-light .fps-item:not(.active):hover {
     text-transform: uppercase;
 }
 
+/* #WDD-gpt  2026-07-16 - 等点数 PLY 流式导出进度框，沿用现有深色玻璃面板与紧凑工具样式 */
+.equal-count-export-progress {
+    position: fixed;
+    inset: 0;
+    z-index: 100001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(2, 6, 23, 0.68);
+    backdrop-filter: blur(12px);
+}
+
+.equal-count-export-progress-card {
+    width: min(460px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.96);
+    color: var(--text-primary);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.equal-count-export-progress-kicker {
+    color: rgba(196, 181, 253, 0.95);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.equal-count-export-progress-title {
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.equal-count-export-progress-summary,
+.equal-count-export-progress-destination,
+.equal-count-export-progress-row {
+    color: var(--text-secondary);
+    font-size: 10px;
+}
+
+.equal-count-export-progress-destination {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.equal-count-export-progress-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.equal-count-export-progress-track {
+    height: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 999px;
+    background: rgba(2, 6, 23, 0.72);
+}
+
+.equal-count-export-progress-fill {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(139, 92, 246, 0.9), rgba(34, 211, 238, 0.9));
+    transition: width 160ms ease-out;
+}
+
+.equal-count-export-progress-cancel {
+    min-height: 32px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
 .has-tooltip[aria-label]:not([data-tip])::before {
     content: attr(aria-label);
 }

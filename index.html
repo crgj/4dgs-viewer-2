@@ -36,7 +36,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.21.2</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v__APP_VERSION__</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -353,6 +353,17 @@
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
                     <span class="text-[8px] font-bold ml-1 tracking-tight">PLY4</span>
+                </button>
+                <!-- #WDD-gpt  2026-07-16 - 首页右上角新增独立的等点数 PLY 序列导出按钮 -->
+                <button id="btn-export-equal-count-ply-sequence"
+                    class="ui-btn col-span-2 px-1 py-1 rounded-md flex items-center justify-center bg-violet-500/10 text-violet-400 hover:bg-violet-500/20"
+                    aria-label="Export Equal-count PLY Sequence" data-tip="等点数 PLY 序列"
+                    data-i18n-aria-label="top.exportEqualCountPlySeq" data-i18n-data-tip="top.exportEqualCountPlySeq">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-current">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM4 18h5v2H4v-2zm6 0h4v2h-4v-2zm5 0h5v2h-5v-2z" />
+                    </svg>
+                    <span class="text-[8px] font-bold ml-1 tracking-tight"
+                        data-i18n="top.exportEqualCountPlySeqShort">EQUAL PLY SEQ</span>
                 </button>
                 <button id="btn-export-ply4-sequence"
                     class="hidden ui-btn col-span-2 px-1 py-1 rounded-md flex items-center justify-center bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20"

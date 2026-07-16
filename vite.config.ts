@@ -2,7 +2,18 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import fs from 'fs';
 
+// #WDD-gpt  2026-07-16 - 从独立 VERSION 文件读取页面版本号，避免在 index.html 中重复硬编码
+const appVersion = fs.readFileSync(resolve(__dirname, 'VERSION'), 'utf8').trim();
+
 export default defineConfig({
+    plugins: [
+        {
+            name: 'inject-app-version',
+            transformIndexHtml(html) {
+                return html.split('__APP_VERSION__').join(appVersion);
+            },
+        },
+    ],
     // TODO: 如果发布到 GitHub Pages 的子目录，请将 '/' 替换为 '/仓库名称/'
     // 例如: base: '/4dgs-viewer/',
     base: './',

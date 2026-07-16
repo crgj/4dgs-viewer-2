@@ -2003,6 +2003,11 @@ export class Viewer {
         btnExportPly4?.addEventListener('click', () => {
             this.saveAsPLY4();
         });
+        // #WDD-gpt  2026-07-16 - 绑定首页右上角独立的等点数 PLY 序列导出按钮
+        const btnExportEqualCountPlySequence = document.getElementById('btn-export-equal-count-ply-sequence');
+        btnExportEqualCountPlySequence?.addEventListener('click', () => {
+            this.exportManager.exportEqualCountPlySequence();
+        });
         const btnExportPly4Sequence = document.getElementById('btn-export-ply4-sequence');
         btnExportPly4Sequence?.addEventListener('click', () => {
             this.saveAsPLY4Sequence();
