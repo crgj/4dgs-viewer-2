@@ -260,7 +260,8 @@ export class SelectionTool {
         if (!ok) return;
 
         const cleanup = typeof this.viewer?.zeroInvisibleTrajectoryKeyframesForDeleteHidden === 'function'
-            ? this.viewer.zeroInvisibleTrajectoryKeyframesForDeleteHidden()
+            // #WDD-gpt  2026-07-29 - 将已确认的隐藏点索引传给轨迹清理，禁止误改其他可见高斯
+            ? this.viewer.zeroInvisibleTrajectoryKeyframesForDeleteHidden(targets)
             : null;
         const before = this.captureGlobalSelectionState();
         for (const i of targets) {

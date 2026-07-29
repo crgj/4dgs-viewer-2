@@ -704,19 +704,25 @@ export class Viewer {
         texture.unlock();
     }
 
-    public zeroInvisibleTrajectoryKeyframesForDeleteHidden(): { clearedKeyframes: number; touchedPoints: number } {
+    public zeroInvisibleTrajectoryKeyframesForDeleteHidden(targetIndices: number[]): { clearedKeyframes: number; touchedPoints: number } {
         const trajectory = (this.lastParsedData?.trajectory as Float32Array | undefined) || this.trajectoryData;
         const keyframes = Number(this.lastParsedData?.keyframes || this.keyframes || 0);
-        if (!trajectory || !keyframes) return { clearedKeyframes: 0, touchedPoints: 0 };
+        if (!trajectory || !keyframes || !Array.isArray(targetIndices) || targetIndices.length === 0) {
+            return { clearedKeyframes: 0, touchedPoints: 0 };
+        }
 
         const sourcePositions = this.getDebugAllPointsPositions();
         const count = sourcePositions ? Math.floor(sourcePositions.length / 3) : Math.max(0, Math.floor((this.selectionTool?.selectionData?.length || 0) / 4));
         const originalIndexLimit = Math.floor(trajectory.length / (keyframes * 3));
         const maxCount = Math.floor(this.lifeTexData ? Math.min(count, this.lifeTexData.length / 4) : count);
+        // #WDD-gpt  2026-07-29 - 只清理本次确认删除的隐藏点，避免修复导出把所有高斯的不可见轨迹关键帧写到原点
+        const targets = new Set(targetIndices
+            .map((value) => Math.floor(Number(value)))
+            .filter((value) => Number.isFinite(value) && value >= 0 && value < maxCount));
         let clearedKeyframes = 0;
         let touchedPoints = 0;
 
-        for (let i = 0; i < maxCount; i++) {
+        for (const i of targets) {
             const oidx = this.originalIndices ? Math.round(this.originalIndices[i]) : i;
             if (oidx < 0 || oidx >= originalIndexLimit) continue;
 
@@ -1550,7 +1556,8 @@ export class Viewer {
         const deletedHidden = hiddenTargets.length > 0 && typeof this.selectionTool?.deleteIndices === 'function'
             ? this.selectionTool.deleteIndices(hiddenTargets)
             : 0;
-        const cleanup = deletedHidden > 0 ? this.zeroInvisibleTrajectoryKeyframesForDeleteHidden() : null;
+        // #WDD-gpt  2026-07-29 - 导出健康修复仅清理刚标记删除的隐藏点，保持其余高斯跨帧轨迹和选择 ID 不变
+        const cleanup = deletedHidden > 0 ? this.zeroInvisibleTrajectoryKeyframesForDeleteHidden(hiddenTargets) : null;
         if (deletedHidden > 0) {
             this.debugNeverVisibleCache = null;
             this.refreshDebugAllPointsEntity();
