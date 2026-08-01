@@ -14,6 +14,7 @@ import { Sam3WebClient, captureCanvasImageData, selectGaussianIndicesFromMask, t
 import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader'; // #WDD 2026-01-18 SOG4 Support
 import { PLY4Loader } from './utils/ply4-loader'; // #WDD 2026-01-21 PLY4 Support
+import { SOGv2Loader } from './utils/sog-v2-loader'; // #WDD 2026-07-31 原始 PlayCanvas 官方 SOG v2 支持
 import { SelectionTool } from './ui/selection-tool';
 import { SmartSelectionTool } from './ui/smart-selection-tool';
 import { GaussianEffects } from './particle-effects';
@@ -3087,10 +3088,45 @@ export class Viewer {
 
     private async parsePlyFrame(file: File): Promise<SequenceFrameData> {
         const buffer = await file.arrayBuffer();
-        const text = new TextDecoder('ascii').decode(buffer);
-        const headerEndIndex = text.indexOf('end_header');
-        if (headerEndIndex === -1) throw new Error('PLY missing end_header.');
-        const headerText = text.slice(0, headerEndIndex);
+        // #WDD 2026-07-31 Fix: 之前用 TextDecoder('ascii').decode(整个buffer) 再用字符串索引
+        // 当字节偏移,但浏览器对 >=0x80 字节会替换成 U+FFFD 或合并多字节序列,导致字符串长度≠字节长度,
+        // bodyStart 偏移错位 → "Offset is outside the bounds of the DataView"。
+        // 改为: 只在 header 区域(纯 ASCII)做字节级扫描,bodyStart 用真实字节偏移。
+        const view = new DataView(buffer);
+        const bytes = new Uint8Array(buffer);
+
+        // 字节级查找 "end_header\n",得到 header 文本与 body 的真实字节边界。
+        const decoder = new TextDecoder('ascii');
+        const SEARCH_CAP = Math.min(bytes.length, 2 * 1024 * 1024); // header 不会超过 2MB
+        let headerEndByte = -1;
+        // 逐行扫描,在字节流里找 'end_header' 行尾的换行。
+        const probe = decoder.decode(bytes.slice(0, SEARCH_CAP));
+        const m = probe.match(/end_header\r?\n/);
+        if (!m || m.index === undefined) {
+            // #WDD 2026-07-31 诊断: 文件不含 end_header, 打印前 256 字节的 hex+ascii,
+            // 并识别常见 magic bytes, 帮助判断真实格式(ASCII PLY / gzip / .splat / .ksplat / .glb / .sog 等)。
+            const head = bytes.slice(0, Math.min(256, bytes.length));
+            const hex = Array.from(head).map((b) => b.toString(16).padStart(2, '0')).join(' ');
+            const ascii = Array.from(head).map((b) => (b >= 32 && b < 127) ? String.fromCharCode(b) : '·').join('');
+            const magic = (b: number[]) => b.every((v, i) => bytes[i] === v);
+            let guess = '';
+            if (magic([0x1f, 0x8b])) guess = ' → looks like GZIP (compressed)';
+            else if (magic([0x50, 0x4b, 0x03, 0x04]) || magic([0x50, 0x4b, 0x05, 0x06])) guess = ' → looks like ZIP (maybe .sog/.sog4)';
+            else if (magic([0x67, 0x6c, 0x54, 0x46])) guess = ' → looks like glTF/GLB';
+            else if (probe.slice(0, 15).toLowerCase().includes('ply')) guess = ' → starts with "ply" but no end_header (maybe ASCII PLY with CRLF, or truncated)';
+            console.error('[PLY seq] file is NOT a binary PLY (no end_header). first 256 bytes:');
+            console.error('  hex:   ', hex);
+            console.error('  ascii: ', ascii);
+            console.error('  guess: ', guess || ' → unknown format');
+            throw new Error(
+                `PLY missing end_header (not a binary PLY). First bytes hex: ${hex.slice(0, 64)}... ` +
+                `ascii: "${ascii.slice(0, 32)}...". File: ${file.name}, size: ${bytes.length} bytes. ${guess}`
+            );
+        }
+        headerEndByte = m.index + m[0].length;
+
+        // header 区域是纯 ASCII,这里用字符串解析是安全的。
+        const headerText = decoder.decode(bytes.slice(0, headerEndByte));
         const lines = headerText.split(/\r?\n/);
         let vertexCount = 0;
         let currentElement = '';
@@ -3148,10 +3184,25 @@ export class Viewer {
             }
         }
 
-        const newlineIndex = text.indexOf('\n', headerEndIndex);
-        const bodyStart = newlineIndex === -1 ? text.length : newlineIndex + 1;
-        const view = new DataView(buffer);
+        const bodyStart = headerEndByte; // 真实字节偏移
         const rowSize = propertyDefs.reduce((sum, def) => sum + def.size, 0);
+        // #WDD 2026-07-31 诊断: 打印 header 摘要, 便于定位 body 越界的真实原因。
+        console.log('[PLY seq] headerEndByte:', headerEndByte, 'vertexCount:', vertexCount, 'rowSize:', rowSize,
+            'props:', propertyDefs.map((d) => `${d.name}:${d.size}`).join(','));
+        // #WDD 2026-07-31 防御: 校验 body 字节数是否足够容纳声明的顶点,给出明确报错而非 DataView 越界。
+        const expectedBodyBytes = vertexCount * rowSize;
+        if (rowSize === 0) {
+            throw new Error('PLY has no float properties in the vertex element.');
+        }
+        if (bodyStart + expectedBodyBytes > bytes.length) {
+            // 常见原因: ①该 PLY 是 ASCII 格式而非 binary ②header 含多个 element ③文本/二进制混排
+            throw new Error(
+                `PLY body size mismatch: header declares ${vertexCount} vertices × ${rowSize} bytes ` +
+                `= ${expectedBodyBytes} bytes, but only ${bytes.length - bodyStart} bytes remain after header ` +
+                `(bodyStart=${bodyStart}, fileBytes=${bytes.length}, format=${isLittleEndian ? 'LE' : 'BE'}). ` +
+                `Header: ${headerText.replace(/\n/g, ' | ').slice(0, 300)}`
+            );
+        }
         const propertyArrays: Record<string, Float32Array> = {};
         propertyDefs.forEach((def) => {
             propertyArrays[def.name] = new Float32Array(vertexCount);
@@ -4811,6 +4862,7 @@ export class Viewer {
         let succeeded = false;
         const loader = new TrueSplatsLoader(this.app);
         const parseSOG = (loader as any).parseSOG.bind(loader);
+        const sogV2Loader = new SOGv2Loader();
         try {
             // #WDD 2026-05-12 Sort files numerically to fix playback order
             const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
@@ -4821,7 +4873,18 @@ export class Viewer {
                 const step = Math.min(8, Math.floor((i / Math.max(1, sorted.length - 1)) * 8));
                 progress(step, 'LOADING', `Parsing ${file.name}`);
                 const buffer = await file.arrayBuffer();
-                const parsed = await parseSOG(buffer, () => { });
+                // #WDD 2026-07-31 SOG 版本分流:
+                //   - 官方 PlayCanvas SOG v2(meta.version === 2) 走 SOGv2Loader
+                //   - 其他(项目 TrueSplats 私有 .sog)维持原 parseSOG,保持向后兼容
+                const version = await SOGv2Loader.detectVersion(buffer);
+                let parsed: any;
+                if (version === 2) {
+                    console.log(`[SOG] ${file.name}: detected official SOG v2, using SOGv2Loader`);
+                    parsed = await sogV2Loader.parse(buffer, () => { });
+                } else {
+                    console.log(`[SOG] ${file.name}: version=${version}, using TrueSplats parseSOG`);
+                    parsed = await parseSOG(buffer, () => { });
+                }
                 bands = parsed.bands || bands;
                 const vertexElement = parsed.plyData.elements[0];
                 assets.push(this.createGsplatAssetFromVertexElement(file.name, vertexElement));

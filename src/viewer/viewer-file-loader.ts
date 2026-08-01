@@ -3,6 +3,8 @@ import type { Viewer } from '../main';
 import { TrueSplatsLoader } from '../utils/truesplats-loader';
 import { SOG4Loader } from '../utils/sog4-loader';
 import { PLY4Loader } from '../utils/ply4-loader';
+import { SOGv2Loader } from '../utils/sog-v2-loader';
+import { convertStaticSplatToTwoKeyframePLY4 } from '../utils/static-splat-to-ply4';
 
 /**
  * #WDD 2026-04-20: Extracted from Viewer to reduce main.ts size.
@@ -137,6 +139,7 @@ export class ViewerFileLoader {
     public handleFileSelect(e: Event) {
         const v = this.viewer as any;
         const input = e.target as HTMLInputElement;
+        // #WDD 2026-07-31 单文件选择走 loadFile;原始 .ply/.sog 会在其中被包装成伪 4D。
         if (input.files && input.files.length > 0) this.loadFile(input.files[0]);
     }
 
@@ -252,9 +255,10 @@ export class ViewerFileLoader {
             let parsed;
             let loader: any;
             const lowerName = file.name.toLowerCase();
+            // #WDD-gpt 2026-07-31 - 标记需要在资源创建前转换为标准双关键帧 PLY4 的静态输入。
+            let isRawSingleFile = false;
 
-            // #WDD 2026-01-19 Fix: Support both .sog and .sog4
-            if (lowerName.endsWith('.sog4') || lowerName.endsWith('.sog')) {
+            if (lowerName.endsWith('.sog4')) {
                 console.log("[Viewer] Using SOG4Loader for", file.name);
                 loader = new SOG4Loader(v.app);
                 v.performanceMonitor.startLoadPhase('sog4-parse', 'Parsing SOG4 format');
@@ -262,13 +266,45 @@ export class ViewerFileLoader {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
                 v.performanceMonitor.endLoadPhase('sog4-parse');
-            } else if (lowerName.endsWith('.ply4') || lowerName.endsWith('.ply')) {
+            } else if (lowerName.endsWith('.sog')) {
+                // #WDD 2026-07-31 .sog 分流: 官方 PlayCanvas SOG v2(meta.version===2)用 SOGv2Loader;
+                // 否则(TrueSplats 私有 .sog)回退 SOG4Loader。两者解析后都包装成伪 4D。
+                const buf = await file.arrayBuffer();
+                const version = await SOGv2Loader.detectVersion(buf);
+                if (version === 2) {
+                    console.log("[Viewer] Using SOGv2Loader (official SOG v2) for", file.name);
+                    loader = new SOGv2Loader();
+                    v.performanceMonitor.startLoadPhase('sogv2-parse', 'Parsing official SOG v2');
+                    parsed = await loader.parse(buf, (p: number, msg: string) => {
+                        setProgress(Math.floor(p / 10), "LOADING", msg);
+                    });
+                    v.performanceMonitor.endLoadPhase('sogv2-parse');
+                } else {
+                    console.log("[Viewer] Using SOG4Loader (non-v2 .sog) for", file.name, "version:", version);
+                    loader = new SOG4Loader(v.app);
+                    v.performanceMonitor.startLoadPhase('sog4-parse', 'Parsing SOG format');
+                    parsed = await loader.load(buf, (p: number, msg: string) => {
+                        setProgress(Math.floor(p / 10), "LOADING", msg);
+                    });
+                    v.performanceMonitor.endLoadPhase('sog4-parse');
+                }
+                isRawSingleFile = true;
+            } else if (lowerName.endsWith('.ply4')) {
                 console.log("[Viewer] Using PLY4Loader for", file.name);
-                loader = new PLY4Loader(); // #WDD 2026-01-21 Use PLY4Loader
+                loader = new PLY4Loader();
                 v.performanceMonitor.startLoadPhase('ply4-parse', 'Parsing PLY4 format');
                 parsed = await loader.load(file, (p: number, msg: string) => {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
+            } else if (lowerName.endsWith('.ply')) {
+                // #WDD-gpt 2026-07-31 - 标准 PLY 先复用 PLY4 的二进制属性解析，再补齐双关键帧 PLY4 时序字段。
+                console.log("[Viewer] Using PLY4Loader (raw PLY) for", file.name);
+                loader = new PLY4Loader();
+                v.performanceMonitor.startLoadPhase('ply4-parse', 'Parsing raw PLY format');
+                parsed = await loader.load(file, (p: number, msg: string) => {
+                    setProgress(Math.floor(p / 10), "LOADING", msg);
+                });
+                isRawSingleFile = true;
             } else if (lowerName.endsWith('.truesplats')) {
                 console.log("[Viewer] Using TrueSplatsLoader for", file.name);
                 loader = new TrueSplatsLoader(v.app);
@@ -281,6 +317,11 @@ export class ViewerFileLoader {
                 parsed = await loader.load(file, (p: number, msg: string) => {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
+            }
+
+            if (isRawSingleFile) {
+                // #WDD-gpt 2026-07-31 - 静态输入在 GSplat 资源创建前转换，保证生命周期、渲染纹理与编辑状态使用同一份规范数据。
+                parsed = convertStaticSplatToTwoKeyframePLY4(parsed);
             }
 
             // #WDD 2026-01-16 DEBUG: Sort by Frame 20 - REMOVED
@@ -556,6 +597,9 @@ const duration = parsed.frames || parsed.maxMu || 100;
             await v.loadSogSequence(sogSeq);
             return;
         }
+        // #WDD 2026-07-31 单文件 .ply/.sog/.ply4/.sog4/.truesplats 统一走 loadFile。
+        // 原始 .ply/.sog 会在 loadFile 内被包装成伪 4D(走 finalizeGSplatLoad, 可编辑),
+        // 而非无法编辑的序列路径。多文件才走序列。
         if (sorted.length > 0) {
             await this.loadFile(sorted[0]);
         }

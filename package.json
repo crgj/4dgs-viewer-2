@@ -10,6 +10,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test-glm": "tsx scripts/test_glm.ts",
+    "test-static-ply4": "tsx scripts/test_static_splat_to_ply4.ts",
     "test-performance-guards": "tsx scripts/verify_performance_guards.ts"
   },
   "dependencies": {
