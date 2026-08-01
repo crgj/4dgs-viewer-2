@@ -21,6 +21,7 @@ import { GaussianEffects } from './particle-effects';
 import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
+import { Ply4RelightingController, ply4RelightingVS } from './rendering/ply4-relighting'; // #WDD-gpt 2026-07-31 - 接入独立 PLY4 重光照算法与 UI 状态
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { ViewerPresetManager } from './viewer/viewer-preset-manager';
 import { ViewerFaceTrackingManager } from './viewer/viewer-face-tracking-manager';
@@ -77,6 +78,7 @@ export class Viewer {
     smartSelectionTool: SmartSelectionTool;
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
+    private ply4Relighting: Ply4RelightingController;
     private effects: GaussianEffects;
     private isHighQuality = true; // Used by adaptive quality fallback.
 
@@ -318,6 +320,7 @@ export class Viewer {
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
+        this.ply4Relighting = new Ply4RelightingController(this.app); // #WDD-gpt 2026-07-31 - 初始化可关闭的 PLY4 重光照控制器
 
         // #WDD 2026-02-03 Face Tracker is initialized by ViewerFaceTrackingManager
 
@@ -2976,6 +2979,8 @@ export class Viewer {
             this.splatEntity.destroy();
             this.splatEntity = null;
         }
+        // #WDD-gpt 2026-07-31 - 旧渲染实体销毁后再释放重光照纹理，避免加载期间引用失效
+        this.ply4Relighting.disposeAllNormalTextures();
         this.presetManager.cameraPresets = [];
         this.presetManager.renderPresets();
         this.isSequenceMode = false;
@@ -4273,6 +4278,8 @@ export class Viewer {
             // #WDD-gpt 2026-06-13 - 单段加载替换模型前清理独立 ALL 点云
             this.destroyDebugAllPointsEntity();
             if (this.splatEntity) this.splatEntity.destroy();
+            // #WDD-gpt 2026-07-31 - 单模型替换时在旧实体销毁后释放重光照法线纹理
+            this.ply4Relighting.disposeAllNormalTextures();
             this.presetManager.cameraPresets = [];
             this.presetManager.renderPresets();
             this.isSequenceMode = false;
@@ -4638,6 +4645,7 @@ export class Viewer {
             if (i === activeIndex) continue;
             const segment = this.sog4SequenceSegments[i];
             if (!segment) continue;
+            const element = this.splatSequence?.elements?.[i] as any;
             this.saveSog4SegmentEditState(i);
             if (segment.entity) {
                 segment.entity.destroy();
@@ -4653,8 +4661,9 @@ export class Viewer {
                 }
                 segment.asset = null;
             }
+            // #WDD-gpt 2026-07-31 - 分段缓存淘汰时同步释放该段的重光照法线纹理
+            this.ply4Relighting.disposeNormalTexture(element?.runtime?.relightingNormalTexture);
             segment.parsed = null;
-            const element = this.splatSequence?.elements?.[i] as any;
             if (element) {
                 element.parsed = null;
                 element.asset = null;
@@ -5122,6 +5131,9 @@ export class Viewer {
         else if (res?.transformATexture) width = res.transformATexture.width;
         const height = Math.ceil(numSplats / width);
 
+        // #WDD-gpt 2026-07-31 - 为静态路径生成最小 scale 轴法线纹理；动态路径在 shader 中使用当前旋转关键帧覆盖
+        const relightingNormalTexture = this.ply4Relighting.createNormalTexture(splatData, width, height);
+
         if (parsed?.trajectory || parsed?.rotTrajectory || parsed?.dcTrajectory) {
             this.fileLoader.ensure4DTextureBudget(numSplats, width, parsed);
         }
@@ -5439,7 +5451,8 @@ export class Viewer {
                 scalesTexture,
                 parsed.bands || 3, // #WDD 2026-01-16
                 dcTrajectoryTexture,
-                parsed.dcKeyframes || 0
+                parsed.dcKeyframes || 0,
+                relightingNormalTexture
             );
         }
 
@@ -5475,6 +5488,7 @@ export class Viewer {
                 rotationTexture,
                 dcTrajectoryTexture,
                 scalesTexture,
+                relightingNormalTexture,
                 selectionData: this.selectionTool?.selectionData || null,
                 allTimeSelectionData: this.selectionTool?.allTimeSelectionData || null,
                 selectionTexture: this.selectionTool?.selectionTexture || null
@@ -5536,7 +5550,8 @@ export class Viewer {
         scalesTexture: pc.Texture | null = null,
         bands: number = 0, // #WDD 2026-01-16
         dcTrajectoryTexture: pc.Texture | null = null,
-        dcKeyframes: number = 0
+        dcKeyframes: number = 0,
+        relightingNormalTexture: pc.Texture | null = null
     ) {
         console.log(`[Shader] Setting up Lifetime Shader with duration: ${totalFrames}`, { lifetimeTexture, trajectoryTexture, rotationTexture, scalesTexture, bands });
 
@@ -5581,6 +5596,10 @@ export class Viewer {
             material.setParameter('uColorStride', this.dcStride);
         }
 
+        if (relightingNormalTexture) {
+            this.ply4Relighting.bindMaterial(material, relightingNormalTexture);
+        }
+
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // #WDD 2026-01-30 PostProcessing uniforms
@@ -5619,6 +5638,9 @@ export class Viewer {
                     if (dcTrajectoryTexture) {
                         if (!options.defines.includes('USE_COLOR_TRAJECTORY')) options.defines.push('USE_COLOR_TRAJECTORY');
                     }
+                    if (relightingNormalTexture) {
+                        if (!options.defines.includes('USE_PLY4_RELIGHTING')) options.defines.push('USE_PLY4_RELIGHTING');
+                    }
 
                     // #WDD 2026-01-16 Dynamically set SH bands
                     if (bands >= 1) {
@@ -5655,7 +5677,7 @@ export class Viewer {
                     // 2. Construct Codes
                     // splatCoreVS is the FIXED core with helper functions
                     // splatMainVS is the main() function
-                    const vsCode = version + defines + splatCoreVS + splatMainVS;
+                    const vsCode = version + defines + splatCoreVS + ply4RelightingVS + splatMainVS;
 
                     // PS: For now, strict splatMainPS. 
                     // PS needs precision for GLSL 300 es unless provided by chunks, but we act standalone.

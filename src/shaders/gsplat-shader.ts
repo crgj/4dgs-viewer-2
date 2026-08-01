@@ -393,6 +393,10 @@ export const splatMainVS = `
 
         // Covariance Variables
         vec3 covA, covB;
+        #ifdef USE_PLY4_RELIGHTING
+            // #WDD-gpt 2026-07-31 - 静态路径读取最小 scale 轴法线，动态旋转路径在下方使用当前关键帧四元数覆盖
+            vec3 relightNormalObject = samplePly4RelightNormal(splatUV);
+        #endif
 
         #ifdef USE_ROTATION
             // 1. Interpolate Rotation (Stride-based)
@@ -455,6 +459,13 @@ export const splatMainVS = `
             }
             
             mat3 rot = quatToMat3(q);
+            #ifdef USE_PLY4_RELIGHTING
+                // #WDD-gpt 2026-07-31 - 对齐 Unity CSCalcViewData，动态 splat 法线始终取当前最小 scale 轴经当前四元数旋转
+                int relightAxis = 0;
+                if (scales.y < scales.x) relightAxis = 1;
+                if (scales.z < (relightAxis == 0 ? scales.x : scales.y)) relightAxis = 2;
+                relightNormalObject = relightAxis == 0 ? rot[0] : (relightAxis == 1 ? rot[1] : rot[2]);
+            #endif
             mat3 M = transpose(mat3(
                 scales.x * rot[0],
                 scales.y * rot[1],
@@ -637,6 +648,17 @@ export const splatMainVS = `
                 color.a = mix(color.a, 0.6 * color.a, visualFactor);
             }
 
+            #ifdef USE_PLY4_RELIGHTING
+                // #WDD-gpt 2026-07-31 - Relight ON 时直接使用 SH0/DC 基底色，禁止 full SH(viewDir) 与新光照重复叠加
+                vec4 relightWorldCenter = matrix_model * vec4(center, 1.0);
+                color.rgb = applyPly4Relighting(
+                    color.rgb,
+                    relightWorldCenter.xyz / max(abs(relightWorldCenter.w), 1e-6),
+                    relightNormalObject,
+                    view_position
+                );
+            #endif
+
             // #WDD 2026-01-30 Post Processing (VS Approximation)
             // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
             // Contrast: (color - 0.5) * contrast + 0.5
@@ -737,9 +759,18 @@ export const splatMainVS = `
 
         #ifdef USE_SH1
             if (uSHLevel > 0.5) {
-                vec4 worldCenter = matrix_model * vec4(center, 1.0);
-                vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
-                color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                #ifdef USE_PLY4_RELIGHTING
+                    // #WDD-gpt 2026-07-31 - 重光照关闭时才恢复原 full SH，确保开关前后的颜色语义彼此独立
+                    if (uRelightEnabled < 0.5) {
+                        vec4 worldCenter = matrix_model * vec4(center, 1.0);
+                        vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
+                        color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                    }
+                #else
+                    vec4 worldCenter = matrix_model * vec4(center, 1.0);
+                    vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
+                    color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                #endif
             }
         #endif
         

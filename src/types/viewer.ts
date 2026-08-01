@@ -57,6 +57,7 @@ export interface SplatSequenceElement {
         rotationTexture: pc.Texture | null;
         dcTrajectoryTexture: pc.Texture | null;
         scalesTexture: pc.Texture | null;
+        relightingNormalTexture: pc.Texture | null; // #WDD-gpt 2026-07-31 - 每段独立保存 PLY4 重光照静态法线纹理
         selectionData: Uint8Array | null;
         allTimeSelectionData: Uint8Array | null;
         selectionTexture: pc.Texture | null;

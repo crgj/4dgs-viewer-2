@@ -6365,6 +6365,10 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
 
         // Covariance Variables
         vec3 covA, covB;
+        #ifdef USE_PLY4_RELIGHTING
+            // #WDD-gpt 2026-07-31 - 静态路径读取最小 scale 轴法线，动态旋转路径在下方使用当前关键帧四元数覆盖
+            vec3 relightNormalObject = samplePly4RelightNormal(splatUV);
+        #endif
 
         #ifdef USE_ROTATION
             // 1. Interpolate Rotation (Stride-based)
@@ -6427,6 +6431,13 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
             }
             
             mat3 rot = quatToMat3(q);
+            #ifdef USE_PLY4_RELIGHTING
+                // #WDD-gpt 2026-07-31 - 对齐 Unity CSCalcViewData，动态 splat 法线始终取当前最小 scale 轴经当前四元数旋转
+                int relightAxis = 0;
+                if (scales.y < scales.x) relightAxis = 1;
+                if (scales.z < (relightAxis == 0 ? scales.x : scales.y)) relightAxis = 2;
+                relightNormalObject = relightAxis == 0 ? rot[0] : (relightAxis == 1 ? rot[1] : rot[2]);
+            #endif
             mat3 M = transpose(mat3(
                 scales.x * rot[0],
                 scales.y * rot[1],
@@ -6609,6 +6620,17 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
                 color.a = mix(color.a, 0.6 * color.a, visualFactor);
             }
 
+            #ifdef USE_PLY4_RELIGHTING
+                // #WDD-gpt 2026-07-31 - Relight ON 时直接使用 SH0/DC 基底色，禁止 full SH(viewDir) 与新光照重复叠加
+                vec4 relightWorldCenter = matrix_model * vec4(center, 1.0);
+                color.rgb = applyPly4Relighting(
+                    color.rgb,
+                    relightWorldCenter.xyz / max(abs(relightWorldCenter.w), 1e-6),
+                    relightNormalObject,
+                    view_position
+                );
+            #endif
+
             // #WDD 2026-01-30 Post Processing (VS Approximation)
             // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
             // Contrast: (color - 0.5) * contrast + 0.5
@@ -6709,9 +6731,18 @@ ${U.transformVS}`}});const bL={"ambientPrefilteredCube.frag":"ambientEnv.frag","
 
         #ifdef USE_SH1
             if (uSHLevel > 0.5) {
-                vec4 worldCenter = matrix_model * vec4(center, 1.0);
-                vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
-                color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                #ifdef USE_PLY4_RELIGHTING
+                    // #WDD-gpt 2026-07-31 - 重光照关闭时才恢复原 full SH，确保开关前后的颜色语义彼此独立
+                    if (uRelightEnabled < 0.5) {
+                        vec4 worldCenter = matrix_model * vec4(center, 1.0);
+                        vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
+                        color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                    }
+                #else
+                    vec4 worldCenter = matrix_model * vec4(center, 1.0);
+                    vec3 viewDir = normalize((worldCenter.xyz / worldCenter.w - view_position) * mat3(matrix_model));
+                    color.xyz = max(color.xyz + evalSH(viewDir), 0.0);
+                #endif
             }
         #endif
         
@@ -6822,4 +6853,4 @@ property float rot_1
 property float rot_2
 property float rot_3
 end_header
-`;const M=new TextEncoder().encode(O),I=new Uint8Array(M.byteLength+A.byteLength);return I.set(M,0),I.set(new Uint8Array(A),M.byteLength),I.buffer}}class UL{constructor(e){_r(this,"app");_r(this,"currentSkyboxTexture",null);_r(this,"currentEnvAtlas",null);this.app=e}loadSkybox(e,t){return new Promise((s,i)=>{const r=new se(t,"texture",{url:e});r.ready(n=>{const a=n.resource;if(!a){i(new Error(`Skybox asset loaded without texture resource: ${t}`));return}this.processSkybox(a),s()}),r.on("error",n=>i(n)),this.app.assets.add(r),this.app.assets.load(r)})}setSkyboxAsset(e){e.resource?this.processSkybox(e.resource):(e.ready(t=>{const s=t.resource;if(!s){console.warn(`[Skybox] Asset "${t.name}" became ready without a texture resource.`);return}this.processSkybox(s)}),e.once("error",t=>{console.warn(`[Skybox] Failed to load asset "${e.name}":`,t)}),this.app.assets.load(e))}clearSkybox(){this.currentSkyboxTexture&&(this.currentSkyboxTexture.destroy(),this.currentSkyboxTexture=null),this.currentEnvAtlas&&(this.currentEnvAtlas.destroy(),this.currentEnvAtlas=null),this.app.scene.skybox=null,this.app.scene.envAtlas=null;const e=this.app.scene.layers.getLayerById(Ao);e&&(e.enabled=!1)}processSkybox(e){if(!e){console.warn("[Skybox] Skipping skybox processing because source texture is missing.");return}this.currentSkyboxTexture&&this.currentSkyboxTexture!==e&&this.currentSkyboxTexture.destroy(),this.currentEnvAtlas&&this.currentEnvAtlas.destroy();let t,s,i;try{t=fo.generateSkyboxCubemap(e),s=fo.generateLightingSource(e),i=fo.generateAtlas(s,{})}catch(n){console.warn("[Skybox] Failed to process skybox texture.",n);return}t.minFilter=ir,t.magFilter=Ue,t.mipmaps=!0,this.currentSkyboxTexture=t,s.destroy(),this.currentEnvAtlas=i,this.app.scene.envAtlas=i,this.app.scene.skybox=t;const r=this.app.scene.layers.getLayerById(Ao);r&&(r.enabled=!0),this.setType(Hr),this.setExposure(0),this.setBlur(1)}setBlur(e){this.app.scene.sky.type===Hr?this.app.scene.skyboxMip=Math.max(0,Math.min(5,e)):this.app.scene.skyboxMip=0,this.app.renderNextFrame=!0}setExposure(e){this.app.scene.skyboxIntensity=Math.pow(2,e)}setRotation(e){const t=new ee;t.setFromEulerAngles(0,e,0),this.app.scene.skyboxRotation=t}setType(e){switch(e){case"Infinite Sphere":this.app.scene.sky.type=Hr;break;case"Projective Dome":this.app.scene.sky.type=Oy;break;case"Projective Box":this.app.scene.sky.type=Fy;break;default:this.app.scene.sky.type=e;break}}setBackgroundColor(e){}}export{J as A,cA as B,q as C,gy as D,Ae as E,he as F,pa as G,Nf as H,CL as I,PL as J,ML as K,us as L,Oe as M,er as N,it as O,OL as P,l_ as R,UL as S,ne as T,W as V,kL as a,NL as b,nc as c,be as d,X as e,Ue as f,FL as g,ot as h,zL as i,nD as j,se as k,Tt as l,_o as m,DL as n,Yr as o,LL as p,dM as q,yt as r,BL as s,da as t,St as u,$e as v,rc as w,_y as x,RL as y,IL as z};
+`;const M=new TextEncoder().encode(O),I=new Uint8Array(M.byteLength+A.byteLength);return I.set(M,0),I.set(new Uint8Array(A),M.byteLength),I.buffer}}class UL{constructor(e){_r(this,"app");_r(this,"currentSkyboxTexture",null);_r(this,"currentEnvAtlas",null);this.app=e}loadSkybox(e,t){return new Promise((s,i)=>{const r=new se(t,"texture",{url:e});r.ready(n=>{const a=n.resource;if(!a){i(new Error(`Skybox asset loaded without texture resource: ${t}`));return}this.processSkybox(a),s()}),r.on("error",n=>i(n)),this.app.assets.add(r),this.app.assets.load(r)})}setSkyboxAsset(e){e.resource?this.processSkybox(e.resource):(e.ready(t=>{const s=t.resource;if(!s){console.warn(`[Skybox] Asset "${t.name}" became ready without a texture resource.`);return}this.processSkybox(s)}),e.once("error",t=>{console.warn(`[Skybox] Failed to load asset "${e.name}":`,t)}),this.app.assets.load(e))}clearSkybox(){this.currentSkyboxTexture&&(this.currentSkyboxTexture.destroy(),this.currentSkyboxTexture=null),this.currentEnvAtlas&&(this.currentEnvAtlas.destroy(),this.currentEnvAtlas=null),this.app.scene.skybox=null,this.app.scene.envAtlas=null;const e=this.app.scene.layers.getLayerById(Ao);e&&(e.enabled=!1)}processSkybox(e){if(!e){console.warn("[Skybox] Skipping skybox processing because source texture is missing.");return}this.currentSkyboxTexture&&this.currentSkyboxTexture!==e&&this.currentSkyboxTexture.destroy(),this.currentEnvAtlas&&this.currentEnvAtlas.destroy();let t,s,i;try{t=fo.generateSkyboxCubemap(e),s=fo.generateLightingSource(e),i=fo.generateAtlas(s,{})}catch(n){console.warn("[Skybox] Failed to process skybox texture.",n);return}t.minFilter=ir,t.magFilter=Ue,t.mipmaps=!0,this.currentSkyboxTexture=t,s.destroy(),this.currentEnvAtlas=i,this.app.scene.envAtlas=i,this.app.scene.skybox=t;const r=this.app.scene.layers.getLayerById(Ao);r&&(r.enabled=!0),this.setType(Hr),this.setExposure(0),this.setBlur(1)}setBlur(e){this.app.scene.sky.type===Hr?this.app.scene.skyboxMip=Math.max(0,Math.min(5,e)):this.app.scene.skyboxMip=0,this.app.renderNextFrame=!0}setExposure(e){this.app.scene.skyboxIntensity=Math.pow(2,e)}setRotation(e){const t=new ee;t.setFromEulerAngles(0,e,0),this.app.scene.skyboxRotation=t}setType(e){switch(e){case"Infinite Sphere":this.app.scene.sky.type=Hr;break;case"Projective Dome":this.app.scene.sky.type=Oy;break;case"Projective Box":this.app.scene.sky.type=Fy;break;default:this.app.scene.sky.type=e;break}}setBackgroundColor(e){}}export{J as A,cA as B,q as C,IL as D,Ae as E,he as F,pa as G,gy as H,Nf as I,CL as J,PL as K,ML as L,Oe as M,us as N,er as O,OL as P,it as Q,l_ as R,UL as S,ne as T,W as V,kL as a,NL as b,nc as c,be as d,X as e,Ue as f,FL as g,ot as h,oe as i,zL as j,nD as k,se as l,Tt as m,_o as n,DL as o,Yr as p,LL as q,dM as r,BL as s,yt as t,da as u,St as v,$e as w,rc as x,_y as y,RL as z};

@@ -480,6 +480,195 @@ body.theme-light .fps-item:not(.active):hover {
     line-height: 1.5;
 }
 
+/* #WDD-gpt 2026-07-31 - 独立重光照标签使用紧凑向量输入，并明确当前光源模式下未使用的参数 */
+.relight-vector-row {
+    transition: opacity 0.18s ease;
+}
+
+.relight-control-inactive {
+    opacity: 0.38;
+}
+
+.relight-axis-input {
+    align-items: center;
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+    padding: 4px 5px;
+}
+
+.relight-axis-input span {
+    color: var(--text-highlight);
+    font-size: 8px;
+    font-weight: 800;
+    opacity: 0.7;
+}
+
+.relight-axis-input input {
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 9px;
+    min-width: 0;
+    outline: none;
+    padding: 0;
+    width: 100%;
+}
+
+.relight-color-input::-webkit-color-swatch-wrapper {
+    padding: 2px;
+}
+
+.relight-color-input::-webkit-color-swatch {
+    border: 0;
+    border-radius: 4px;
+}
+
+/* #WDD-gpt 2026-07-31 - 为稀疏表面算法增加可拖拽方向球、带负数的角度输入和方法状态卡 */
+.relight-method-card {
+    align-items: flex-start;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.72));
+    border: 1px solid rgba(16, 185, 129, 0.26);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 8px;
+}
+
+.relight-method-kicker {
+    color: var(--text-highlight);
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.relight-method-copy {
+    color: var(--text-secondary);
+    font-size: 7px;
+    line-height: 1.35;
+}
+
+.relight-drag-hint {
+    color: var(--text-highlight);
+    font-size: 6.5px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    opacity: 0.72;
+}
+
+.relight-direction-sphere {
+    background: radial-gradient(circle at 50% 45%, rgba(15, 40, 52, 0.92), rgba(3, 10, 17, 0.98));
+    border: 1px solid var(--glass-border);
+    border-radius: 9px;
+    cursor: grab;
+    display: block;
+    height: 112px;
+    touch-action: none;
+    width: 100%;
+}
+
+.relight-direction-sphere.dragging {
+    cursor: grabbing;
+}
+
+/* #WDD-gpt 2026-07-31 - 方向球使用双半球切换覆盖完整单位球，按钮同时显示当前 Z 符号 */
+.relight-hemisphere-switch {
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.relight-hemisphere-switch button {
+    border-radius: 5px;
+    font-size: 7px;
+    font-weight: 800;
+    height: 23px;
+    letter-spacing: 0.025em;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 4px;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.relight-hemisphere-switch button.active {
+    box-shadow: inset 0 -2px 0 var(--text-highlight);
+}
+
+.relight-angle-input {
+    align-items: center;
+    display: grid;
+    gap: 3px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 4px 5px;
+}
+
+.relight-angle-input span,
+.relight-angle-input b {
+    color: var(--text-highlight);
+    font-size: 7px;
+    font-weight: 800;
+    opacity: 0.72;
+}
+
+.relight-angle-input input {
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 9px;
+    min-width: 0;
+    outline: none;
+    text-align: right;
+    width: 100%;
+}
+
+/* #WDD-gpt 2026-07-31 - Unity 对齐参数以两列紧凑滑杆呈现，避免独立重光照面板纵向过长 */
+.relight-parameter-grid {
+    display: grid;
+    gap: 7px 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 2px 1px;
+}
+
+.relight-range-control {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.relight-range-control > span {
+    align-items: center;
+    display: flex;
+    gap: 4px;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.relight-range-control b {
+    color: var(--text-secondary);
+    font-size: 6.5px;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.relight-range-control em {
+    color: var(--text-highlight);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 7px;
+    font-style: normal;
+}
+
+.relight-range-control input {
+    cursor: pointer;
+    height: 4px;
+    width: 100%;
+}
+
 .panel-stat {
     display: flex;
     flex-direction: column;
@@ -624,7 +813,13 @@ body.theme-light .fps-item:not(.active):hover {
 }
 
 .right-panel-tabs {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+/* #WDD-gpt 2026-07-31 - 五个右侧标签在 220px 侧栏内保持完整可点区域 */
+.right-panel-tabs .right-panel-tab {
+    font-size: 8px;
+    letter-spacing: 0.025em;
 }
 
 .left-panel-tab,

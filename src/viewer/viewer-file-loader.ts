@@ -235,6 +235,8 @@ export class ViewerFileLoader {
             // #WDD-gpt 2026-06-13 - 新模型加载前清理独立 ALL 点云，避免旧 debug entity 残留
             if (typeof v.destroyDebugAllPointsEntity === 'function') v.destroyDebugAllPointsEntity();
             if (v.splatEntity) v.splatEntity.destroy();
+            // #WDD-gpt 2026-07-31 - 旧 GSplat 实体销毁后释放其 PLY4 重光照法线纹理
+            v.ply4Relighting?.disposeAllNormalTextures?.();
             v.presetManager.cameraPresets = [];
             v.presetManager.renderPresets();
             v.isSequenceMode = false;

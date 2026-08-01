@@ -7,11 +7,11 @@
     <title>Truesplats.ai - The 4D Reality Engine for the Open Metaverse</title>
     <link rel="icon" href="./assets/logo-xPuxZotC.ico" />
 
-  <script type="module" crossorigin src="./assets/index-C-A6AqeP.js"></script>
+  <script type="module" crossorigin src="./assets/index-nUzrdjZG.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/sog4-loader-BZ0rWGTW.js">
-  <link rel="modulepreload" crossorigin href="./assets/i18n-BMUCnxkD.js">
-  <link rel="modulepreload" crossorigin href="./assets/skybox-manager-CV0dg0A8.js">
-  <link rel="stylesheet" crossorigin href="./assets/i18n-Cy2M3miC.css">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-C8wot5j1.js">
+  <link rel="modulepreload" crossorigin href="./assets/skybox-manager-A8b6cSO0.js">
+  <link rel="stylesheet" crossorigin href="./assets/i18n-BmpJB9RE.css">
 </head>
 
 <body class="text-white overflow-hidden m-0 p-0 h-screen w-screen flex flex-col antialiased select-none">
@@ -40,7 +40,7 @@
                 <h1 class="text-xs font-bold ui-text-primary tracking-tight">TrueSplats
                     <span class="font-bold italic text-green-500">.ai</span>
                 </h1>
-                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.22.2</span>
+                <span class="text-[9px] ui-version-badge px-1 py-0.5 rounded opacity-80">v2.23.0</span>
                 <button id="language-toggle"
                     class="ui-btn h-5 px-1.5 rounded text-[8px] font-extrabold tracking-tight uppercase has-tooltip"
                     type="button" data-i18n="language.toggle" data-i18n-data-tip="language.tip"
@@ -390,6 +390,8 @@
                     data-panel-target="panel-presets">PRESETS</button>
                 <button class="right-panel-tab sidebar-tab" data-i18n="tabs.info"
                     data-panel-target="panel-info">INFO</button>
+                <button class="right-panel-tab sidebar-tab" data-i18n="tabs.relight"
+                    data-panel-target="panel-relight">RELIGHT</button>
                 <button class="right-panel-tab sidebar-tab" data-i18n="tabs.special"
                     data-panel-target="panel-special">SPECIAL</button>
             </div>
@@ -645,6 +647,117 @@
                     </div>
                 </div>
                 <div id="file-info-content" class="file-info-content"></div>
+            </section>
+
+            <!-- #WDD-gpt 2026-07-31 - 将重光照从特殊功能中拆成独立标签，集中容纳稀疏表面算法与三维方向交互 -->
+            <section id="panel-relight"
+                class="sidebar-panel glass-blue rounded-md p-1.5 flex flex-col gap-2 sidebar-panel-view hidden">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title" data-i18n="relight.title">RELIGHTING</div>
+                    </div>
+                    <div class="flex gap-1">
+                        <button id="relight-enabled"
+                            class="ui-btn px-2 py-1 rounded-md text-[8px] font-bold tracking-tight uppercase"
+                            aria-pressed="false" data-i18n="relight.enable">ENABLE</button>
+                        <button id="relight-reset"
+                            class="ui-btn px-2 py-1 rounded-md text-[8px] font-bold tracking-tight uppercase"
+                            data-i18n="relight.reset">RESET</button>
+                    </div>
+                </div>
+
+                <div class="relight-method-card">
+                    <span class="relight-method-kicker" data-i18n="relight.method">SH0 / DC Relighting</span>
+                    <span class="relight-method-copy" data-i18n="relight.methodDetail">Unity-compatible DC base · minimum-scale normal · Lambert direct light</span>
+                </div>
+
+                <select id="relight-mode" class="ui-input w-full h-7 px-2 text-[9px] cursor-pointer">
+                    <option value="directional" data-i18n="relight.directional">Directional Light</option>
+                    <option value="point" data-i18n="relight.point">Point Light</option>
+                </select>
+
+                <div id="relight-direction-control" class="space-y-1.5">
+                    <div class="panel-label-row justify-between">
+                        <span class="panel-label" data-i18n="relight.directionSphere">LIGHT DIRECTION</span>
+                        <span class="relight-drag-hint" data-i18n="relight.drag">DRAG TO PICK</span>
+                    </div>
+                    <canvas id="relight-direction-sphere" class="relight-direction-sphere" width="360" height="220"
+                        aria-label="Full-sphere light direction picker" data-i18n-aria-label="relight.sphereAria"></canvas>
+
+                    <!-- #WDD-gpt 2026-07-31 - 显式选择 Z 正负半球，解决球面 X/Y 投影无法区分前后方向的问题 -->
+                    <div class="relight-hemisphere-switch" role="group" aria-label="Light direction hemisphere"
+                        data-i18n-aria-label="relight.hemisphereAria">
+                        <button id="relight-hemisphere-positive" class="ui-btn active" aria-pressed="true">
+                            <span data-i18n="relight.positiveHemisphere">+Z Hemisphere</span>
+                        </button>
+                        <button id="relight-hemisphere-negative" class="ui-btn" aria-pressed="false">
+                            <span data-i18n="relight.negativeHemisphere">−Z Hemisphere</span>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-1 font-mono">
+                        <label class="relight-angle-input ui-input">
+                            <span data-i18n="relight.yaw">YAW</span>
+                            <input id="relight-yaw" type="number" min="-180" max="180" step="1" value="28.8">
+                            <b>°</b>
+                        </label>
+                        <label class="relight-angle-input ui-input">
+                            <span data-i18n="relight.pitch">PITCH</span>
+                            <input id="relight-pitch" type="number" min="-90" max="90" step="1" value="20.5">
+                            <b>°</b>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="relight-direction-row" class="relight-vector-row space-y-1">
+                    <span class="text-[8px] uppercase opacity-60 font-bold" data-i18n="relight.directionVector">Signed XYZ Direction</span>
+                    <div class="grid grid-cols-3 gap-1 font-mono">
+                        <label class="relight-axis-input ui-input"><span>X</span><input id="relight-direction-x" type="number" min="-1" max="1" step="0.01" value="0.45"></label>
+                        <label class="relight-axis-input ui-input"><span>Y</span><input id="relight-direction-y" type="number" min="-1" max="1" step="0.01" value="0.35"></label>
+                        <label class="relight-axis-input ui-input"><span>Z</span><input id="relight-direction-z" type="number" min="-1" max="1" step="0.01" value="0.82"></label>
+                    </div>
+                </div>
+
+                <div id="relight-position-row" class="relight-vector-row space-y-1">
+                    <span class="text-[8px] uppercase opacity-60 font-bold" data-i18n="relight.position">Position</span>
+                    <div class="grid grid-cols-3 gap-1 font-mono">
+                        <label class="relight-axis-input ui-input"><span>X</span><input id="relight-position-x" type="number" step="0.1" value="2"></label>
+                        <label class="relight-axis-input ui-input"><span>Y</span><input id="relight-position-y" type="number" step="0.1" value="3"></label>
+                        <label class="relight-axis-input ui-input"><span>Z</span><input id="relight-position-z" type="number" step="0.1" value="2"></label>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-[48px_1fr] items-end gap-2">
+                    <label class="flex flex-col gap-1">
+                        <span class="text-[8px] uppercase opacity-60 font-bold" data-i18n="relight.color">Color</span>
+                        <input id="relight-color" type="color" value="#fff2e0"
+                            class="relight-color-input ui-input w-full h-7 p-0 cursor-pointer">
+                    </label>
+                    <button id="relight-two-sided"
+                        class="ui-btn h-7 rounded-md text-[8px] font-bold tracking-tight uppercase active"
+                        aria-pressed="true" data-i18n="relight.twoSided">TWO SIDED</button>
+                </div>
+
+                <!-- #WDD-gpt 2026-07-31 - 暴露与 Unity 重光照一致的五项语义参数，Normal Influence 默认降低以抑制稀疏法线斑驳 -->
+                <div class="relight-parameter-grid">
+                    <label class="relight-range-control">
+                        <span><b data-i18n="relight.diffuse">Diffuse</b><em id="relight-diffuse-value">0.75</em></span>
+                        <input id="relight-diffuse" type="range" min="0" max="2" step="0.02" value="0.75">
+                    </label>
+                    <label class="relight-range-control">
+                        <span><b data-i18n="relight.ambient">Ambient</b><em id="relight-ambient-value">0.55</em></span>
+                        <input id="relight-ambient" type="range" min="0" max="2" step="0.02" value="0.55">
+                    </label>
+                    <label class="relight-range-control">
+                        <span><b data-i18n="relight.colorInfluence">Color Influence</b><em id="relight-color-influence-value">0.65</em></span>
+                        <input id="relight-color-influence" type="range" min="0" max="1" step="0.01" value="0.65">
+                    </label>
+                    <label class="relight-range-control">
+                        <span><b data-i18n="relight.normalInfluence">Normal Influence</b><em id="relight-normal-influence-value">0.35</em></span>
+                        <input id="relight-normal-influence" type="range" min="0" max="1" step="0.01" value="0.35">
+                    </label>
+                </div>
+                <div class="panel-note" data-i18n="relight.note">Relight uses SH0/DC only. Full view-dependent SH is restored when relighting is disabled.</div>
             </section>
 
             <section id="panel-special"
