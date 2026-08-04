@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test-glm": "tsx scripts/test_glm.ts",
     "test-static-ply4": "tsx scripts/test_static_splat_to_ply4.ts",
+    "test-sog-v2": "tsx scripts/test_sog_v2_scale_domain.ts",
     "test-performance-guards": "tsx scripts/verify_performance_guards.ts"
   },
   "dependencies": {

@@ -186,8 +186,10 @@ export class ViewerFileLoader {
         }
 
         const name = file.name.toLowerCase();
-        if (!name.endsWith('.truesplats') && !name.endsWith('.sog4') && !name.endsWith('.ply4') && !name.endsWith('.ply')) {
-            alert('Please drop a .truesplats, .sog4, or .ply4 file');
+        // #WDD-gpt  2026-08-04 - 放行静态 SOG，使其与静态 PLY 共用单文件解析、伪 4D 转换和编辑流程
+        const supportedExtensions = ['.truesplats', '.sog4', '.ply4', '.sog', '.ply'];
+        if (!supportedExtensions.some((extension) => name.endsWith(extension))) {
+            alert('Please select a .truesplats, .sog4, .ply4, .sog, or .ply file');
             return;
         }
 

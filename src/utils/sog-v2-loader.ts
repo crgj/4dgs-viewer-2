@@ -4,13 +4,13 @@ import type { IImageDecoder } from './sog4-loader';
 // #WDD 2026-07-31 原始 PlayCanvas 官方 SOG v2 格式解析器
 // 文档: https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/sog/
 // 解码算法与官方 v2 规范对齐(means 16-bit L/U + log、quats smallest-three、
-// scales codebook + exp、sh0 codebook + alpha)。
+// scales log codebook、sh0 codebook + alpha)。
 //
 // 与项目内 SOG4Loader/TrueSplatsLoader 的关键差异:
 //   1. opacity: 官方 v2 的 alpha 是已 sigmoid 的线性值[0,1]。
 //      本项目渲染管线(序列路径)会对 opacity 再做一次 sigmoid(见 PlayCanvas gsplat-data.js),
 //      因此解析时用 logit() 转回 logit 域,避免双重 sigmoid 导致画面全不透明。
-//   2. scales: 官方 v2 固定 Math.exp(codebook[idx]),不走 SOG4 的 meta.custom.scales_log 开关。
+//   2. scales: 官方码本为 log 域；本适配器保留 log 值，由 PlayCanvas GSplatData 统一执行 Math.exp。
 //   3. manifest 仅识别 version === 2;项目私有字段(custom/lifetime/params)在官方 v2 中不存在。
 
 const SH_C0 = 0.28209479177387814;
@@ -27,6 +27,15 @@ const logit = (v: number) => {
 
 // 官方 SOG v2 的 means 使用对称 log 变换: n = sign(x) * (exp(|x|) - 1)
 const inverseLogTransform = (v: number) => Math.sign(v) * (Math.exp(Math.abs(v)) - 1);
+
+// #WDD-gpt  2026-08-04 - SOG v2 适配到 GSplatData 时必须保留对数尺度，避免解析器和引擎重复 exp 导致高斯无限放大
+export const decodeSogV2ScaleLogValue = (codebook: number[], index: number): number => {
+    const value = Number(codebook[index]);
+    if (!Number.isFinite(value)) {
+        throw new Error(`SOG v2 scales: invalid codebook value at index ${index}.`);
+    }
+    return value;
+};
 
 export interface SOGv2ParseResult {
     count: number;
@@ -194,15 +203,15 @@ export class SOGv2Loader {
             }
         }
 
-        // --- Scales (官方 v2 固定 exp) ---
-        // 注意: 不走 SOG4 的 meta.custom.scales_log 分支——官方 codebook 已是 log 域。
+        // --- Scales ---
+        // #WDD-gpt  2026-08-04 - 官方规范描述的 exp 是“取得线性尺寸”的步骤，但 GSplatData 会在读取 scale_* 时完成该步骤
         if (props.scales && meta.scales && meta.scales.codebook) {
             const cb = meta.scales.codebook;
             const texData = props.scales.data;
             for (let i = 0; i < count; i++) {
-                data.scale_0[i] = Math.exp(cb[texData[i * 4 + 0]]);
-                data.scale_1[i] = Math.exp(cb[texData[i * 4 + 1]]);
-                data.scale_2[i] = Math.exp(cb[texData[i * 4 + 2]]);
+                data.scale_0[i] = decodeSogV2ScaleLogValue(cb, texData[i * 4 + 0]);
+                data.scale_1[i] = decodeSogV2ScaleLogValue(cb, texData[i * 4 + 1]);
+                data.scale_2[i] = decodeSogV2ScaleLogValue(cb, texData[i * 4 + 2]);
             }
         }
 

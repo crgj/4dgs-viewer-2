@@ -22,6 +22,7 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { Ply4RelightingController, ply4RelightingVS } from './rendering/ply4-relighting'; // #WDD-gpt 2026-07-31 - 接入独立 PLY4 重光照算法与 UI 状态
+import { StereoViewController } from './rendering/stereo-view-controller'; // #WDD-gpt  2026-08-03 - 接入独立的左右分屏立体观看控制器
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { ViewerPresetManager } from './viewer/viewer-preset-manager';
 import { ViewerFaceTrackingManager } from './viewer/viewer-face-tracking-manager';
@@ -79,6 +80,7 @@ export class Viewer {
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private ply4Relighting: Ply4RelightingController;
+    private stereoView: StereoViewController;
     private effects: GaussianEffects;
     private isHighQuality = true; // Used by adaptive quality fallback.
 
@@ -321,6 +323,9 @@ export class Viewer {
         this.arHandler = new ARHandler(this);
         this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
         this.ply4Relighting = new Ply4RelightingController(this.app); // #WDD-gpt 2026-07-31 - 初始化可关闭的 PLY4 重光照控制器
+        this.stereoView = new StereoViewController(this.app, this.camera!, () => {
+            this.selectionTool?.setTool('none');
+        }, () => this.togglePlay(), () => this.isPlaying); // #WDD-gpt  2026-08-04 - 两种立体模式共用播放状态和中心相机交互
 
         // #WDD 2026-02-03 Face Tracker is initialized by ViewerFaceTrackingManager
 
@@ -2336,7 +2341,8 @@ export class Viewer {
             'simplified-panel',
             'samples-dropdown',
             'loading-overlay',
-            'help-modal'
+            'help-modal',
+            'stereo-controls' // #WDD-gpt  2026-08-04 - 拖动立体视差时阻断全局鼠标事件，避免中心相机同步旋转
         ];
         uiPanels.forEach(id => {
             const el = document.getElementById(id);
