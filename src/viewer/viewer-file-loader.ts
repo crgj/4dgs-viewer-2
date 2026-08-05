@@ -48,6 +48,7 @@ export class ViewerFileLoader {
     }
     public async loadSampleFile(url: string) {
         const v = this.viewer as any;
+        const loadGeneration = v.beginAssetLoadRequest();
         // #WDD 2026-01-22: Sanitize filename (remove query params and decode)
         let filename = url.split('/').pop() || 'sample.truesplats';
         filename = decodeURIComponent(filename.split('?')[0]);
@@ -90,9 +91,11 @@ export class ViewerFileLoader {
 
             // Fetch Blob using Concurrent Downloader
             const { blob, contentType, status, finalUrl } = await this.downloadFileConcurrent(url, (loaded, total) => {
+                if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
                 const percent = total > 0 ? (loaded / total) * 100 : 0;
                 updateDownloadUI(percent, { loaded, total });
             });
+            if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
 
             // #WDD-gpt 2026-04-20 - 样例加载失败排查：优先用 content-type 判断 HTML，避免二进制误判
             const loweredType = contentType.toLowerCase();
@@ -125,9 +128,10 @@ export class ViewerFileLoader {
             }
 
             const file = new File([blob], filename, { type: 'application/octet-stream' });
-            await this.loadFile(file);
+            await this.loadFile(file, { loadGeneration });
 
         } catch (error) {
+            if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
             console.error('Error loading sample file:', error);
             // #WDD-gpt 2026-04-20 - 显示具体失败原因，便于快速定位
             const message = error instanceof Error ? error.message : String(error);
@@ -162,8 +166,10 @@ export class ViewerFileLoader {
                 });
         });
     }
-    private async loadFile(file: File, options: { keepSog4Sequence?: boolean } = {}) {
+    private async loadFile(file: File, options: { keepSog4Sequence?: boolean; loadGeneration?: number } = {}) {
         const v = this.viewer as any;
+        const loadGeneration = options.loadGeneration ?? v.beginAssetLoadRequest();
+        if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
         // If on small screen (phone/tablet), auto-hide UI to simplified mode
         if (window.innerWidth < 1024) {
             v.toggleUIVisibility(true);
@@ -193,6 +199,8 @@ export class ViewerFileLoader {
             return;
         }
 
+        if (!options.keepSog4Sequence && !v.prepareSingleAssetLoad(loadGeneration)) return;
+
         v.resetTransientStateForNewAsset?.();
         console.log(`[Viewer] Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
@@ -203,6 +211,7 @@ export class ViewerFileLoader {
         const stepSquares = document.querySelectorAll('.step-square');
 
         const setProgress = (stepIndex: number, s: string, d?: string) => {
+            if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
             if (overlay) overlay.classList.remove('hidden');
             if (status) status.innerText = s;
             if (detail && d) detail.innerText = d || "";
@@ -322,6 +331,9 @@ export class ViewerFileLoader {
                     setProgress(Math.floor(p / 10), "LOADING", msg);
                 });
             }
+
+            // #WDD-gpt 2026-08-04 - 解析期间若用户选择了更新模型，旧请求在创建 GPU 资源前立即停止
+            if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
 
             if (isRawSingleFile) {
                 // #WDD-gpt 2026-07-31 - 静态输入在 GSplat 资源创建前转换，保证生命周期、渲染纹理与编辑状态使用同一份规范数据。
@@ -460,7 +472,9 @@ export class ViewerFileLoader {
                 }
 
                 setProgress(9, "READY", "System Update Complete");
-                setTimeout(() => { if (overlay) overlay.classList.add('hidden'); }, 600);
+                setTimeout(() => {
+                    if (v.isAssetLoadRequestCurrent(loadGeneration) && overlay) overlay.classList.add('hidden');
+                }, 600);
 
                 // #WDD 2026-04-11 Performance: End load phase tracking
                 v.performanceMonitor.endLoadPhase('file-load');
@@ -518,6 +532,7 @@ const duration = parsed.frames || parsed.maxMu || 100;
                 return;
             }
         } catch (e) {
+            if (!v.isAssetLoadRequestCurrent(loadGeneration)) return;
             console.error("Load Error:", e);
             // #WDD-gpt 2026-04-20 - 增强报错信息，方便直接定位触发行
             const msg = e instanceof Error ? e.message : String(e);

@@ -56,7 +56,7 @@ export const splatCoreVS = `
         covB = vec3(tC.x, tC.y, tB.w);
     }
 
-    vec4 calcV1V2(in vec3 splat_cam, in vec3 covA, in vec3 covB, mat3 W) {
+    vec4 calcV1V2(in vec3 splat_cam, in vec3 covA, in vec3 covB, mat3 W, out float aaOpacity) {
         mat3 Vrk = mat3(
             covA.x, covA.y, covA.z, 
             covA.y, covB.x, covB.y,
@@ -72,9 +72,15 @@ export const splatCoreVS = `
         );
         mat3 T = W * J;
         mat3 cov = transpose(T) * Vrk * T;
-        float diagonal1 = cov[0][0] + 0.3;
+        float originalDiagonal1 = cov[0][0];
+        float originalDiagonal2 = cov[1][1];
+        float diagonal1 = originalDiagonal1 + 0.3;
         float offDiagonal = cov[0][1];
-        float diagonal2 = cov[1][1] + 0.3;
+        float diagonal2 = originalDiagonal2 + 0.3;
+        // #WDD-gpt 2026-08-04 - 低通扩大二维协方差时按行列式比例补偿透明度，减少小高斯发亮和能量膨胀
+        float originalDet = max(originalDiagonal1 * originalDiagonal2 - offDiagonal * offDiagonal, 0.0);
+        float filteredDet = max(diagonal1 * diagonal2 - offDiagonal * offDiagonal, 1e-6);
+        aaOpacity = sqrt(clamp(originalDet / filteredDet, 0.0, 1.0));
         float mid = 0.5 * (diagonal1 + diagonal2);
         float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
         float lambda1 = mid + radius;
@@ -225,12 +231,6 @@ export const splatMainVS = `
         uniform float uColorKeyframes;
         uniform float uColorStride;
     #endif
-
-    // #wdd-claude 2026-06-11 修复编译崩溃: 后处理 uniform 在 main 中被无条件使用(第~634行)，
-    // 原先误置于 USE_ROTATION 块内，导致无旋转轨迹的模型编译失败。改为无条件声明。
-    uniform float uBrightness; // #WDD 2026-01-30 PostProcess
-    uniform float uContrast;   // #WDD 2026-01-30 PostProcess
-    uniform float uExposure;   // #WDD 2026-01-30 PostProcess
 
     // Rotation & Scale Logic Declarations
     #ifdef USE_ROTATION
@@ -605,7 +605,13 @@ export const splatMainVS = `
              return;
         }
 
-        vec4 v1v2 = calcV1V2(splat_cam.xyz, covA, covB, transpose(mat3(model_view)));
+        float aaOpacity = 1.0;
+        vec4 v1v2 = calcV1V2(splat_cam.xyz, covA, covB, transpose(mat3(model_view)), aaOpacity);
+        activeAlpha *= aaOpacity;
+        if (!debugLifetime && !forcedVisible && activeAlpha < uAlphaDiscard) {
+            gl_Position = discardVec;
+            return;
+        }
 
         // --- Forced 'Small Dot' logic #WDD 2026-01-15 ---
         float finalScale;
@@ -619,6 +625,18 @@ export const splatMainVS = `
             float alphaForScale = max(activeAlpha, 1e-8);
             finalScale = min(1.0, sqrt(-log(1.0 / 255.0 / alphaForScale)) / 2.0);
             v1v2 *= finalScale;
+        }
+
+        // #WDD-gpt 2026-08-04 - 使用投影椭圆半径做保守屏幕视锥剔除，避免中心在屏外但椭圆仍覆盖画面时被误删
+        vec2 projectedRadiusPx = abs(v1v2.xy) + abs(v1v2.zw);
+        vec2 projectedCenterNdc = splat_proj.xy / max(abs(splat_proj.w), 1e-6);
+        vec2 projectedRadiusNdc = projectedRadiusPx * 2.0 / viewport;
+        if (projectedCenterNdc.x + projectedRadiusNdc.x < -1.0 ||
+            projectedCenterNdc.x - projectedRadiusNdc.x > 1.0 ||
+            projectedCenterNdc.y + projectedRadiusNdc.y < -1.0 ||
+            projectedCenterNdc.y - projectedRadiusNdc.y > 1.0) {
+            gl_Position = discardVec;
+            return;
         }
 
         // Check for small splats
@@ -638,7 +656,7 @@ export const splatMainVS = `
             color = vec4(bits) / 255.0;
         #else
             color = baseColor;
-            color.a *= alphaMult; 
+            color.a *= alphaMult * aaOpacity;
             
             // --- Rapid Visual Transition #WDD 2026-01-15 ---
             if (isSnowflake) {
@@ -659,22 +677,8 @@ export const splatMainVS = `
                 );
             #endif
 
-            // #WDD 2026-01-30 Post Processing (VS Approximation)
-            // Note: Real brightness/contrast should happen after blending, but per-splat is "okay" and fast.
-            // Contrast: (color - 0.5) * contrast + 0.5
-            // Brightness: color + brightness
-            // BUT: CSS filters use contrast(1.0) as identity. 
-            // Here we use uContrast multiplier (1.0 = normal).
-            
-            // Apply Contrast
-            color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-            // Apply Brightness
-            color.rgb += uBrightness;
-            // Apply Exposure
-            color.rgb *= uExposure;
-            
             // --- Selection Highlight ---
-            float selectionVal = texelFetch(selectionTexture, splatUV, 0).r;
+            float selectionVal = selData.r;
             
             if (isSelectionMode > 0.5) {
                  color.a = max(color.a, 0.2); 
@@ -707,15 +711,6 @@ export const splatMainVS = `
         //     color.a = 1.0; // Semi-transparent to avoid occlusion
         //     forcedVisible = true;
         // }
-
-        // --- Deletion check ---
-        float deletedVal = texelFetch(selectionTexture, splatUV, 0).g;
-        if (deletedVal > 0.0) {
-             gl_Position = discardVec;
-             return;
-        }
-        
- 
 
         // #WDD 2026-01-16: LIFETIME DEBUG VISUALIZATION
         // Set to true or create a uniform to debug culling

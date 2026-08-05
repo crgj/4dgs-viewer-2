@@ -1,0 +1,32 @@
+{
+  "groups": [
+    {
+      "id": "sog",
+      "label": "SOG 静态模型",
+      "items": [
+        { "name": "Bard Duo", "url": "./sog/bard-duo.sog", "thumbnail": "./thumbnails/sog/bard-duo.webp" },
+        { "name": "DIY Scan Rig", "url": "./sog/diy-scan-rig.sog", "thumbnail": "./thumbnails/sog/diy-scan-rig.webp" },
+        { "name": "Japanese Bee", "url": "./sog/japanese-bee.sog", "thumbnail": "./thumbnails/sog/japanese-bee.webp" },
+        { "name": "Lion", "url": "./sog/lion.sog", "thumbnail": "./thumbnails/sog/lion.webp" },
+        { "name": "Mother's Day", "url": "./sog/mothers-day.sog", "thumbnail": "./thumbnails/sog/mothers-day.webp" },
+        { "name": "Rhynocoris", "url": "./sog/rhynocoris.sog", "thumbnail": "./thumbnails/sog/rhynocoris.webp" },
+        { "name": "Seedance Splat", "url": "./sog/seedance-splat.sog", "thumbnail": "./thumbnails/sog/seedance-splat.webp" },
+        { "name": "Sleepy Art Toy", "url": "./sog/sleepy-art-toy.sog", "thumbnail": "./thumbnails/sog/sleepy-art-toy.webp" }
+      ]
+    },
+    {
+      "id": "sog4",
+      "label": "SOG4 动态模型",
+      "items": [
+        { "name": "Coser", "url": "./sog4/coser.sog4", "thumbnail": "./thumbnails/sog4/coser.webp" },
+        { "name": "Erhu", "url": "./sog4/erhu.sog4", "thumbnail": "./thumbnails/sog4/erhu.webp" },
+        { "name": "小鼠", "url": "./sog4/小鼠.sog4", "thumbnail": "./thumbnails/sog4/小鼠.webp" },
+        { "name": "小鼠流血", "url": "./sog4/小鼠流血.sog4", "thumbnail": "./thumbnails/sog4/小鼠流血.webp" },
+        { "name": "少女", "url": "./sog4/少女.sog4", "thumbnail": "./thumbnails/sog4/少女.webp" },
+        { "name": "少女 1", "url": "./sog4/少女1.sog4", "thumbnail": "./thumbnails/sog4/少女1.webp" },
+        { "name": "老旦", "url": "./sog4/老旦.sog4", "thumbnail": "./thumbnails/sog4/老旦.webp" },
+        { "name": "老旦练习", "url": "./sog4/老旦练习.sog4", "thumbnail": "./thumbnails/sog4/老旦练习.webp" }
+      ]
+    }
+  ]
+}

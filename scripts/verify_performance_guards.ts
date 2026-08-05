@@ -6,14 +6,15 @@ const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8');
 
 const checks: Array<{ name: string; file: string; test: (source: string) => boolean }> = [
     {
-        name: '4D playback applies visible frame before sort submission',
+        name: '4D playback applies visible frame only after combined sorter result',
         file: 'src/main.ts',
-        test: (source) => /if \(this\.isPlaying\) \{[\s\S]*this\.applyVisible4DFrame\(targetFrame\);[\s\S]*this\.updateDynamicPositions\(targetFrame\);[\s\S]*return;/.test(source)
+        test: (source) => /onSorted: \(result\) => \{[\s\S]*result\.requestId === this\.sortingTaskID[\s\S]*this\.applyVisible4DFrame\(this\.pendingSortedFrame\)/.test(source)
     },
     {
-        name: '4D playback keeps highest quality sort when worker is idle',
+        name: '4D playback submits every accepted frame to combined worker without sort throttling',
         file: 'src/main.ts',
-        test: (source) => source.includes('worker 空闲即提交排序')
+        test: (source) => source.includes('每帧仅向合并 Worker 发送时间和请求号')
+            && source.includes('this.dynamicSorter.requestFrame(frameIdx, this.sortingTaskID);')
             && !source.includes('playbackSortMode')
             && !source.includes('playbackSortIntervals')
             && !source.includes('shouldRunPlaybackSortForFrame')
@@ -33,6 +34,36 @@ const checks: Array<{ name: string; file: string; test: (source: string) => bool
         name: 'dynamic center update skips unchanged frames',
         file: 'src/main.ts',
         test: (source) => source.includes('if (frameIdx === this.lastUpdatedFrame) return;')
+    },
+    {
+        name: 'dynamic 4D path exits before legacy center copy',
+        file: 'src/main.ts',
+        test: (source) => /if \(this\.dynamicSorter\) \{[\s\S]*this\.dynamicSorter\.requestFrame\(frameIdx, this\.sortingTaskID\);[\s\S]*return;[\s\S]*const centersCopy = new Float32Array\(centers\)/.test(source)
+    },
+    {
+        name: 'selection texture is fetched once in splat shader',
+        file: 'src/shaders/gsplat-shader.ts',
+        test: (source) => (source.match(/texelFetch\(selectionTexture/g) || []).length === 1
+    },
+    {
+        name: 'splat shader leaves color adjustment to full-screen post processing',
+        file: 'src/shaders/gsplat-shader.ts',
+        test: (source) => !source.includes('uniform float uBrightness')
+            && !source.includes('uniform float uContrast')
+            && !source.includes('uniform float uExposure')
+    },
+    {
+        name: 'new asset load resets temporal banks and rejects stale sorter callbacks',
+        file: 'src/main.ts',
+        test: (source) => source.includes('public prepareSingleAssetLoad(generation: number)')
+            && /this\.currentTime = 0;[\s\S]*this\.trajectoryData = null;[\s\S]*this\.lifeTexData = null;/.test(source)
+            && source.includes('sorterEpoch !== this.dynamicSorterEpoch || activeInstance !== sorterInstance')
+    },
+    {
+        name: 'stereo exit disables composite layer before restoring primary camera',
+        file: 'src/rendering/stereo-view-controller.ts',
+        test: (source) => /this\.compositeLayer\.enabled = false;[\s\S]*this\.primaryCamera\.camera\.enabled = this\.primaryCameraWasEnabled;/.test(source)
+            && source.includes('this.requestPrimaryCameraRecovery();')
     },
     {
         name: 'Current invert does not inherit historical all-time scope',

@@ -100,6 +100,10 @@ export class PerformanceMonitor {
     // 性能降级状态
     private downgradeLevel = 0; // 0: normal, 1: medium, 2: high, 3: extreme
     private isThrottled = false;
+    private lastAdaptiveSampleTime = 0;
+    private lastQualityChangeTime = 0;
+    private lowFpsSamples = 0;
+    private highFpsSamples = 0;
     
     // 大模型模式
     private progressiveLoadProgress = 0;
@@ -326,6 +330,8 @@ export class PerformanceMonitor {
      * 获取可见的 Splat 数量
      */
     private getVisibleSplatCount(): number {
+        const viewer = (window as any).viewer;
+        if (viewer?.active4DSplatCount > 0) return viewer.active4DSplatCount;
         return this.getActiveSplatCount();
     }
 
@@ -404,12 +410,33 @@ export class PerformanceMonitor {
      * 自适应降级
      */
     private adaptiveDowngrade(metrics: PerformanceMetrics) {
-        // 根据性能指标自动调整降级级别
-        if (metrics.fps < 15 && this.downgradeLevel < 3) {
+        const viewer = (window as any).viewer;
+        if (viewer?.isContinuousRenderingActive && !viewer.isContinuousRenderingActive()) return;
+        if (metrics.timestamp - this.lastAdaptiveSampleTime < 1000 || metrics.fps <= 0) return;
+        this.lastAdaptiveSampleTime = metrics.timestamp;
+
+        // #WDD-gpt 2026-08-04 - 连续低帧 3 秒才降级、连续高帧 6 秒才恢复，并设置切换冷却避免分辨率来回抖动
+        if (metrics.fps < 20) {
+            this.lowFpsSamples++;
+            this.highFpsSamples = 0;
+        } else if (metrics.fps > 45) {
+            this.highFpsSamples++;
+            this.lowFpsSamples = 0;
+        } else {
+            this.lowFpsSamples = 0;
+            this.highFpsSamples = 0;
+        }
+
+        if (metrics.timestamp - this.lastQualityChangeTime < 4000) return;
+        if (this.lowFpsSamples >= 3 && this.downgradeLevel < 3) {
             this.downgradeLevel++;
+            this.lowFpsSamples = 0;
+            this.lastQualityChangeTime = metrics.timestamp;
             this.applyDowngrade();
-        } else if (metrics.fps > 45 && this.downgradeLevel > 0) {
+        } else if (this.highFpsSamples >= 6 && this.downgradeLevel > 0) {
             this.downgradeLevel--;
+            this.highFpsSamples = 0;
+            this.lastQualityChangeTime = metrics.timestamp;
             this.applyDowngrade();
         }
     }
@@ -423,21 +450,10 @@ export class PerformanceMonitor {
         
         console.log(`[PerformanceMonitor] Applying downgrade level: ${this.downgradeLevel}`);
         
-        switch (this.downgradeLevel) {
-            case 0: // 正常模式
-                viewer.setHighQuality(true);
-                break;
-            case 1: // 轻度降级
-                viewer.setHighQuality(false);
-                break;
-            case 2: // 中度降级
-                viewer.setHighQuality(false);
-                // 降低分辨率
-                break;
-            case 3: // 极限降级
-                viewer.setHighQuality(false);
-                // 最低分辨率
-                break;
+        if (typeof viewer.setAdaptiveQualityLevel === 'function') {
+            viewer.setAdaptiveQualityLevel(this.downgradeLevel);
+        } else {
+            viewer.setHighQuality(this.downgradeLevel === 0);
         }
     }
 
@@ -617,6 +633,10 @@ export class PerformanceMonitor {
         this.loadPhases = [];
         this.warnings = [];
         this.downgradeLevel = 0;
+        this.lastAdaptiveSampleTime = 0;
+        this.lastQualityChangeTime = 0;
+        this.lowFpsSamples = 0;
+        this.highFpsSamples = 0;
     }
 
     /**

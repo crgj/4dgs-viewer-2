@@ -7,6 +7,7 @@ import { analyzeModelHealth, applyModelHealthAutoFix, type ModelHealthReport } f
 import {
     buildNeverVisibleFlags,
     getPointEffectiveAlphaAtFrame,
+    getRenderedBaseAlpha,
     NORMAL_RENDER_ALPHA_DISCARD
 } from './algorithms/hidden-point-visibility';
 import { Sam3WebClient, captureCanvasImageData, selectGaussianIndicesFromMask, type Sam3MaskResult } from './algorithms/sam3-web';
@@ -23,6 +24,7 @@ import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { Ply4RelightingController, ply4RelightingVS } from './rendering/ply4-relighting'; // #WDD-gpt 2026-07-31 - 接入独立 PLY4 重光照算法与 UI 状态
 import { StereoViewController } from './rendering/stereo-view-controller'; // #WDD-gpt  2026-08-03 - 接入独立的左右分屏立体观看控制器
+import { DynamicGsplatSorter } from './rendering/dynamic-gsplat-sorter'; // #WDD-gpt 2026-08-04 - 接入 4D 插值、活动集与排序合并 Worker
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { ViewerPresetManager } from './viewer/viewer-preset-manager';
 import { ViewerFaceTrackingManager } from './viewer/viewer-face-tracking-manager';
@@ -83,6 +85,11 @@ export class Viewer {
     private stereoView: StereoViewController;
     private effects: GaussianEffects;
     private isHighQuality = true; // Used by adaptive quality fallback.
+    private adaptiveQualityLevel = 0;
+    private active4DSplatCount = 0;
+    private renderActivityUntil = 0;
+    private renderOnDemandReady = false;
+    private readonly lastRenderedCameraMatrix = new Float32Array(16);
 
     private pitch = 0;
     private yaw = 0;
@@ -139,6 +146,9 @@ export class Viewer {
     private sortingTaskID = 0;
     private lastCompletedSortTaskID = 0;
     private pendingSortedFrame: number | null = null;
+    private dynamicSorter: DynamicGsplatSorter | null = null;
+    private dynamicSorterEpoch = 0;
+    private assetLoadGeneration = 0;
     private debugAllPointsLastRefreshMs = 0;
     private timelinePlaybackLastSyncMs = 0;
     private readonly playbackTimelineSyncIntervalMs = 80;
@@ -282,7 +292,8 @@ export class Viewer {
             this.app = new pc.Application(canvas, {
                 ...options,
                 graphicsDeviceOptions: {
-                    antialias: true,
+                    // #WDD-gpt 2026-08-04 - 高斯自身已执行屏幕空间低通，关闭 MSAA 以降低透明覆盖和立体双眼填充成本
+                    antialias: false,
                     alpha: false,
                     // #WDD-gpt 2026-06-18 - 在线 SAM3 需要从 WebGL canvas 截图上传；关闭 preserveDrawingBuffer 会导致 drawImage 读到黑图
                     preserveDrawingBuffer: true,
@@ -305,12 +316,12 @@ export class Viewer {
 
         this.app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
         this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
-        // #WDD 2026-03-31: High DPI support to resolve blurriness
-        this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
+        this.app.graphicsDevice.maxPixelRatio = Math.min(window.devicePixelRatio, 2);
 
 
         window.addEventListener('resize', () => {
             this.app.resizeCanvas();
+            this.requestRender(250);
         });
 
         this.setupScene();
@@ -321,11 +332,19 @@ export class Viewer {
         this.effects = new GaussianEffects(this.app);
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
-        this.postProcessingTool = new PostProcessingTool(this.app); // #WDD 2026-01-30
         this.ply4Relighting = new Ply4RelightingController(this.app); // #WDD-gpt 2026-07-31 - 初始化可关闭的 PLY4 重光照控制器
         this.stereoView = new StereoViewController(this.app, this.camera!, () => {
             this.selectionTool?.setTool('none');
-        }, () => this.togglePlay(), () => this.isPlaying); // #WDD-gpt  2026-08-04 - 两种立体模式共用播放状态和中心相机交互
+        }, () => this.togglePlay(), () => this.isPlaying, () => {
+            // #WDD-gpt 2026-08-04 - 立体模式双倍完整画幅渲染时重新应用像素比上限
+            this.applyRenderPixelRatio();
+            this.requestRender(500);
+        });
+        this.postProcessingTool = new PostProcessingTool(this.app, this.camera!.camera!, (settings) => {
+            // #WDD-gpt 2026-08-04 - 颜色调整移到透明混合后的全屏通道，并同步到立体合成通道
+            this.stereoView.setColorAdjustments(settings.brightness, settings.contrast, settings.exposure);
+            this.requestRender(250);
+        });
 
         // #WDD 2026-02-03 Face Tracker is initialized by ViewerFaceTrackingManager
 
@@ -357,8 +376,12 @@ export class Viewer {
         }
 
         this.app.start();
-
-        this.app.on('update', (dt: number) => this.onUpdate(dt));
+        this.setupRenderOnDemand();
+        this.app.on('update', (dt: number) => {
+            this.onUpdate(dt);
+            this.updateRenderScheduling();
+        });
+        this.requestRender(1000);
     }
 
     updateToggleButton(btn: HTMLElement | null, active: boolean) {
@@ -1119,6 +1142,59 @@ export class Viewer {
 
         const allPointsStatus = document.getElementById('debug-all-points-status');
         if (allPointsStatus) allPointsStatus.textContent = '';
+    }
+
+    // #WDD-gpt 2026-08-04 - 用加载代次阻止较早完成的异步模型覆盖用户后来选择的模型
+    public beginAssetLoadRequest() {
+        return ++this.assetLoadGeneration;
+    }
+
+    public isAssetLoadRequestCurrent(generation: number) {
+        return generation === this.assetLoadGeneration;
+    }
+
+    // #WDD-gpt 2026-08-04 - 单模型替换前清空上一模型的时间、轨迹和排序状态，避免第二次加载复用旧缓冲
+    public prepareSingleAssetLoad(generation: number) {
+        if (!this.isAssetLoadRequestCurrent(generation)) return false;
+        if (this.isPlaying) this.togglePlay();
+        this.disposeDynamicSorter();
+        this.currentTime = 0;
+        this.playbackTime = 0;
+        this.duration = 1;
+        this.totalFrames = 1;
+        this.originalFrames = null;
+        this.lastParsedData = null;
+        this.is4DGS = false;
+        this.trajectoryData = null;
+        this.trajectoryTexture = null;
+        this.keyframes = 0;
+        this.xyzStride = 1;
+        this.rotTrajectoryData = null;
+        this.rotKeyframes = 0;
+        this.rotStride = 1;
+        this.dcTrajectoryData = null;
+        this.dcKeyframes = 0;
+        this.dcStride = 1;
+        this.lifeTexData = null;
+        this.scalesTexData = null;
+        this.originalIndices = null;
+        this.posArrays = null;
+        this.cachedPositions = null;
+        this.hasLoggedSorterKeys = false;
+        return true;
+    }
+
+    // #WDD-gpt 2026-08-04 - 统一作废 Worker 回调和等待帧，确保旧排序结果不能写入新模型实例
+    private disposeDynamicSorter() {
+        this.dynamicSorterEpoch++;
+        this.dynamicSorter?.destroy();
+        this.dynamicSorter = null;
+        this.active4DSplatCount = 0;
+        this.isWaitingForSort = false;
+        this.pendingSortedFrame = null;
+        this.lastUpdatedFrame = -1;
+        this.sortingTaskID++;
+        this.lastCompletedSortTaskID = this.sortingTaskID;
     }
 
     private bindSam3ApiKeyCache() {
@@ -2981,6 +3057,7 @@ export class Viewer {
     private activeLoadingSequenceCleanup() {
         // #WDD-gpt 2026-06-13 - 新序列加载前清理独立 ALL 点云，避免旧 debug mesh 残留
         this.destroyDebugAllPointsEntity();
+        this.disposeDynamicSorter();
         if (this.splatEntity) {
             this.splatEntity.destroy();
             this.splatEntity = null;
@@ -4283,6 +4360,7 @@ export class Viewer {
         if (!options.preload) {
             // #WDD-gpt 2026-06-13 - 单段加载替换模型前清理独立 ALL 点云
             this.destroyDebugAllPointsEntity();
+            this.disposeDynamicSorter();
             if (this.splatEntity) this.splatEntity.destroy();
             // #WDD-gpt 2026-07-31 - 单模型替换时在旧实体销毁后释放重光照法线纹理
             this.ply4Relighting.disposeAllNormalTextures();
@@ -4680,6 +4758,7 @@ export class Viewer {
     }
 
     private clearActiveSog4SequenceRenderState() {
+        this.disposeDynamicSorter();
         this.splatEntity = null;
         this.is4DGS = false;
         this.trajectoryData = null;
@@ -4694,9 +4773,9 @@ export class Viewer {
         this.dcStride = 1;
         this.posArrays = null;
         this.originalIndices = null;
-        this.lastUpdatedFrame = -1;
-        this.pendingSortedFrame = null;
-        this.isWaitingForSort = false;
+        this.cachedPositions = null;
+        this.lifeTexData = null;
+        this.scalesTexData = null;
     }
 
     private updateSog4SequenceTime() {
@@ -4982,6 +5061,14 @@ export class Viewer {
         if (frameIdx === this.lastUpdatedFrame) return;
         this.lastUpdatedFrame = frameIdx;
 
+        if (this.dynamicSorter) {
+            // #WDD-gpt 2026-08-04 - 每帧仅向合并 Worker 发送时间和请求号，轨迹与生命周期数据只在加载时复制一次
+            this.isWaitingForSort = true;
+            this.sortingTaskID++;
+            this.dynamicSorter.requestFrame(frameIdx, this.sortingTaskID);
+            this.requestRender(80);
+            return;
+        }
 
         const K = this.keyframes;
         const stride = this.xyzStride;
@@ -5126,6 +5213,21 @@ export class Viewer {
         this.originalFrames = originalFrames;
         this.lastParsedData = parsed;
 
+        // #WDD-gpt 2026-08-04 - 每次按当前解析结果重建可选数据银行，缺失的银行不得沿用上一模型
+        this.is4DGS = false;
+        this.trajectoryData = null;
+        this.trajectoryTexture = null;
+        this.keyframes = 0;
+        this.xyzStride = 1;
+        this.rotTrajectoryData = null;
+        this.rotKeyframes = 0;
+        this.rotStride = 1;
+        this.dcTrajectoryData = null;
+        this.dcKeyframes = 0;
+        this.dcStride = 1;
+        this.lifeTexData = null;
+        this.scalesTexData = null;
+
         const splatData = (asset.resource as pc.GSplatResource).splatData;
         const overlay = document.getElementById('loading-overlay');
 
@@ -5233,7 +5335,6 @@ export class Viewer {
 
         // --- Trajectory Texture ---
         let trajectoryTexture: pc.Texture | null = null;
-        this.trajectoryTexture = null;
 
         // --- 4DGS Trajectory Texture ---
         if (parsed.trajectory) {
@@ -5430,22 +5531,45 @@ export class Viewer {
 
         if (this.splatEntity?.gsplat) {
             const instance = (this.splatEntity.gsplat as any).instance;
-            // #WDD 2026-03-31 Intercept Sorter Worker to sync Sort-Before-Render
-            if (instance?.sorter?.worker) {
-                const worker = instance.sorter.worker;
-                const self = this;
-                const oldOnMessage = worker.onmessage;
-                worker.onmessage = function(e: MessageEvent) {
-                    if (oldOnMessage) oldOnMessage.call(worker, e);
-                    if (self.isWaitingForSort) {
-                        self.isWaitingForSort = false;
-                        self.lastCompletedSortTaskID = self.sortingTaskID;
-                        if (self.pendingSortedFrame !== null) {
-                            self.applyVisible4DFrame(self.pendingSortedFrame);
-                            self.pendingSortedFrame = null;
-                        }
+            if (instance?.sorter?.worker && this.is4DGS && this.trajectoryData && this.keyframes > 0) {
+                const opacity = splatData.getProp('opacity') as Float32Array | null;
+                const baseAlpha = opacity ? new Float32Array(numSplats) : null;
+                if (opacity && baseAlpha) {
+                    for (let index = 0; index < numSplats; index++) {
+                        baseAlpha[index] = getRenderedBaseAlpha(opacity[index], parsed.opacitySemantic);
                     }
-                };
+                }
+                this.disposeDynamicSorter();
+                const sorterEpoch = this.dynamicSorterEpoch;
+                const sorterInstance = instance;
+                // #WDD-gpt 2026-08-04 - 动态 Worker 直接返回排序纹理顺序和活动数量，主线程不再生成或传输中心副本
+                this.dynamicSorter = new DynamicGsplatSorter(instance, {
+                    trajectory: this.trajectoryData,
+                    originalIndices: this.originalIndices,
+                    lifeData: this.lifeTexData,
+                    baseAlpha,
+                    numSplats,
+                    keyframes: this.keyframes,
+                    stride: this.xyzStride,
+                    totalFrames: Math.max(1, Math.ceil(this.duration)),
+                    alphaDiscard: NORMAL_RENDER_ALPHA_DISCARD,
+                    onSorted: (result) => {
+                        // #WDD-gpt 2026-08-04 - 丢弃已销毁 Worker 或旧 GSplat 实例迟到的排序结果
+                        const activeInstance = (this.splatEntity?.gsplat as any)?.instance;
+                        if (sorterEpoch !== this.dynamicSorterEpoch || activeInstance !== sorterInstance) return;
+                        this.active4DSplatCount = result.visibleCount;
+                        if (this.isWaitingForSort && result.requestId === this.sortingTaskID) {
+                            this.isWaitingForSort = false;
+                            this.lastCompletedSortTaskID = result.requestId;
+                            if (this.pendingSortedFrame !== null && Math.floor(this.pendingSortedFrame) === Math.floor(result.frame)) {
+                                this.applyVisible4DFrame(this.pendingSortedFrame);
+                                this.pendingSortedFrame = null;
+                            }
+                        }
+                        this.requestRender(80);
+                    }
+                });
+                this.lastUpdatedFrame = -1;
             }
 
             this.setupLifetimeShader(
@@ -5607,11 +5731,6 @@ export class Viewer {
         }
 
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
-
-        // #WDD 2026-01-30 PostProcessing uniforms
-        material.setParameter('uBrightness', 0.0);
-        material.setParameter('uContrast', 1.0);
-        material.setParameter('uExposure', 1.0);
 
         // --- ROBUST SHADER INJECTION ---
 
@@ -5890,12 +6009,76 @@ export class Viewer {
         }
     }
 
-    public setHighQuality(enabled: boolean) {
-        if (this.isHighQuality === enabled) return;
-        this.isHighQuality = enabled;
-        this.app.graphicsDevice.maxPixelRatio = this.isHighQuality ? window.devicePixelRatio : 1.0;
+    // #WDD-gpt 2026-08-04 - 静止场景只在相机、UI、资源或异步排序变化时申请下一帧
+    private setupRenderOnDemand() {
+        this.renderOnDemandReady = true;
+        const invalidate = () => this.requestRender(180);
+        for (const eventName of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'input', 'change']) {
+            document.addEventListener(eventName, invalidate, { capture: true, passive: true });
+        }
+        this.app.assets.on('load', () => this.requestRender(500));
+    }
+
+    public requestRender(keepAliveMs = 0) {
+        if (!this.renderOnDemandReady) return;
+        this.renderActivityUntil = Math.max(this.renderActivityUntil, performance.now() + Math.max(0, keepAliveMs));
+        this.app.renderNextFrame = true;
+    }
+
+    private hasCameraTransformChanged() {
+        if (!this.camera) return false;
+        const current = this.camera.getWorldTransform().data;
+        let changed = false;
+        for (let index = 0; index < 16; index++) {
+            const value = current[index];
+            if (Math.abs(value - this.lastRenderedCameraMatrix[index]) > 1e-6) changed = true;
+            this.lastRenderedCameraMatrix[index] = value;
+        }
+        return changed;
+    }
+
+    private updateRenderScheduling() {
+        const cameraChanged = this.hasCameraTransformChanged();
+        if (cameraChanged) this.requestRender(120);
+        const continuous = this.isPlaying
+            || this.isWaitingForSort
+            || this.presetManager.isCameraAnimating
+            || this.presetManager.isRecordingPresetVideo
+            || this.presetManager.isPreviewingPresetPath
+            || Boolean(this.arHandler?.isARRunning)
+            || Boolean(this.faceTrackingManager?.isFaceTracking)
+            || performance.now() < this.renderActivityUntil;
+        this.app.autoRender = continuous;
+        if (continuous) this.app.renderNextFrame = true;
+    }
+
+    public isContinuousRenderingActive() {
+        return this.app.autoRender || this.isPlaying || this.isWaitingForSort;
+    }
+
+    // #WDD-gpt 2026-08-04 - 使用四档像素比替代原生 DPR/1.0 二元切换，立体模式额外限制双眼填充量
+    private applyRenderPixelRatio() {
+        const devicePixelRatio = Math.max(0.5, window.devicePixelRatio || 1);
+        const ratios = [Math.min(devicePixelRatio, 2), Math.min(devicePixelRatio, 1), Math.min(devicePixelRatio, 0.85), Math.min(devicePixelRatio, 0.7)];
+        let nextRatio = ratios[Math.max(0, Math.min(3, this.adaptiveQualityLevel))];
+        if (this.stereoView?.isActive()) nextRatio = Math.min(nextRatio, 1);
+        if (Math.abs(this.app.graphicsDevice.maxPixelRatio - nextRatio) < 1e-3) return;
+        this.app.graphicsDevice.maxPixelRatio = nextRatio;
         this.app.resizeCanvas();
-        console.log(`[Viewer] Render quality changed: ${this.isHighQuality ? 'Native DPI' : 'Fixed 1.0'}`);
+        this.requestRender(300);
+        console.log(`[Viewer] Render pixel ratio: ${nextRatio.toFixed(2)} (quality level ${this.adaptiveQualityLevel})`);
+    }
+
+    public setAdaptiveQualityLevel(level: number) {
+        const clamped = Math.max(0, Math.min(3, Math.floor(level)));
+        if (this.adaptiveQualityLevel === clamped) return;
+        this.adaptiveQualityLevel = clamped;
+        this.isHighQuality = clamped === 0;
+        this.applyRenderPixelRatio();
+    }
+
+    public setHighQuality(enabled: boolean) {
+        this.setAdaptiveQualityLevel(enabled ? 0 : 2);
     }
 
 

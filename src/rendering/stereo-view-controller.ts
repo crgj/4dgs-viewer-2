@@ -32,8 +32,13 @@ export class StereoViewController {
     private active = false;
     private mode: StereoDisplayMode = 'sbs';
     private primaryCameraWasEnabled = true;
+    private primaryPostEffectsWereEnabled = true;
+    private recoveryGeneration = 0;
     private fullscreenOwned = false;
     private eyeSeparation = DEFAULT_EYE_SEPARATION;
+    private brightness = 0;
+    private contrast = 1;
+    private exposure = 1;
     private readonly eyeOffset = new pc.Vec3();
     private readonly leftPosition = new pc.Vec3();
     private readonly rightPosition = new pc.Vec3();
@@ -52,7 +57,8 @@ export class StereoViewController {
         private readonly primaryCamera: pc.Entity,
         private readonly onEnter?: () => void,
         private readonly onTogglePlayback?: () => void,
-        private readonly isPlaybackRunning?: () => boolean
+        private readonly isPlaybackRunning?: () => boolean,
+        private readonly onActiveChanged?: (active: boolean) => void
     ) {
         this.eyeSeparation = this.readStoredEyeSeparation();
         this.bindUI();
@@ -152,22 +158,29 @@ export class StereoViewController {
                     uniform sampler2D uLeftEyeTexture;
                     uniform sampler2D uRightEyeTexture;
                     uniform float uStereoCompositeMode;
+                    uniform float uBrightness;
+                    uniform float uContrast;
+                    uniform float uExposure;
                     varying vec2 vUv;
 
                     void main(void) {
+                        vec3 resultColor;
                         if (uStereoCompositeMode < 0.5) {
                             float useRight = step(0.5, vUv.x);
                             vec2 eyeUv = vec2(fract(vUv.x * 2.0), vUv.y);
-                            vec4 leftColor = texture2D(uLeftEyeTexture, eyeUv);
-                            vec4 rightColor = texture2D(uRightEyeTexture, eyeUv);
-                            gl_FragColor = mix(leftColor, rightColor, useRight);
+                            vec3 leftColor = texture2D(uLeftEyeTexture, eyeUv).rgb;
+                            vec3 rightColor = texture2D(uRightEyeTexture, eyeUv).rgb;
+                            resultColor = mix(leftColor, rightColor, useRight);
                         } else {
                             vec3 leftColor = texture2D(uLeftEyeTexture, vUv).rgb;
                             vec3 rightColor = texture2D(uRightEyeTexture, vUv).rgb;
                             float leftLuma = dot(leftColor, vec3(0.299, 0.587, 0.114));
                             float rightLuma = dot(rightColor, vec3(0.299, 0.587, 0.114));
-                            gl_FragColor = vec4(leftLuma, rightLuma, rightLuma, 1.0);
+                            resultColor = vec3(leftLuma, rightLuma, rightLuma);
                         }
+                        resultColor = (resultColor - 0.5) * uContrast + 0.5;
+                        resultColor = (resultColor + uBrightness) * uExposure;
+                        gl_FragColor = vec4(max(resultColor, vec3(0.0)), 1.0);
                     }
                 `
             });
@@ -177,6 +190,9 @@ export class StereoViewController {
             material.cull = pc.CULLFACE_NONE;
             material.depthTest = false;
             material.depthWrite = false;
+            material.setParameter('uBrightness', this.brightness);
+            material.setParameter('uContrast', this.contrast);
+            material.setParameter('uExposure', this.exposure);
             material.update();
             this.compositeMaterial = material;
         }
@@ -356,7 +372,9 @@ export class StereoViewController {
 
         this.active = true;
         this.primaryCameraWasEnabled = this.primaryCamera.camera.enabled;
+        this.primaryPostEffectsWereEnabled = this.primaryCamera.camera.postEffects.enabled;
         this.primaryCamera.camera.enabled = false;
+        if (this.compositeLayer) this.compositeLayer.enabled = true;
         if (this.leftEye) this.leftEye.enabled = true;
         if (this.rightEye) this.rightEye.enabled = true;
         if (this.compositeEntity) this.compositeEntity.enabled = true;
@@ -366,16 +384,19 @@ export class StereoViewController {
         this.controls?.setAttribute('aria-hidden', 'false');
         this.syncModeUI();
         this.syncStereoView();
+        this.onActiveChanged?.(true);
     }
 
     exit() {
         if (!this.active) return;
         this.active = false;
-        if (this.primaryCamera.camera) this.primaryCamera.camera.enabled = this.primaryCameraWasEnabled;
+        // #WDD-gpt 2026-08-04 - 先从合成层移除黑色清屏相机，再恢复主相机，避免退出帧覆盖主画面
         if (this.leftEye) this.leftEye.enabled = false;
         if (this.rightEye) this.rightEye.enabled = false;
         if (this.compositeEntity) this.compositeEntity.enabled = false;
         if (this.compositeCamera) this.compositeCamera.enabled = false;
+        if (this.compositeLayer) this.compositeLayer.enabled = false;
+        if (this.primaryCamera.camera) this.primaryCamera.camera.enabled = this.primaryCameraWasEnabled;
         document.body.classList.remove('stereo-mode');
         delete document.body.dataset.stereoMode;
         this.controls?.setAttribute('aria-hidden', 'true');
@@ -384,6 +405,22 @@ export class StereoViewController {
 
         if (this.fullscreenOwned && this.getFullscreenElement()) void this.exitFullscreen();
         this.fullscreenOwned = false;
+        this.onActiveChanged?.(false);
+        this.requestPrimaryCameraRecovery();
+    }
+
+    public isActive() {
+        return this.active;
+    }
+
+    // #WDD-gpt 2026-08-04 - 立体双眼在最终合成后统一执行颜色调整，避免每个半透明高斯单独调整
+    public setColorAdjustments(brightness: number, contrast: number, exposure: number) {
+        this.brightness = brightness;
+        this.contrast = contrast;
+        this.exposure = exposure;
+        this.compositeMaterial?.setParameter('uBrightness', brightness);
+        this.compositeMaterial?.setParameter('uContrast', contrast);
+        this.compositeMaterial?.setParameter('uExposure', exposure);
     }
 
     private getFullscreenElement() {
@@ -423,7 +460,32 @@ export class StereoViewController {
     private readonly syncFullscreenButton = () => {
         this.fullscreenButton?.classList.toggle('active', Boolean(this.getFullscreenElement()));
         this.fullscreenButton?.setAttribute('aria-pressed', this.getFullscreenElement() ? 'true' : 'false');
+        if (!this.active) this.requestPrimaryCameraRecovery();
     };
+
+    // #WDD-gpt 2026-08-04 - 全屏退出和 LayerComposition 更新可能跨帧完成，连续请求主相机恢复帧避免停在黑色合成帧
+    private requestPrimaryCameraRecovery() {
+        const generation = ++this.recoveryGeneration;
+        const postEffects = this.primaryCamera.camera?.postEffects;
+        // #WDD-gpt 2026-08-04 - 相机同步启停会让后处理保留黑色中间目标，先直出一帧再重新挂载后处理
+        if (this.primaryPostEffectsWereEnabled && postEffects?.enabled) postEffects.disable();
+        this.app.renderNextFrame = true;
+        window.requestAnimationFrame(() => {
+            if (this.active || generation !== this.recoveryGeneration) return;
+            this.app.resizeCanvas();
+            this.app.renderNextFrame = true;
+            window.requestAnimationFrame(() => {
+                if (this.active || generation !== this.recoveryGeneration) return;
+                if (this.primaryPostEffectsWereEnabled && postEffects && !postEffects.enabled) postEffects.enable();
+                this.app.renderNextFrame = true;
+            });
+        });
+        window.setTimeout(() => {
+            if (this.active || generation !== this.recoveryGeneration) return;
+            if (this.primaryPostEffectsWereEnabled && postEffects && !postEffects.enabled) postEffects.enable();
+            this.app.renderNextFrame = true;
+        }, 120);
+    }
 
     private readonly handleKeyDown = (event: KeyboardEvent) => {
         if (!this.active) return;

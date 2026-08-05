@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#080a0d" />
+    <title>TrueSplats 模型展示</title>
+    <link rel="icon" href="./logo.ico" />
+</head>
+<body>
+    <!-- #WDD-gpt 2026-08-04 - 独立展示页只保留画布、模型载入和最小观看控制，不挂载编辑界面 -->
+    <div id="canvas-container">
+        <canvas id="application-canvas" aria-label="3D Gaussian Splat 模型画布"></canvas>
+    </div>
+
+    <main id="display-shell">
+        <header class="display-topbar glass-panel">
+            <a class="display-brand" href="./display.html" aria-label="TrueSplats 模型展示首页">
+                <span class="brand-mark" aria-hidden="true"></span>
+                <span>TRUESPLATS</span>
+                <small>DISPLAY</small>
+            </a>
+            <div class="model-identity">
+                <span id="display-model-name">准备模型</span>
+                <span id="display-model-meta">-- SPLATS · -- FRAMES</span>
+            </div>
+            <div class="topbar-actions">
+                <button id="display-open-gallery" class="display-button compact" type="button" title="从模型相册选择">模型相册</button>
+                <button id="display-open-file" class="display-button compact" type="button" title="打开本地模型">本地文件</button>
+                <button id="display-fullscreen" class="display-button icon-button" type="button" title="全屏" aria-label="全屏">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /></svg>
+                </button>
+            </div>
+        </header>
+
+        <section class="display-controls glass-panel" aria-label="模型播放和观看控制">
+            <button id="display-play-pause" class="display-button play-button" type="button" title="播放 / 暂停" aria-label="播放">
+                <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+            </button>
+
+            <div class="timeline-group">
+                <input id="display-time-slider" type="range" min="0" max="1" step="1" value="0" aria-label="播放时间轴" />
+                <div class="timeline-labels">
+                    <span id="display-current-frame">0</span>
+                    <span id="display-total-frames">1</span>
+                </div>
+            </div>
+
+            <div class="control-divider" aria-hidden="true"></div>
+
+            <div class="view-modes" role="group" aria-label="立体显示模式">
+                <button id="display-mono-view" class="display-button mode-button active" type="button" aria-pressed="true" title="普通单视图">单视图</button>
+                <button id="enter-stereo-view" class="display-button mode-button" type="button" aria-pressed="false" title="左右分屏立体">SBS 3D</button>
+                <button id="enter-anaglyph-view" class="display-button mode-button" type="button" aria-pressed="false" title="红青眼镜立体">红青 3D</button>
+            </div>
+
+            <button id="display-reset-camera" class="display-button compact" type="button" title="复位观看角度">复位</button>
+        </section>
+
+        <div class="display-hint">拖动旋转 · 滚轮缩放 · 空格播放</div>
+    </main>
+
+    <section id="stereo-controls" class="stereo-controls glass-panel" aria-hidden="true" aria-label="立体观看控制">
+        <div class="stereo-title-group">
+            <span class="stereo-label">立体观看</span>
+            <strong id="stereo-mode-value" class="stereo-mode-value">HALF-SBS</strong>
+        </div>
+        <label class="stereo-separation-control">
+            <span>视差</span>
+            <input id="stereo-eye-separation" type="range" min="0" max="0.5" step="0.001" value="0.064" />
+            <output id="stereo-eye-separation-value">0.064</output>
+        </label>
+        <div class="stereo-actions">
+            <button id="stereo-play-pause" class="display-button stereo-play-button" type="button" aria-label="播放 / 暂停">
+                <svg class="stereo-play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                <svg class="stereo-pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+                <span>播放</span>
+            </button>
+            <button id="stereo-fullscreen" class="display-button" type="button">全屏</button>
+            <button id="stereo-exit" class="display-button" type="button">退出</button>
+        </div>
+    </section>
+
+    <section id="display-loading" class="display-loading" aria-live="polite">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div>
+            <strong id="display-loading-title">正在载入模型</strong>
+            <span id="display-loading-detail">准备数据…</span>
+        </div>
+        <div class="loading-track"><div id="display-loading-progress"></div></div>
+    </section>
+
+    <section id="display-error" class="display-error glass-panel hidden" role="alert">
+        <strong>模型无法显示</strong>
+        <span id="display-error-message"></span>
+    </section>
+
+    <!-- #WDD-gpt 2026-08-04 - 相册按静态 SOG 与动态 SOG4 分组，卡片只展示缩略图、名称和格式 -->
+    <section id="display-model-gallery" class="display-gallery hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="display-gallery-title">
+        <div class="display-gallery-panel glass-panel">
+            <header class="display-gallery-header">
+                <div>
+                    <span>MODEL LIBRARY</span>
+                    <h2 id="display-gallery-title">选择展示模型</h2>
+                </div>
+                <button id="display-close-gallery" class="display-button icon-button" type="button" title="关闭相册" aria-label="关闭相册">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+            </header>
+            <div id="display-gallery-content" class="display-gallery-content">
+                <p class="gallery-empty">正在读取模型相册…</p>
+            </div>
+        </div>
+    </section>
+
+    <input id="display-file-input" type="file" accept=".sog,.sog4,.ply,.ply4,.truesplats" hidden />
+    <script type="module" src="./src/display.ts"></script>
+</body>
+</html>
