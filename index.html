@@ -337,32 +337,6 @@
                 </button>
             </div>
 
-            <!-- #WDD-gpt  2026-08-04 - 主界面分别提供 Half-SBS 和红青眼镜立体入口 -->
-            <div class="stereo-entry-row">
-                <button id="enter-stereo-view" class="ui-btn stereo-entry-button stereo-entry-sbs has-tooltip"
-                    type="button" aria-label="Enter Half-SBS Stereo View" data-tip="Half-SBS Stereo" aria-pressed="false"
-                    data-i18n-aria-label="stereo.enter" data-i18n-data-tip="stereo.enter">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="2.5" y="5.5" width="8" height="13" rx="1.5"></rect>
-                        <rect x="13.5" y="5.5" width="8" height="13" rx="1.5"></rect>
-                        <path d="M10.5 12h3"></path>
-                    </svg>
-                    <span data-i18n="stereo.sbsButton">SBS 3D</span>
-                </button>
-                <button id="enter-anaglyph-view" class="ui-btn stereo-entry-button stereo-entry-anaglyph has-tooltip"
-                    type="button" aria-label="Enter Red Cyan Stereo View" data-tip="Red / Cyan Stereo" aria-pressed="false"
-                    data-i18n-aria-label="stereo.anaglyphEnter" data-i18n-data-tip="stereo.anaglyphEnter">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M3 9h4l1-2h8l1 2h4v6h-7l-2-2-2 2H3z"></path>
-                        <circle cx="7" cy="12" r="2.4"></circle>
-                        <circle cx="17" cy="12" r="2.4"></circle>
-                    </svg>
-                    <span data-i18n="stereo.anaglyphButton">RED / CYAN</span>
-                </button>
-            </div>
-
             <div id="export-button-row" class="grid grid-cols-2 gap-0.5">
                 <button id="btn-export-sog"
                     class="ui-btn px-1 py-1 rounded-md flex items-center justify-center bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20"
@@ -1166,30 +1140,6 @@
             </svg>
         </button>
     </div>
-
-    <!-- #WDD-gpt  2026-08-03 - 立体模式仅保留退出、全屏和双眼视差控制 -->
-    <section id="stereo-controls" class="stereo-controls glass-blue" aria-hidden="true">
-        <div class="stereo-control-title" data-i18n="stereo.title">STEREO VIEW</div>
-        <output id="stereo-mode-value" class="stereo-mode-value" data-mode="sbs">HALF-SBS</output>
-        <label class="stereo-separation-control" for="stereo-eye-separation">
-            <span data-i18n="stereo.eyeSeparation">EYE SEPARATION</span>
-            <input id="stereo-eye-separation" type="range" min="0" max="0.5" step="0.002" value="0.064"
-                aria-label="Eye Separation" data-i18n-aria-label="stereo.eyeSeparation" />
-            <output id="stereo-eye-separation-value" for="stereo-eye-separation">0.064</output>
-        </label>
-        <div class="stereo-control-actions">
-            <button id="stereo-play-pause" class="ui-btn stereo-playback-button" type="button" aria-pressed="false"
-                aria-label="Play or Pause" data-i18n-aria-label="stereo.playback">
-                <svg class="stereo-play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
-                <svg class="stereo-pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"></path></svg>
-                <span data-i18n="stereo.playback">PLAY / PAUSE</span>
-            </button>
-            <button id="stereo-fullscreen" class="ui-btn" type="button" aria-pressed="false"
-                data-i18n="stereo.fullscreen">FULLSCREEN</button>
-            <button id="stereo-exit" class="ui-btn stereo-exit-button" type="button"
-                data-i18n="stereo.exit">EXIT</button>
-        </div>
-    </section>
 
     <script type="module" src="./src/main.ts"></script>
 </body>

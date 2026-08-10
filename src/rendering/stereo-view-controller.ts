@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 
-type StereoDisplayMode = 'sbs' | 'anaglyph';
+export type StereoDisplayMode = 'sbs' | 'column-interlaced' | 'anaglyph';
 
 type FullscreenDocument = Document & {
     webkitExitFullscreen?: () => Promise<void> | void;
@@ -43,6 +43,7 @@ export class StereoViewController {
     private readonly leftPosition = new pc.Vec3();
     private readonly rightPosition = new pc.Vec3();
     private readonly sbsButton = document.getElementById('enter-stereo-view') as HTMLButtonElement | null;
+    private readonly columnInterlacedButton = document.getElementById('enter-column-interlaced-view') as HTMLButtonElement | null;
     private readonly anaglyphButton = document.getElementById('enter-anaglyph-view') as HTMLButtonElement | null;
     private readonly controls = document.getElementById('stereo-controls');
     private readonly modeValue = document.getElementById('stereo-mode-value');
@@ -58,7 +59,7 @@ export class StereoViewController {
         private readonly onEnter?: () => void,
         private readonly onTogglePlayback?: () => void,
         private readonly isPlaybackRunning?: () => boolean,
-        private readonly onActiveChanged?: (active: boolean) => void
+        private readonly onActiveChanged?: (active: boolean, mode: StereoDisplayMode) => void
     ) {
         this.eyeSeparation = this.readStoredEyeSeparation();
         this.bindUI();
@@ -80,6 +81,7 @@ export class StereoViewController {
 
         this.updateSeparationOutput();
         this.sbsButton?.addEventListener('click', () => this.enter('sbs'));
+        this.columnInterlacedButton?.addEventListener('click', () => this.enter('column-interlaced'));
         this.anaglyphButton?.addEventListener('click', () => this.enter('anaglyph'));
         this.playbackButton?.addEventListener('click', () => {
             this.onTogglePlayback?.();
@@ -154,7 +156,7 @@ export class StereoViewController {
                     }
                 `,
                 fshader: `
-                    precision mediump float;
+                    precision highp float;
                     uniform sampler2D uLeftEyeTexture;
                     uniform sampler2D uRightEyeTexture;
                     uniform float uStereoCompositeMode;
@@ -171,12 +173,18 @@ export class StereoViewController {
                             vec3 leftColor = texture2D(uLeftEyeTexture, eyeUv).rgb;
                             vec3 rightColor = texture2D(uRightEyeTexture, eyeUv).rgb;
                             resultColor = mix(leftColor, rightColor, useRight);
-                        } else {
+                        } else if (uStereoCompositeMode < 1.5) {
                             vec3 leftColor = texture2D(uLeftEyeTexture, vUv).rgb;
                             vec3 rightColor = texture2D(uRightEyeTexture, vUv).rgb;
                             float leftLuma = dot(leftColor, vec3(0.299, 0.587, 0.114));
                             float rightLuma = dot(rightColor, vec3(0.299, 0.587, 0.114));
                             resultColor = vec3(leftLuma, rightLuma, rightLuma);
+                        } else {
+                            vec3 leftColor = texture2D(uLeftEyeTexture, vUv).rgb;
+                            vec3 rightColor = texture2D(uRightEyeTexture, vUv).rgb;
+                            // #WDD-gpt  2026-08-10 - 参考硬件隔列格式，第 1、3、5 列输出右眼，第 2、4、6 列输出左眼
+                            float columnParity = mod(floor(gl_FragCoord.x), 2.0);
+                            resultColor = mix(leftColor, rightColor, 1.0 - columnParity);
                         }
                         resultColor = (resultColor - 0.5) * uContrast + 0.5;
                         resultColor = (resultColor + uBrightness) * uExposure;
@@ -311,7 +319,8 @@ export class StereoViewController {
         this.leftEye.setRotation(rotation);
         this.rightEye.setPosition(this.rightPosition);
         this.rightEye.setRotation(rotation);
-        this.compositeMaterial?.setParameter('uStereoCompositeMode', this.mode === 'anaglyph' ? 1 : 0);
+        const compositeMode = this.mode === 'anaglyph' ? 1 : this.mode === 'column-interlaced' ? 2 : 0;
+        this.compositeMaterial?.setParameter('uStereoCompositeMode', compositeMode);
         this.syncPlaybackButton();
     }
 
@@ -352,9 +361,12 @@ export class StereoViewController {
     private syncModeUI() {
         if (this.modeValue) {
             this.modeValue.dataset.mode = this.mode;
-            this.modeValue.textContent = this.mode === 'anaglyph' ? 'RED / CYAN' : 'HALF-SBS';
+            this.modeValue.textContent = this.mode === 'anaglyph'
+                ? 'RED / CYAN'
+                : this.mode === 'column-interlaced' ? 'COLUMN INTERLACED' : 'HALF-SBS';
         }
         this.sbsButton?.setAttribute('aria-pressed', this.mode === 'sbs' && this.active ? 'true' : 'false');
+        this.columnInterlacedButton?.setAttribute('aria-pressed', this.mode === 'column-interlaced' && this.active ? 'true' : 'false');
         this.anaglyphButton?.setAttribute('aria-pressed', this.mode === 'anaglyph' && this.active ? 'true' : 'false');
     }
 
@@ -384,7 +396,7 @@ export class StereoViewController {
         this.controls?.setAttribute('aria-hidden', 'false');
         this.syncModeUI();
         this.syncStereoView();
-        this.onActiveChanged?.(true);
+        this.onActiveChanged?.(true, this.mode);
     }
 
     exit() {
@@ -401,11 +413,12 @@ export class StereoViewController {
         delete document.body.dataset.stereoMode;
         this.controls?.setAttribute('aria-hidden', 'true');
         this.sbsButton?.setAttribute('aria-pressed', 'false');
+        this.columnInterlacedButton?.setAttribute('aria-pressed', 'false');
         this.anaglyphButton?.setAttribute('aria-pressed', 'false');
 
         if (this.fullscreenOwned && this.getFullscreenElement()) void this.exitFullscreen();
         this.fullscreenOwned = false;
-        this.onActiveChanged?.(false);
+        this.onActiveChanged?.(false, this.mode);
         this.requestPrimaryCameraRecovery();
     }
 

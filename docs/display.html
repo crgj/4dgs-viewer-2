@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#080a0d" />
     <title>TrueSplats 模型展示</title>
     <link rel="icon" href="./assets/logo-xPuxZotC.ico" />
-  <script type="module" crossorigin src="./assets/display-754EcXhT.js"></script>
+  <script type="module" crossorigin src="./assets/display-BWjEx8O6.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/sog4-loader-BZ0rWGTW.js">
-  <link rel="modulepreload" crossorigin href="./assets/truesplats-loader-BaUNLD7F.js">
-  <link rel="modulepreload" crossorigin href="./assets/hidden-point-visibility-GaIqOlTd.js">
-  <link rel="stylesheet" crossorigin href="./assets/display-japJLN-W.css">
+  <link rel="modulepreload" crossorigin href="./assets/truesplats-loader-MoSKPpRG.js">
+  <link rel="modulepreload" crossorigin href="./assets/hidden-point-visibility-dwEtQth4.js">
+  <link rel="stylesheet" crossorigin href="./assets/display-fZ0LNqgs.css">
 </head>
 <body>
     <!-- #WDD-gpt 2026-08-04 - 独立展示页只保留画布、模型载入和最小观看控制，不挂载编辑界面 -->
@@ -57,6 +57,8 @@
             <div class="view-modes" role="group" aria-label="立体显示模式">
                 <button id="display-mono-view" class="display-button mode-button active" type="button" aria-pressed="true" title="普通单视图">单视图</button>
                 <button id="enter-stereo-view" class="display-button mode-button" type="button" aria-pressed="false" title="左右分屏立体">SBS 3D</button>
+                <!-- #WDD-gpt  2026-08-10 - 增加奇偶物理像素列交替输出左右眼的内容 3D 模式 -->
+                <button id="enter-column-interlaced-view" class="display-button mode-button" type="button" aria-pressed="false" title="奇数列右眼、偶数列左眼">隔列 3D</button>
                 <button id="enter-anaglyph-view" class="display-button mode-button" type="button" aria-pressed="false" title="红青眼镜立体">红青 3D</button>
             </div>
 

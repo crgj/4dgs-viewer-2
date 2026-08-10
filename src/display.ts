@@ -5,7 +5,7 @@ import { TrueSplatsLoader } from './utils/truesplats-loader';
 import { SOG4Loader } from './utils/sog4-loader';
 import { SOGv2Loader } from './utils/sog-v2-loader';
 import { PLY4Loader } from './utils/ply4-loader';
-import { StereoViewController } from './rendering/stereo-view-controller';
+import { StereoViewController, type StereoDisplayMode } from './rendering/stereo-view-controller';
 import { DynamicGsplatSorter } from './rendering/dynamic-gsplat-sorter';
 import { getRenderedBaseAlpha, NORMAL_RENDER_ALPHA_DISCARD } from './algorithms/hidden-point-visibility';
 import { getDisplayModelPreset } from './display-model-presets';
@@ -120,7 +120,7 @@ class DisplayViewer {
             undefined,
             () => this.togglePlay(),
             () => this.isPlaying,
-            (active) => this.onStereoActiveChanged(active)
+            (active, mode) => this.onStereoActiveChanged(active, mode)
         );
         this.gallery = new DisplayModelGallery((item) => void this.selectGalleryModel(item));
         void this.gallery.initialize();
@@ -166,9 +166,9 @@ class DisplayViewer {
         });
         document.getElementById('display-fullscreen')?.addEventListener('click', () => void this.toggleFullscreen());
 
+        // #WDD-gpt  2026-08-10 - 旋转只更新轨道角度，保留滚轮或双指缩放后的当前相机距离
         canvas.addEventListener('pointerdown', (event) => {
             if (event.button !== 0) return;
-            this.ensureBoundingSphereVisible();
             this.isPointerDown = true;
             this.lastPointerX = event.clientX;
             this.lastPointerY = event.clientY;
@@ -194,7 +194,6 @@ class DisplayViewer {
 
         canvas.addEventListener('touchstart', (event) => {
             if (event.touches.length === 1) {
-                this.ensureBoundingSphereVisible();
                 this.lastPointerX = event.touches[0].clientX;
                 this.lastPointerY = event.touches[0].clientY;
             } else if (event.touches.length === 2) {
@@ -921,18 +920,6 @@ class DisplayViewer {
         return Math.max(0.02, radius / Math.sin(narrowFov * 0.5) * 1.08);
     }
 
-    private ensureBoundingSphereVisible() {
-        if (this.boundingSphereRadius <= 0 || !this.camera.camera) return;
-        const minimumDistance = this.getBoundingSphereFitDistance(
-            this.boundingSphereRadius,
-            this.camera.camera.fov,
-            this.camera.camera.horizontalFov
-        );
-        if (this.orbitDistance >= minimumDistance) return;
-        this.orbitDistance = minimumDistance;
-        this.updateOrbitCamera();
-    }
-
     private handleResize() {
         const wasAtInitialDistance = Math.abs(this.orbitDistance - this.initialOrbitDistance) < 1e-4;
         this.app.resizeCanvas();
@@ -996,10 +983,14 @@ class DisplayViewer {
         this.camera.lookAt(this.orbitTarget);
     }
 
-    private onStereoActiveChanged(active: boolean) {
+    private onStereoActiveChanged(active: boolean, mode: StereoDisplayMode) {
         document.getElementById('display-mono-view')?.classList.toggle('active', !active);
         document.getElementById('display-mono-view')?.setAttribute('aria-pressed', active ? 'false' : 'true');
-        const ratio = active ? Math.min(window.devicePixelRatio || 1, 1) : Math.min(window.devicePixelRatio || 1, 2);
+        const deviceRatio = Math.max(1, window.devicePixelRatio || 1);
+        // #WDD-gpt  2026-08-10 - 隔列模式保持原生物理像素比，避免浏览器缩放破坏奇偶列左右眼映射
+        const ratio = active
+            ? mode === 'column-interlaced' ? deviceRatio : Math.min(deviceRatio, 1)
+            : Math.min(deviceRatio, 2);
         this.app.graphicsDevice.maxPixelRatio = ratio;
         this.app.resizeCanvas();
     }

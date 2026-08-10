@@ -12,7 +12,11 @@ const manifest = JSON.parse(await readFile(resolve(publicRoot, 'model-gallery.js
 const displayUrl = process.env.DISPLAY_THUMBNAIL_URL || 'http://127.0.0.1:5173/display.html';
 const chromeBinary = process.env.DISPLAY_THUMBNAIL_CHROME || '/usr/bin/google-chrome';
 const debuggingPort = Number(process.env.DISPLAY_THUMBNAIL_PORT || 9236);
-const itemFilter = (process.env.DISPLAY_THUMBNAIL_FILTER || '').trim().toLowerCase();
+// #WDD-gpt  2026-08-10 - 支持逗号分隔多个筛选词，一次浏览器会话批量生成新增模型缩略图
+const itemFilters = (process.env.DISPLAY_THUMBNAIL_FILTER || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
 const profileDirectory = await mkdtemp(resolve(tmpdir(), 'truesplats-thumbnails-'));
 
 // #WDD-gpt 2026-08-04 - 通过真实展示运行时批量渲染 256×160 WebP，保证静态与动态格式缩略图使用同一加载链路
@@ -102,8 +106,10 @@ try {
     let completed = 0;
     const items = manifest.groups
         .flatMap((group) => group.items)
-        .filter((item) => !itemFilter || item.url.toLowerCase().includes(itemFilter) || item.name.toLowerCase().includes(itemFilter));
-    if (items.length === 0) throw new Error(`No gallery item matched: ${itemFilter}`);
+        .filter((item) => itemFilters.length === 0 || itemFilters.some((itemFilter) =>
+            item.url.toLowerCase().includes(itemFilter) || item.name.toLowerCase().includes(itemFilter)
+        ));
+    if (items.length === 0) throw new Error(`No gallery item matched: ${itemFilters.join(', ')}`);
     for (const item of items) {
         const pageUrl = new URL(displayUrl);
         pageUrl.searchParams.set('model', item.url);

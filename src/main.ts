@@ -23,7 +23,6 @@ import { ARHandler } from './utils/ar-handler';
 import { SkyboxManager } from './managers/skybox-manager'; // #WDD 2026-01-21
 import { PostProcessingTool } from './ui/post-processing/post-processing-tool'; // #WDD 2026-01-30
 import { Ply4RelightingController, ply4RelightingVS } from './rendering/ply4-relighting'; // #WDD-gpt 2026-07-31 - 接入独立 PLY4 重光照算法与 UI 状态
-import { StereoViewController } from './rendering/stereo-view-controller'; // #WDD-gpt  2026-08-03 - 接入独立的左右分屏立体观看控制器
 import { DynamicGsplatSorter } from './rendering/dynamic-gsplat-sorter'; // #WDD-gpt 2026-08-04 - 接入 4D 插值、活动集与排序合并 Worker
 import { FaceTracker } from './utils/face-tracker'; // #WDD 2026-02-03
 import { ViewerPresetManager } from './viewer/viewer-preset-manager';
@@ -82,7 +81,6 @@ export class Viewer {
     arHandler: ARHandler;
     postProcessingTool: PostProcessingTool; // #WDD 2026-01-30
     private ply4Relighting: Ply4RelightingController;
-    private stereoView: StereoViewController;
     private effects: GaussianEffects;
     private isHighQuality = true; // Used by adaptive quality fallback.
     private adaptiveQualityLevel = 0;
@@ -292,7 +290,7 @@ export class Viewer {
             this.app = new pc.Application(canvas, {
                 ...options,
                 graphicsDeviceOptions: {
-                    // #WDD-gpt 2026-08-04 - 高斯自身已执行屏幕空间低通，关闭 MSAA 以降低透明覆盖和立体双眼填充成本
+                    // #WDD-gpt  2026-08-10 - 高斯自身已执行屏幕空间低通，关闭 MSAA 以降低透明覆盖成本
                     antialias: false,
                     alpha: false,
                     // #WDD-gpt 2026-06-18 - 在线 SAM3 需要从 WebGL canvas 截图上传；关闭 preserveDrawingBuffer 会导致 drawImage 读到黑图
@@ -333,16 +331,8 @@ export class Viewer {
         this.skyboxManager = new SkyboxManager(this.app); // #WDD 2026-01-21
         this.arHandler = new ARHandler(this);
         this.ply4Relighting = new Ply4RelightingController(this.app); // #WDD-gpt 2026-07-31 - 初始化可关闭的 PLY4 重光照控制器
-        this.stereoView = new StereoViewController(this.app, this.camera!, () => {
-            this.selectionTool?.setTool('none');
-        }, () => this.togglePlay(), () => this.isPlaying, () => {
-            // #WDD-gpt 2026-08-04 - 立体模式双倍完整画幅渲染时重新应用像素比上限
-            this.applyRenderPixelRatio();
-            this.requestRender(500);
-        });
-        this.postProcessingTool = new PostProcessingTool(this.app, this.camera!.camera!, (settings) => {
-            // #WDD-gpt 2026-08-04 - 颜色调整移到透明混合后的全屏通道，并同步到立体合成通道
-            this.stereoView.setColorAdjustments(settings.brightness, settings.contrast, settings.exposure);
+        // #WDD-gpt  2026-08-10 - 主页面取消立体显示后，后处理变更只需刷新单相机画面
+        this.postProcessingTool = new PostProcessingTool(this.app, this.camera!.camera!, () => {
             this.requestRender(250);
         });
 
@@ -2417,8 +2407,7 @@ export class Viewer {
             'simplified-panel',
             'samples-dropdown',
             'loading-overlay',
-            'help-modal',
-            'stereo-controls' // #WDD-gpt  2026-08-04 - 拖动立体视差时阻断全局鼠标事件，避免中心相机同步旋转
+            'help-modal'
         ];
         uiPanels.forEach(id => {
             const el = document.getElementById(id);
@@ -6056,12 +6045,11 @@ export class Viewer {
         return this.app.autoRender || this.isPlaying || this.isWaitingForSort;
     }
 
-    // #WDD-gpt 2026-08-04 - 使用四档像素比替代原生 DPR/1.0 二元切换，立体模式额外限制双眼填充量
+    // #WDD-gpt  2026-08-10 - 使用四档像素比支持主页面自适应渲染质量
     private applyRenderPixelRatio() {
         const devicePixelRatio = Math.max(0.5, window.devicePixelRatio || 1);
         const ratios = [Math.min(devicePixelRatio, 2), Math.min(devicePixelRatio, 1), Math.min(devicePixelRatio, 0.85), Math.min(devicePixelRatio, 0.7)];
-        let nextRatio = ratios[Math.max(0, Math.min(3, this.adaptiveQualityLevel))];
-        if (this.stereoView?.isActive()) nextRatio = Math.min(nextRatio, 1);
+        const nextRatio = ratios[Math.max(0, Math.min(3, this.adaptiveQualityLevel))];
         if (Math.abs(this.app.graphicsDevice.maxPixelRatio - nextRatio) < 1e-3) return;
         this.app.graphicsDevice.maxPixelRatio = nextRatio;
         this.app.resizeCanvas();

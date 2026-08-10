@@ -4,14 +4,23 @@
       "id": "sog",
       "label": "SOG 静态模型",
       "items": [
+        { "name": "152mm Gaubitsa", "url": "./sog/152mm-gaubitsa.sog", "thumbnail": "./thumbnails/sog/152mm-gaubitsa.webp" },
         { "name": "Bard Duo", "url": "./sog/bard-duo.sog", "thumbnail": "./thumbnails/sog/bard-duo.webp" },
+        { "name": "Bonsai Tree", "url": "./sog/Bonsai Tree.sog", "thumbnail": "./thumbnails/sog/bonsai-tree.webp" },
+        { "name": "Container", "url": "./sog/Container.sog", "thumbnail": "./thumbnails/sog/container.webp" },
         { "name": "DIY Scan Rig", "url": "./sog/diy-scan-rig.sog", "thumbnail": "./thumbnails/sog/diy-scan-rig.webp" },
+        { "name": "Houdini Elektra", "url": "./sog/_Houdini Elektra Test.sog", "thumbnail": "./thumbnails/sog/houdini-elektra.webp" },
         { "name": "Japanese Bee", "url": "./sog/japanese-bee.sog", "thumbnail": "./thumbnails/sog/japanese-bee.webp" },
         { "name": "Lion", "url": "./sog/lion.sog", "thumbnail": "./thumbnails/sog/lion.webp" },
+        { "name": "MI-8", "url": "./sog/MI-8.sog", "thumbnail": "./thumbnails/sog/mi-8.webp" },
         { "name": "Mother's Day", "url": "./sog/mothers-day.sog", "thumbnail": "./thumbnails/sog/mothers-day.webp" },
         { "name": "Rhynocoris", "url": "./sog/rhynocoris.sog", "thumbnail": "./thumbnails/sog/rhynocoris.webp" },
         { "name": "Seedance Splat", "url": "./sog/seedance-splat.sog", "thumbnail": "./thumbnails/sog/seedance-splat.webp" },
-        { "name": "Sleepy Art Toy", "url": "./sog/sleepy-art-toy.sog", "thumbnail": "./thumbnails/sog/sleepy-art-toy.webp" }
+        { "name": "Sleepy Art Toy", "url": "./sog/sleepy-art-toy.sog", "thumbnail": "./thumbnails/sog/sleepy-art-toy.webp" },
+        { "name": "Strawberry", "url": "./sog/Strawberry.sog", "thumbnail": "./thumbnails/sog/strawberry.webp" },
+        { "name": "T-34-85", "url": "./sog/T34-85.sog", "thumbnail": "./thumbnails/sog/t34-85.webp" },
+        { "name": "Tribal Fantasy Shaman", "url": "./sog/Tribal Fantasy Shaman Female Bust - Reconstructed with Seeget3D.sog", "thumbnail": "./thumbnails/sog/tribal-fantasy-shaman.webp" },
+        { "name": "Zelda", "url": "./sog/Zelda.sog", "thumbnail": "./thumbnails/sog/zelda.webp" }
       ]
     },
     {

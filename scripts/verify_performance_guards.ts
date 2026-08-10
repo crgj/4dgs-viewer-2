@@ -66,6 +66,25 @@ const checks: Array<{ name: string; file: string; test: (source: string) => bool
             && source.includes('this.requestPrimaryCameraRecovery();')
     },
     {
+        name: 'column-interlaced stereo alternates eyes by physical pixel column',
+        file: 'src/rendering/stereo-view-controller.ts',
+        test: (source) => source.includes("'column-interlaced'")
+            && source.includes('precision highp float;')
+            && source.includes('mod(floor(gl_FragCoord.x), 2.0)')
+            && source.includes('mix(leftColor, rightColor, 1.0 - columnParity)')
+    },
+    {
+        name: 'column-interlaced display preserves native pixel ratio',
+        file: 'src/display.ts',
+        test: (source) => source.includes("mode === 'column-interlaced' ? deviceRatio")
+    },
+    // #WDD-gpt  2026-08-10 - 防止旋转起手再次把用户当前缩放距离恢复为模型完整可见距离
+    {
+        name: 'display orbit rotation preserves the current zoom distance',
+        file: 'src/display.ts',
+        test: (source) => !source.includes('ensureBoundingSphereVisible')
+    },
+    {
         name: 'Current invert does not inherit historical all-time scope',
         file: 'src/ui/selection-tool.ts',
         test: (source) => source.includes('反选模式以当前 UI 范围为准')
