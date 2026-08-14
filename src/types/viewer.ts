@@ -36,6 +36,8 @@ export interface SplatSequenceElement {
     asset: pc.Asset | null;
     entity: pc.Entity | null;
     runtime?: {
+        // #WDD-gpt  2026-08-13 - 区分仅有选择状态的占位 runtime 与已完成 GPU 初始化的可复用 runtime
+        renderInitialized: boolean;
         is4DGS: boolean;
         totalFrames: number;
         keyframes: number;

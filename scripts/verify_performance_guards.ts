@@ -90,6 +90,26 @@ const checks: Array<{ name: string; file: string; test: (source: string) => bool
         test: (source) => source.includes('反选模式以当前 UI 范围为准')
             && !/const invertAllTime =[^;]*selectionScope === 'alltime'/.test(source)
             && !/const shouldInvertAllTime =[^;]*selectionScope === 'alltime'/.test(source)
+    },
+    {
+        name: 'PLY4 segment switches preserve per-segment selection textures and edit state',
+        file: 'src/main.ts',
+        test: (source) => /if \(!options\.segmentSwitch\) \{[\s\S]*selectionTool\?\.resetForNewAsset[\s\S]*sequenceEditStates\.clear\(\);[\s\S]*\}/.test(source)
+    },
+    {
+        name: 'PLY4 FULL replay reuses initialized textures and avoids repeated shader injection',
+        file: 'src/main.ts',
+        test: (source) => source.includes("const reuseFullPly4Runtime = this.ply4SequenceLoadMode === 'full'")
+            && source.includes('preBoundElement.runtime?.renderInitialized === true')
+            && source.includes('if (materialRuntime.__lifetimeShaderInjected)')
+            && source.includes('this.setupDynamicSorterForActiveAsset(instance, resource.splatData')
+    },
+    {
+        name: 'dynamic sorter reactivation retains the native PlayCanvas result handler',
+        file: 'src/rendering/dynamic-gsplat-sorter.ts',
+        test: (source) => source.includes("const nativeHandlerKey = '__dynamicGsplatNativeOnMessage'")
+            && source.includes('sorter[nativeHandlerKey] = nativeWorker.onmessage')
+            && source.includes("const nativeOnMessage = sorter[nativeHandlerKey] as Worker['onmessage']")
     }
 ];
 

@@ -1125,10 +1125,12 @@ export class Viewer {
             this.presetManager?.cancelPresetPathPlaybackForNewAsset?.();
         }
 
-        // #WDD 2026-07-04: 第二次加载文件时彻底重置选择/智能圆柱/分段编辑状态，避免残留
-        this.selectionTool?.resetForNewAsset?.();
-        this.smartSelectionTool?.resetForNewAsset?.();
-        this.sequenceEditStates.clear();
+        // #WDD-gpt  2026-08-13 - 分段切换不是新文件加载，保留每段选择纹理和编辑状态供下一轮播放复用
+        if (!options.segmentSwitch) {
+            this.selectionTool?.resetForNewAsset?.();
+            this.smartSelectionTool?.resetForNewAsset?.();
+            this.sequenceEditStates.clear();
+        }
 
         const allPointsStatus = document.getElementById('debug-all-points-status');
         if (allPointsStatus) allPointsStatus.textContent = '';
@@ -4877,7 +4879,13 @@ export class Viewer {
                 this.ensureSequenceSelectionTextureForAsset(segment.asset, false);
             }
         }
-        this.finalizeGSplatLoad(segment.asset, segment.parsed.count, null, segment.duration, segment.parsed, { suppressUI: true });
+        // #WDD-gpt  2026-08-13 - FULL PLY4 再次进入已初始化段时复用 GPU 纹理和 shader，避免每轮重复分配导致显存增长
+        const reuseFullPly4Runtime = this.ply4SequenceLoadMode === 'full'
+            && preBoundElement?.type === 'ply4'
+            && preBoundElement.runtime?.renderInitialized === true;
+        if (!reuseFullPly4Runtime) {
+            this.finalizeGSplatLoad(segment.asset, segment.parsed.count, null, segment.duration, segment.parsed, { suppressUI: true });
+        }
         this.applySog4SegmentEditState(index);
         if (this.selectionTool?.selectionTexture) {
             this.updateSelectionUniform(this.selectionTool.selectionTexture);
@@ -4909,6 +4917,26 @@ export class Viewer {
                 this.selectionTool.selectionData = activeElement.runtime.selectionData;
                 this.selectionTool.allTimeSelectionData = activeElement.runtime.allTimeSelectionData;
                 this.selectionTool.selectionTexture = activeElement.runtime.selectionTexture;
+            }
+
+            if (reuseFullPly4Runtime) {
+                const resource = segment.asset.resource as pc.GSplatResource;
+                const instance = (segment.entity.gsplat as any)?.instance;
+                if (instance) {
+                    await this.setupLifetimeShader(
+                        instance,
+                        activeElement.runtime.lifeTexture,
+                        activeElement.runtime.trajectoryTexture, activeElement.runtime.keyframes,
+                        activeElement.runtime.rotationTexture, activeElement.runtime.rotKeyframes,
+                        activeElement.runtime.totalFrames,
+                        activeElement.runtime.scalesTexture,
+                        segment.parsed.bands || 3,
+                        activeElement.runtime.dcTrajectoryTexture,
+                        activeElement.runtime.dcKeyframes,
+                        activeElement.runtime.relightingNormalTexture
+                    );
+                    this.setupDynamicSorterForActiveAsset(instance, resource.splatData, segment.parsed, resource.splatData.numSplats);
+                }
             }
         }
 
@@ -5182,6 +5210,48 @@ export class Viewer {
     private dcTrajectoryData: Float32Array | null = null;
     private dcKeyframes = 0;
     private dcStride = 1;
+
+    // #WDD-gpt  2026-08-13 - 统一初始化或重启当前段动态排序器，确保 FULL 模式第二轮仍更新排序纹理
+    private setupDynamicSorterForActiveAsset(instance: any, splatData: any, parsed: any, numSplats: number) {
+        if (!instance?.sorter?.worker || !this.is4DGS || !this.trajectoryData || this.keyframes <= 0) return;
+
+        const opacity = splatData.getProp('opacity') as Float32Array | null;
+        const baseAlpha = opacity ? new Float32Array(numSplats) : null;
+        if (opacity && baseAlpha) {
+            for (let index = 0; index < numSplats; index++) {
+                baseAlpha[index] = getRenderedBaseAlpha(opacity[index], parsed.opacitySemantic);
+            }
+        }
+        this.disposeDynamicSorter();
+        const sorterEpoch = this.dynamicSorterEpoch;
+        const sorterInstance = instance;
+        this.dynamicSorter = new DynamicGsplatSorter(instance, {
+            trajectory: this.trajectoryData,
+            originalIndices: this.originalIndices,
+            lifeData: this.lifeTexData,
+            baseAlpha,
+            numSplats,
+            keyframes: this.keyframes,
+            stride: this.xyzStride,
+            totalFrames: Math.max(1, Math.ceil(this.duration)),
+            alphaDiscard: NORMAL_RENDER_ALPHA_DISCARD,
+            onSorted: (result) => {
+                const activeInstance = (this.splatEntity?.gsplat as any)?.instance;
+                if (sorterEpoch !== this.dynamicSorterEpoch || activeInstance !== sorterInstance) return;
+                this.active4DSplatCount = result.visibleCount;
+                if (this.isWaitingForSort && result.requestId === this.sortingTaskID) {
+                    this.isWaitingForSort = false;
+                    this.lastCompletedSortTaskID = result.requestId;
+                    if (this.pendingSortedFrame !== null && Math.floor(this.pendingSortedFrame) === Math.floor(result.frame)) {
+                        this.applyVisible4DFrame(this.pendingSortedFrame);
+                        this.pendingSortedFrame = null;
+                    }
+                }
+                this.requestRender(80);
+            }
+        });
+        this.lastUpdatedFrame = -1;
+    }
 
     private finalizeGSplatLoad(asset: pc.Asset, numSplats: number, plyData: any, originalFrames: number | null, parsed: any, options: { suppressUI?: boolean } = {}) {
         this.duration = originalFrames || (parsed ? (parsed.frames || parsed.maxMu) : 100) || 100;
@@ -5520,46 +5590,7 @@ export class Viewer {
 
         if (this.splatEntity?.gsplat) {
             const instance = (this.splatEntity.gsplat as any).instance;
-            if (instance?.sorter?.worker && this.is4DGS && this.trajectoryData && this.keyframes > 0) {
-                const opacity = splatData.getProp('opacity') as Float32Array | null;
-                const baseAlpha = opacity ? new Float32Array(numSplats) : null;
-                if (opacity && baseAlpha) {
-                    for (let index = 0; index < numSplats; index++) {
-                        baseAlpha[index] = getRenderedBaseAlpha(opacity[index], parsed.opacitySemantic);
-                    }
-                }
-                this.disposeDynamicSorter();
-                const sorterEpoch = this.dynamicSorterEpoch;
-                const sorterInstance = instance;
-                // #WDD-gpt 2026-08-04 - 动态 Worker 直接返回排序纹理顺序和活动数量，主线程不再生成或传输中心副本
-                this.dynamicSorter = new DynamicGsplatSorter(instance, {
-                    trajectory: this.trajectoryData,
-                    originalIndices: this.originalIndices,
-                    lifeData: this.lifeTexData,
-                    baseAlpha,
-                    numSplats,
-                    keyframes: this.keyframes,
-                    stride: this.xyzStride,
-                    totalFrames: Math.max(1, Math.ceil(this.duration)),
-                    alphaDiscard: NORMAL_RENDER_ALPHA_DISCARD,
-                    onSorted: (result) => {
-                        // #WDD-gpt 2026-08-04 - 丢弃已销毁 Worker 或旧 GSplat 实例迟到的排序结果
-                        const activeInstance = (this.splatEntity?.gsplat as any)?.instance;
-                        if (sorterEpoch !== this.dynamicSorterEpoch || activeInstance !== sorterInstance) return;
-                        this.active4DSplatCount = result.visibleCount;
-                        if (this.isWaitingForSort && result.requestId === this.sortingTaskID) {
-                            this.isWaitingForSort = false;
-                            this.lastCompletedSortTaskID = result.requestId;
-                            if (this.pendingSortedFrame !== null && Math.floor(this.pendingSortedFrame) === Math.floor(result.frame)) {
-                                this.applyVisible4DFrame(this.pendingSortedFrame);
-                                this.pendingSortedFrame = null;
-                            }
-                        }
-                        this.requestRender(80);
-                    }
-                });
-                this.lastUpdatedFrame = -1;
-            }
+            this.setupDynamicSorterForActiveAsset(instance, splatData, parsed, numSplats);
 
             this.setupLifetimeShader(
                 instance,
@@ -5586,6 +5617,7 @@ export class Viewer {
         const boundElement = this.getSplatSequenceElementByAsset(asset);
         if (boundElement) {
             boundElement.runtime = {
+                renderInitialized: true,
                 is4DGS: this.is4DGS,
                 totalFrames: this.duration,
                 keyframes: this.keyframes,
@@ -5722,6 +5754,14 @@ export class Viewer {
         if (totalFrames > 0) material.setParameter('uGlobalTotalFrames', totalFrames);
 
         // --- ROBUST SHADER INJECTION ---
+
+        // #WDD-gpt  2026-08-13 - 已初始化段只更新参数，禁止第二轮再次包装 getShaderVariant
+        const materialRuntime = material as any;
+        if (materialRuntime.__lifetimeShaderInjected) {
+            material.update();
+            return;
+        }
+        materialRuntime.__lifetimeShaderInjected = true;
 
         const originalGetShaderVariant = material.getShaderVariant;
 

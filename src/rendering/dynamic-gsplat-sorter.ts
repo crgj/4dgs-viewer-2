@@ -200,7 +200,12 @@ export class DynamicGsplatSorter {
             throw new Error('Dynamic GSplat sorter requires an initialized PlayCanvas sorter.');
         }
 
-        const nativeOnMessage = nativeWorker.onmessage;
+        // #WDD-gpt  2026-08-13 - 保留 PlayCanvas 原生排序回调，分段第二次激活时不能从已终止的自定义 Worker 上读取空回调
+        const nativeHandlerKey = '__dynamicGsplatNativeOnMessage';
+        if (!(nativeHandlerKey in sorter)) {
+            sorter[nativeHandlerKey] = nativeWorker.onmessage;
+        }
+        const nativeOnMessage = sorter[nativeHandlerKey] as Worker['onmessage'];
         const orderBuffer = orderLevel.buffer.slice(0);
         nativeWorker.terminate();
 
